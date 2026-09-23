@@ -196,7 +196,7 @@ Grab the latest build from **[nodeterm.dev](https://nodeterm.dev)** — the down
 detects your platform. Everything is also listed at
 [nodeterm.dev/releases](https://nodeterm.dev/releases):
 
-- **macOS** — `.dmg` for Apple Silicon and Intel (auto-updates), or **Homebrew**:
+- **macOS** — `.dmg` for Apple Silicon and Intel, or **Homebrew**:
 
   ```bash
   brew tap nodeterm/tap
@@ -206,26 +206,31 @@ detects your platform. Everything is also listed at
 
   Both first lines are required. On its own, `brew install --cask nodeterm` only searches
   `homebrew/cask` and reports the cask as not found; without the trust grant, Homebrew ≥6
-  fails rather than prompting. The cask tracks each promoted release, and the app updates
-  itself (electron-updater), so `brew upgrade` is rarely needed for it.
-- **Linux (x64)** — self-updating **AppImage**, a `.deb` for Debian/Ubuntu
+  fails rather than prompting. The cask tracks upstream releases.
+- **Linux (x64)** — **AppImage**, a `.deb` for Debian/Ubuntu
   (`sudo apt install ./node-terminal_*.deb`), or an `.rpm` for Fedora/RHEL
-  (`sudo dnf install ./node-terminal-*.rpm`). Updates are manual for both packages: the app
-  tells you when a new version is out and links the download. The AppImage needs FUSE 2,
+  (`sudo dnf install ./node-terminal-*.rpm`). The AppImage needs FUSE 2,
   which Fedora does not install by default: `sudo dnf install fuse-libs` if it exits with
   a `libfuse.so.2` error.
 - **Windows (x64) — beta** — `nodeterm-Setup-<version>.exe` (per-user installer) or a
   portable `-win.zip`. Early support, so know what you are getting: the installer is
   **unsigned** (SmartScreen will ask — *More info → Run anyway*), **updates are manual**
-  for now (grab the next build from the same page), and **session continuity across
-  restarts is still landing** — Windows has no tmux, so the standalone session host that
-  replaces it is being packaged in [#579](https://github.com/eneskirca/nodeterm/pull/579).
-  Everything else — canvas, agents, kanban, hooks — is the same app. Please
+  for now (grab the next build from the same page). The bundled session host keeps terminals
+  running across app restarts. Native PowerShell helpers provide hooks and canvas/context
+  commands without Git Bash, curl, jq or a separate Node installation. Choose a shell in
+  **Settings → Shell → Terminal profile**. Before updating or uninstalling, end running
+  sessions and close the app; the installer refuses to kill live processes.
+  See the [desktop support matrix](docs/desktop-targets.md) for scope and validation. Please
   [report what breaks](https://github.com/eneskirca/nodeterm/issues).
 - **iOS** — **nodeterm mobile** on the
   [App Store](https://apps.apple.com/app/nodeterm/id6790581233).
 
-**Trying it out?** Removal is one script — it stops every process nodeterm started, reverts
+This repository's GitHub Actions workflow builds **unsigned desktop packages** after a GitHub
+release is published and attaches installers, ZIPs and SHA-256 manifests to that release.
+Those builds use manual updates on all platforms. See the
+[release instructions](docs/desktop-targets.md#github-releases) for publishing and retrying builds.
+
+**Trying it out?** On macOS/Linux, removal is one script — it stops every process nodeterm started, reverts
 the status-hook/skill entries it merged into your agent CLIs' config (your own hooks and
 credentials are never touched), and deletes all of nodeterm's own state. Run it with
 `--dry-run` first to see the full list of what it found:
@@ -241,8 +246,9 @@ The full inventory of what nodeterm writes where (and what the script keeps, lik
 
 ## 🛠 Build from source
 
-Requires Node.js 20+ on macOS or Linux (tmux recommended — it's what makes sessions
-survive restarts). A source checkout does **not** carry the bundled tmux: run
+Requires Node.js 22.22.2 (the CI version), a supported Node 24 release ≥24.15.0, or Node 26+.
+On macOS or Linux, tmux is recommended — it's what makes sessions
+survive restarts. A source checkout does **not** carry the bundled tmux: run
 `node scripts/build-tmux.mjs` once on macOS to build it into `resources/bin/tmux` (the
 release job does this automatically), or just install tmux yourself. On **Windows**, run
 `bootstrap-windows.bat` from a fresh checkout first — it checks for Node, the Visual Studio
@@ -268,7 +274,8 @@ npm run build      # production build into out/
 npm start          # preview the production build
 npm run typecheck  # fastest correctness gate
 npm test           # vitest unit + integration suite
-npm run dist       # local UNSIGNED .dmg into dist/ (smoke test)
+npm run dist       # package for the current desktop OS, into dist/
+npm run dist:mac   # unsigned DMG + ZIP, arm64 + x64 (on macOS)
 npm run dist:linux # AppImage + .deb + .rpm into dist/ (on a Linux host; .rpm needs rpmbuild)
 npm run dist:win   # unsigned NSIS installer + zip into dist/ (on a Windows host)
 npm run server:dev # build + run the browser Server Edition (needs Node 22 + tmux)

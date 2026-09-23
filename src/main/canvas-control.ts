@@ -1,3 +1,4 @@
+import { installNativeHelper, nativeCliInstructions } from '../core/native-helper-install'
 // Installs the outbound canvas-control CLI + per-agent discovery docs. Mirrors
 // context-link.ts: a self-contained POSIX-sh CLI (nodeterm.sh) POSTs to the hook server's
 // /control/* routes; a Claude skill / codex-gemini instruction blocks tell the agent how +
@@ -24,19 +25,20 @@ function dir(): string {
   return path.join(app.getPath('userData'), 'canvas-control')
 }
 function shimPath(): string {
-  return path.join(dir(), 'nodeterm.sh')
+  return path.join(dir(), process.platform === 'win32' ? 'nodeterm.ps1' : 'nodeterm.sh')
 }
 function skillPathIn(configDir: string): string {
   return path.join(configDir, 'skills', 'manage-nodeterm-canvas', 'SKILL.md')
 }
 function skillBody(): string {
-  return buildCanvasSkillBody(shimPath())
+  return nativeCliInstructions(buildCanvasSkillBody(shimPath()), shimPath())
 }
 
 function writeCliFiles(): void {
   const d = dir()
   fs.mkdirSync(d, { recursive: true })
-  fs.writeFileSync(shimPath(), buildControlShimScript(codexThreadIdentityRoot()))
+  if (process.platform === 'win32') installNativeHelper(shimPath(), ['control'])
+  else fs.writeFileSync(shimPath(), buildControlShimScript(codexThreadIdentityRoot()))
   try {
     fs.chmodSync(shimPath(), 0o755)
   } catch {
@@ -72,7 +74,7 @@ export function installCanvasSkillInto(configDir: string): void {
 // as context-link's get-linked-context block. The CLI env-gate keeps the block inert in
 // the user's normal (non-nodeterm) codex/gemini/opencode sessions.
 function installAgentInstructions(): void {
-  const block = buildCanvasControlInstructions(shimPath())
+  const block = nativeCliInstructions(buildCanvasControlInstructions(shimPath()), shimPath())
   const targets = [
     path.join(os.homedir(), '.codex', 'AGENTS.md'),
     path.join(os.homedir(), '.gemini', 'GEMINI.md'),

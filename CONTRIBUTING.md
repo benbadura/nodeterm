@@ -24,6 +24,13 @@ plain `npm install` under a stock Node 26 with node-gyp 12 otherwise fails with 
 
 `npm run server:dev` boots the Server Edition (browser UI) if you are working on that surface.
 
+Desktop packaging and acceptance checks are described in [docs/desktop-targets.md](docs/desktop-targets.md).
+Use `npm run dist` for the current OS. Every distribution must contain the session host,
+Codex relay and native helper bundles from `npm run build`. A successful build is not a runtime
+check: run `scripts/package-smoke.cjs` with the packaged executable and `ELECTRON_RUN_AS_NODE=1`.
+The Windows installer smoke is restricted to disposable CI runners. Never replace its refusal
+to update a live runtime with a process kill; that runtime may own active agent sessions.
+
 **If `src/main/node-pty-patch.test.ts` is red, your `node_modules` is unpatched — not your code.**
 Run `npm run rebuild`. node-pty 1.1.0 leaks a pty device per spawn on macOS
 ([node-pty#950](https://github.com/microsoft/node-pty/issues/950)) and, on Windows, leaves a

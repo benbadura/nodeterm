@@ -1,3 +1,4 @@
+import { installNativeHelper, nativeHookCommand } from '../../native-helper-install'
 // Codex hook service. Codex gates every hook behind a TRUST entry in
 // ~/.codex/config.toml: a hook command in ~/.codex/hooks.json will NOT fire
 // unless config.toml has a matching [hooks.state."<key>"] block whose
@@ -28,7 +29,7 @@ import { randomUUID } from 'crypto'
 import { renameAtomicSync } from '../../fs-atomic'
 import { buildManagedScript } from './managed-script'
 import { normalizeHookCommand } from './install-helper'
-import { buildCodexWindowsWrapper, CODEX_WINDOWS_WRAPPER_FILE } from './codex-windows-wrapper'
+import { CODEX_WINDOWS_WRAPPER_FILE } from './codex-windows-wrapper'
 import {
   computeTrustedHash,
   getCodexCanonicalTrustPath,
@@ -360,41 +361,20 @@ function writeManagedScript(file: string): void {
   }
 }
 
-/** The batch entry point beside the script — Windows only; nothing else ever reads it. */
-function writeWindowsWrapper(script: string): void {
-  const dir = path.dirname(script)
-  const file = path.join(dir, CODEX_WINDOWS_WRAPPER_FILE)
-  mkdirSync(dir, { recursive: true })
-  const tmp = path.join(dir, `.${Date.now()}-${randomUUID()}.tmp`)
-  let renamed = false
-  try {
-    writeFileSync(tmp, buildCodexWindowsWrapper(), 'utf8')
-    renameAtomicSync(tmp, file)
-    renamed = true
-  } finally {
-    if (!renamed && existsSync(tmp)) {
-      try {
-        unlinkSync(tmp)
-      } catch {
-        /* best effort */
-      }
-    }
-  }
-}
-
 export function installCodexHooks(): void {
   const script = scriptPath()
   try {
     writeManagedScript(script)
     // Order matters: the wrapper must exist before hooks.json points codex at it, or the first
     // events after an install land on a missing file.
-    if (process.platform === 'win32') writeWindowsWrapper(script)
+    if (process.platform === 'win32') installNativeHelper(script.replace(/\.sh$/, '.ps1'), ['hook', 'codex'])
   } catch (e) {
     console.warn('[agent-hooks] codex script write failed', e)
     return
   }
 
-  const command = buildManagedCommand(script)
+  const command = process.platform === 'win32'
+    ? nativeHookCommand(script.replace(/\.sh$/, '.ps1')) : buildManagedCommand(script)
   const hooksFile = hooksJsonPath()
   const config = readHooksJson(hooksFile)
   if (!config) {
@@ -424,7 +404,8 @@ export function installCodexHooks(): void {
 
 export function removeCodexHooks(): void {
   const hooksFile = hooksJsonPath()
-  const command = buildManagedCommand(scriptPath())
+  const command = process.platform === 'win32'
+    ? nativeHookCommand(scriptPath().replace(/\.sh$/, '.ps1')) : buildManagedCommand(scriptPath())
 
   try {
     const config = readHooksJson(hooksFile)

@@ -27,7 +27,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          node-version: '22.22.2'
           cache: 'npm'
 
       - name: Install dependencies
@@ -42,6 +42,35 @@ jobs:
       - name: Build (electron-vite)
         run: npm run build
 
+      - name: Package and exercise Linux runtime
+        run: |
+          npm run make-icon
+          npx electron-builder --linux --dir --publish never -c.extraMetadata.nodeTermUpdates=disabled
+          ELECTRON_RUN_AS_NODE=1 dist/linux-unpacked/nodeterm scripts/package-smoke.cjs
+
+  quality-macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.22.2'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Build bundled tmux
+        run: node scripts/build-tmux.mjs
+      - name: Build and package macOS runtime
+        run: |
+          npm run make-icon
+          npm run build
+          npx electron-builder --mac --$(node -p process.arch) --dir --publish never -c.mac.identity=null -c.mac.notarize=false -c.extraMetadata.nodeTermUpdates=disabled
+      - name: Exercise packaged runtime
+        run: |
+          app=$(find dist -maxdepth 2 -name nodeterm.app -type d | head -1)
+          test -n "$app"
+          ELECTRON_RUN_AS_NODE=1 "$app/Contents/MacOS/nodeterm" scripts/package-smoke.cjs
+
   # Windows is becoming a supported target (extraction from #276). The full suite still contains
   # POSIX-shaped fixtures (/bin/sh, AF_UNIX binds), so this job runs the suites whose behaviour is
   # platform-dependent and worth proving on the real platform — the atomic-write retry exists FOR
@@ -54,7 +83,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          node-version: '22.22.2'
           cache: 'npm'
 
       - name: Verify Visual Studio C++ toolchain
@@ -67,8 +96,15 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
-      - name: Build session host
-        run: npm run host:build
+      - name: Build all runtimes
+        run: npm run build
 
       - name: Windows-relevant tests
-        run: npx vitest run src/core/fs-atomic.test.ts src/core/fs-atomic.guard.test.ts src/core/exec-path.test.ts src/core/claude-cli.test.ts src/core/codex-identity-caps.test.ts src/core/codex-cli.test.ts src/core/grok-cli.test.ts src/core/commit-message.test.ts src/core/context-link.windows.test.ts src/core/git-service.windows.test.ts src/core/usage/codex-usage.windows.test.ts src/session-host/ src/core/session-host-client.test.ts src/core/session-host-launch-ledger.test.ts src/core/session-host-client-startup-wait.test.ts src/core/agent-launch.test.ts src/core/pty-session-host.test.ts src/main/bootstrap-windows.test.ts src/main/media-protocol.test.ts src/main/remote-atomic-write.test.ts src/main/ssh-fs.test.ts src/main/remote-ssh/ssh-project.test.ts src/renderer/terminal/file-links.test.ts src/renderer/terminal/file-links.windows.test.ts src/renderer/terminal/file-link-dialect.test.ts src/renderer/terminal/host-platform.test.ts src/main/pairing-service.windows.test.ts src/main/windows-ssh-keys.test.ts src/shared/pairing-gate.test.ts src/renderer/components/settings/sections/PhoneSection.windows.test.tsx
+        run: npx vitest run src/core/terminal-profiles.test.ts src/core/native-helper.test.ts src/core/native-helper.windows.test.ts src/core/fs-atomic.test.ts src/core/fs-atomic.guard.test.ts src/core/exec-path.test.ts src/core/claude-cli.test.ts src/core/codex-identity-caps.test.ts src/core/codex-cli.test.ts src/core/grok-cli.test.ts src/core/commit-message.test.ts src/core/context-link.windows.test.ts src/core/git-service.windows.test.ts src/core/usage/codex-usage.windows.test.ts src/session-host/ src/core/session-host-client.test.ts src/core/session-host-launch-ledger.test.ts src/core/session-host-client-startup-wait.test.ts src/core/agent-launch.test.ts src/core/pty-session-host.test.ts src/main/bootstrap-windows.test.ts src/main/media-protocol.test.ts src/main/remote-atomic-write.test.ts src/main/ssh-fs.test.ts src/main/remote-ssh/ssh-project.test.ts src/renderer/terminal/file-links.test.ts src/renderer/terminal/file-links.windows.test.ts src/renderer/terminal/file-link-dialect.test.ts src/renderer/terminal/host-platform.test.ts src/main/pairing-service.windows.test.ts src/main/windows-ssh-keys.test.ts src/shared/pairing-gate.test.ts src/renderer/components/settings/sections/PhoneSection.windows.test.tsx
+
+      - name: Package Windows application
+        run: npm run dist:win
+
+      - name: Exercise installed and ZIP runtimes
+        shell: pwsh
+        run: ./scripts/smoke-windows.ps1

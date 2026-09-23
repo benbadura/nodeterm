@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import fs from 'fs'
 import path from 'path'
+import os from 'os'
+import { execFileSync } from 'child_process'
 import {
   isManualUpdatePlatform,
   noSelfInstallCopy,
@@ -54,10 +56,26 @@ describe('local dist scripts opt out of the production update feed', () => {
   ) as { scripts: Record<string, string> }
   const MARKER = '-c.extraMetadata.nodeTermUpdates=disabled'
 
-  it('every dist script carries the marker — not just the one whose 404 was noticed', () => {
-    const dist = Object.keys(pkg.scripts).filter((s) => s === 'dist' || s.startsWith('dist:'))
-    expect(dist.length).toBeGreaterThanOrEqual(2) // dist, dist:linux
+  it('every platform dist script carries the marker — not just the one whose 404 was noticed', () => {
+    const dist = Object.keys(pkg.scripts).filter((s) => s.startsWith('dist:'))
+    expect(dist.length).toBeGreaterThanOrEqual(3)
     expect(dist.filter((s) => !pkg.scripts[s].includes(MARKER))).toEqual([])
+  })
+
+  it('the default dist command dispatches to an unsigned platform script', () => {
+    expect(pkg.scripts.dist).toBe('node scripts/package-desktop.mjs')
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nt-package-dispatch-'))
+    try {
+      const npm = path.join(root, 'npm.cjs')
+      fs.writeFileSync(npm, 'process.stdout.write(JSON.stringify(process.argv.slice(2)))')
+      const output = execFileSync(process.execPath, [path.resolve(__dirname, '../../scripts/package-desktop.mjs')], {
+        env: { ...process.env, npm_execpath: npm }, encoding: 'utf8'
+      })
+      const [verb, script] = JSON.parse(output)
+      expect(verb).toBe('run')
+      expect(['dist:mac', 'dist:linux', 'dist:win']).toContain(script)
+      expect(pkg.scripts[script]).toContain(MARKER)
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
   })
 
   it('release does NOT carry it — a promoted build must keep updating itself', () => {

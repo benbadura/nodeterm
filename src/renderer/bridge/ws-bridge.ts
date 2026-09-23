@@ -229,6 +229,7 @@ export function buildRealApi(
   | 'userDataDir'
 > {
   const pty: PtyApi = {
+    listProfiles: () => Promise.resolve([]),
     create: (options: PtyCreateOptions) =>
       client.request(IPC.ptyCreate, options) as ReturnType<PtyApi['create']>,
     write: (sessionId, data) => client.cast(IPC.ptyWrite, sessionId, data),

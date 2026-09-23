@@ -2,6 +2,7 @@
 
 export const IPC = {
   ptyCreate: 'pty:create',
+  ptyListProfiles: 'pty:list-profiles',
   ptyWrite: 'pty:write',
   ptyResize: 'pty:resize',
   ptyFlow: 'pty:flow',

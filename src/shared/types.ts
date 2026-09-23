@@ -1,3 +1,4 @@
+import type { TerminalProfile } from './terminal-profile'
 // Types shared across the main, preload, and renderer processes.
 
 import { TABBAR_HEIGHT_PX } from './window-chrome-metrics'
@@ -103,6 +104,8 @@ export type LaunchIntentExecutionResult =
   | { ok: false; reason: LaunchIntentFailureReason; message: string }
 
 export interface PtyCreateOptions {
+  /** Machine-local profile; never persist in shared canvas content. */
+  profileId?: string
   shell?: string
   /** Arguments for `shell` when it is run as the session program (e.g. ssh args). */
   shellArgs?: string[]
@@ -929,6 +932,7 @@ export type PtyLimitFixResult =
   | { ok: false; error: string; canceled?: boolean; busy?: boolean }
 
 export interface PtyApi {
+  listProfiles(): Promise<TerminalProfile[]>
   /** Starts a new PTY session; returns its sessionId and whether the session was freshly
    *  created (cold start) vs reattached to a still-running tmux session (warm). */
   create(options: PtyCreateOptions): Promise<PtyCreateResult>
@@ -1430,6 +1434,8 @@ export interface Settings {
   terminalLineHeight: number
   /** Extra horizontal space between cells, in CSS pixels (0 = xterm's default). */
   terminalLetterSpacing: number
+  /** Machine-local Windows profile for new sessions; absent preserves the legacy shell setting. */
+  defaultTerminalProfileId?: string
   /** Empty string = use the system default shell. */
   defaultShell: string
   gridSize: number

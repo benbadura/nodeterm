@@ -1,3 +1,4 @@
+import { installNativeHelper, nativeHookCommand, nativeHookMarker } from '../../native-helper-install'
 // The ONE implementation of the per-agent settings.json hook merge. Each agent's thin
 // service calls these with its own config path, script filename, and event list — claude,
 // gemini and grok do (grok also passing per-event matchers); codex writes its own hooks.json
@@ -69,6 +70,10 @@ export function managedHookScriptPath(scriptFileName: string): string {
 
 /** Write one stable, guarded hook target for any local agent installer. */
 export function installManagedHookScript(agentId: string, scriptFileName: string): string | null {
+  if (process.platform === 'win32') {
+    try { return installNativeHelper(managedHookScriptPath(scriptFileName.replace(/\.sh$/, '.ps1')), ['hook', agentId]) }
+    catch (error) { console.warn('[agent-hooks] native helper unavailable', error); return null }
+  }
   const scriptPath = managedHookScriptPath(scriptFileName)
   try {
     mkdirSync(path.dirname(scriptPath), { recursive: true })
@@ -102,6 +107,7 @@ export function installManagedHookScript(agentId: string, scriptFileName: string
  * hashed into config.toml's trust entries, so the two must stay separate.
  */
 export function buildManagedHookCommand(scriptPath: string): string {
+  if (scriptPath.endsWith('.ps1')) return nativeHookCommand(scriptPath)
   // POSIX single-quote escape so $, `, " and \ in the path are taken literally.
   const q = `'${scriptPath.replaceAll("'", "'\\''")}'`
   return `if [ -r ${q} ]; then sh ${q}; else cat >/dev/null 2>&1 || :; fi`
@@ -126,7 +132,7 @@ export function buildManagedHookCommand(scriptPath: string): string {
  * reaches a path that gets resolved.
  */
 export function normalizeHookCommand(command: string): string {
-  return command.replaceAll('\\', '/')
+  return nativeHookMarker(command).replaceAll('\\', '/').replace(/(agent-hooks\/[a-z-]+)\.ps1/g, '$1.sh')
 }
 
 // The marker identifying OUR entry: the `agent-hooks/<scriptFile>` tail of the managed

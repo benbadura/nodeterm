@@ -71,7 +71,7 @@ const licenseDir = path.join(repoRoot, 'resources', 'licenses')
 /** Written next to the binary; its exact content is the "is the output already the pinned build?"
  *  test, so bumping a version above automatically invalidates a stale binary. */
 const markerFile = path.join(outDir, '.tmux-build-version')
-const MARKER = `tmux-${TMUX_VERSION} libevent-${LIBEVENT_VERSION} utf8proc-${UTF8PROC_VERSION} universal(${ARCHS.map((a) => a.arch).join('+')})\n`
+const MARKER = `tmux-${TMUX_VERSION} libevent-${LIBEVENT_VERSION} utf8proc-${UTF8PROC_VERSION} universal(${ARCHS.map((a) => a.arch).join('+')}) pipe-fallback-v1\n`
 
 const force = process.argv.includes('--force')
 const verbose = process.argv.includes('--verbose')
@@ -149,6 +149,11 @@ function buildArch({ arch, triple, minOs }, work, tarballs) {
     ...process.env,
     CFLAGS: `${flags} -O2`,
     LDFLAGS: flags,
+    // New SDKs declare pipe2 as a weak import. Autoconf's link-only probe reports success
+    // even for our older deployment targets; libevent then calls a null function pointer
+    // on systems without that symbol (observed on macOS 26.6.2). Use its pipe+fcntl fallback
+    // for both architectures instead of binding the package to the build machine's SDK.
+    ac_cv_func_pipe2: 'no',
     // Hard off. If the runner happens to have pkg-config + a Homebrew libevent/ncurses installed,
     // tmux's configure would prefer those .pc files and link the bundled binary against
     // /opt/homebrew dylibs that do not exist on a user's machine. Without pkg-config configure

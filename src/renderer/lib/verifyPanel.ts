@@ -1,3 +1,4 @@
+import { helperCommand } from '@shared/helper-command'
 // Pure prompt/lens logic for the canvas-control `verify` verb: a panel of independent reviewers,
 // one per LENS, each reading the same target node's work and looking for a different class of
 // problem. Diversity is the point — N identical reviewers correlate their mistakes and mostly
@@ -53,7 +54,7 @@ export function parseLenses(raw: string | undefined): string[] {
 function readInstruction(agentId: string | undefined, shimPath: string): string {
   return !agentId || agentId === 'claude'
     ? 'read its work with the get-linked-context skill (summary first, then transcript if you need detail)'
-    : `read its work by running: sh "${shimPath}" summary --node <id> (then transcript --node <id> for detail) — see the get-linked-context section of your global agent instructions`
+    : `read its work by running: ${helperCommand(shimPath)} summary --node <id> (then transcript --node <id> for detail) — see the get-linked-context section of your global agent instructions`
 }
 
 /**

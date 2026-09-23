@@ -1,3 +1,4 @@
+import { listTerminalProfiles, resolveTerminalProfile, type TerminalLaunchPlan } from './terminal-profiles'
 import os from 'os'
 import fs from 'fs'
 import path from 'path'
@@ -1661,6 +1662,8 @@ export class PtyManager {
   }
 
   registerIpc(): void {
+    platform().handle(IPC.ptyListProfiles, () => process.platform === 'win32'
+      ? listTerminalProfiles(this.getSettings().defaultShell) : [])
     platform().handleWithSender(
       IPC.ptyCreate,
       (senderId, options: PtyCreateOptions): Promise<PtyCreateResult> =>
@@ -2163,11 +2166,13 @@ export class PtyManager {
     // — i.e. first open, or after a machine reboot killed the tmux server. Plain (non-tmux)
     // sessions are always fresh: they have no cross-restart continuity. The renderer uses this
     // to decide whether to replay the persisted scrollback and re-launch a resumable agent.
-    // The Windows-profile warm-backend probe (attach-only reattach of a proven session-host or
-    // tmux generation, decided ahead of trusted profile resolution) lands with the
-    // windows-terminal-profiles phase; until then nothing assigns this and every create takes the
-    // ordinary attach-or-create path below.
+    // Resolve a cold profile only after ruling out an existing generation. A profile setting
+    // changed while the app was closed must never replace that generation on reconnect.
     let warmWindowsBackend: 'session-host' | 'tmux' | undefined
+    if (process.platform === 'win32' && !options.sshRemote && options.persistKey && this.getSettings().tmuxEnabled) {
+      if (this.tmuxPath && await this.confirmedTmuxSessionExists(options.persistKey)) warmWindowsBackend = 'tmux'
+      else if (sessionHostSupported() && await sessionHostHasSession(sessionName(options.persistKey))) warmWindowsBackend = 'session-host'
+    }
     const tmuxBacked = !!this.tmuxPath && this.getSettings().tmuxEnabled && !!options.persistKey
     // For an SSH-project node, "fresh" is decided by the REMOTE tmux server (over the project's
     // ControlMaster), not the local one. The remote `has-session` is a full network round-trip,
@@ -2215,6 +2220,24 @@ export class PtyManager {
     // `ownerProjectId` — and no cwd, agent, account or hook env either. A mirrored client that
     // lands on a re-created session gets the same bare login shell it got before this feature.
     const projectOverrides = await this.projectSpawnOverrides(options)
+    if (options.profileId !== undefined && !platform().isLocalClient?.(clientId)) {
+      throw new Error('Terminal profiles can only be selected by the local desktop.')
+    }
+    if (options.profileId !== undefined && (process.platform !== 'win32' || options.sshRemote || options.shell || projectOverrides?.shell)) {
+      throw new Error('A Windows terminal profile requires a local terminal without a shell override.')
+    }
+    const settings = this.getSettings()
+    const profileId = options.profileId ?? settings.defaultTerminalProfileId ?? (settings.defaultShell ? 'custom' : 'auto')
+    let profilePlan: TerminalLaunchPlan | undefined
+    if (process.platform === 'win32' && !options.sshRemote && !options.shell && !projectOverrides?.shell && !warmWindowsBackend) {
+      const cwd = options.cwd || os.homedir()
+      try {
+        if (!fs.statSync(cwd).isDirectory()) throw new Error('not a directory')
+      } catch {
+        throw new Error('The terminal working directory is unavailable. Choose an existing folder.')
+      }
+      profilePlan = await resolveTerminalProfile(profileId, cwd, settings.defaultShell)
+    }
     // Resolved HERE for the same synchronous-spawnSession reason as projectOverrides — and the
     // relay host's detached callers pass no `sshRemote` at all, so this is the one path that needs
     // it. Re-derive the login-agent pin for the endpoint (issue #427): same memoized `ssh -G`
@@ -2249,7 +2272,7 @@ export class PtyManager {
         : null
     let sessionId: string
     try {
-      sessionId = this.spawnSession(options, clientId, undefined, warmWindowsBackend, projectOverrides)
+      sessionId = this.spawnSession(options, clientId, undefined, warmWindowsBackend, projectOverrides, profilePlan)
     } catch (err) {
       // A spawn that never happened must not hold a slot until the settle deadline — the next node
       // in the queue is waiting on it.
@@ -2686,7 +2709,8 @@ export class PtyManager {
     warmWindowsBackend?: 'session-host' | 'tmux',
     /** What the OWNING project contributes (see `projectSpawnOverrides`) — already resolved,
      *  because this function is synchronous. Null on every path with no proven project owner. */
-    overrides?: ProjectSpawnOverrides | null
+    overrides?: ProjectSpawnOverrides | null,
+    profilePlan?: TerminalLaunchPlan
   ): string {
     // PRE-FLIGHT — refuse before node-pty is touched, not after it fails.
     //
@@ -3006,8 +3030,8 @@ export class PtyManager {
     const programArgs = options.shellArgs ?? []
     // One resolver for BOTH direct node-pty and the persistent session-host backend, so the two
     // paths cannot drift on "which shell" (see resolveLocalSessionShell).
-    const localSessionShell = resolveLocalSessionShell(program, settings.defaultShell)
-    const localSessionArgs = program ? programArgs : []
+    const localSessionShell = profilePlan?.executable ?? resolveLocalSessionShell(program, settings.defaultShell)
+    const localSessionArgs = profilePlan?.args ?? (program ? programArgs : [])
 
     // SSH project node: run `ssh -t '<remote tmux attach-or-create>'` as the PTY program. The
     // REMOTE tmux provides persistence (over the project's ControlMaster); the local PTY just
@@ -3143,7 +3167,7 @@ export class PtyManager {
       attachExistingHost = true
       file = ''
       args = []
-    } else if (this.tmuxPath && settings.tmuxEnabled && options.persistKey) {
+    } else if (this.tmuxPath && settings.tmuxEnabled && options.persistKey && !profilePlan) {
       // attach-or-create the persistent session for this node.
       // `-A` = attach-or-create. `-D` = detach OTHER clients on attach. We use `-D` ONLY for the
       // local renderer client (a remount should take sole ownership of its session). A host-served

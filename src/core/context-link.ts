@@ -1,3 +1,4 @@
+import { installNativeHelper, nativeCliInstructions } from './native-helper-install'
 // Context Link — lets two agent nodes on the canvas read each other's context on demand.
 //
 // Connecting two agent nodes means "these two may READ each other." No messages flow. The
@@ -53,7 +54,7 @@ export function contextLinkDir(): string {
   return dir
 }
 function cliShimPath(): string {
-  return path.join(contextLinkDir(), 'context.sh')
+  return path.join(contextLinkDir(), process.platform === 'win32' ? 'context.ps1' : 'context.sh')
 }
 function skillPath(): string {
   return path.join(os.homedir(), '.claude', 'skills', 'get-linked-context', 'SKILL.md')
@@ -62,7 +63,8 @@ function skillPath(): string {
 function writeCliFiles(): void {
   const d = contextLinkDir()
   fs.mkdirSync(d, { recursive: true })
-  fs.writeFileSync(cliShimPath(), buildContextShimScript(codexThreadIdentityRoot()))
+  if (process.platform === 'win32') installNativeHelper(cliShimPath(), ['context'])
+  else fs.writeFileSync(cliShimPath(), buildContextShimScript(codexThreadIdentityRoot()))
   try {
     fs.chmodSync(cliShimPath(), 0o755)
   } catch {
@@ -80,7 +82,7 @@ function writeCliFiles(): void {
 function installSkill(): void {
   try {
     fs.mkdirSync(path.dirname(skillPath()), { recursive: true })
-    fs.writeFileSync(skillPath(), buildContextLinkSkillBody(cliShimPath()), 'utf8')
+    fs.writeFileSync(skillPath(), nativeCliInstructions(buildContextLinkSkillBody(cliShimPath()), cliShimPath()), 'utf8')
   } catch (e) {
     console.warn('[context-link] skill install failed', e)
   }
@@ -89,7 +91,7 @@ function installSkill(): void {
 // Codex/Gemini/opencode have no skill system — merge an instructions block into their global
 // instruction files instead (marker-delimited, idempotent, other content preserved).
 function installAgentInstructions(): void {
-  const block = buildLinkedContextInstructions(cliShimPath())
+  const block = nativeCliInstructions(buildLinkedContextInstructions(cliShimPath()), cliShimPath())
   const targets = [
     path.join(os.homedir(), '.codex', 'AGENTS.md'),
     path.join(os.homedir(), '.gemini', 'GEMINI.md'),

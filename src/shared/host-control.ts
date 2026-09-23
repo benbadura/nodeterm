@@ -32,6 +32,7 @@ import { IPC } from './ipc'
 export const HOST_ONLY_CHANNEL_PREFIXES: readonly string[] = ['githubControl:']
 
 export const HOST_ONLY_CHANNELS: ReadonlySet<string> = new Set([
+  IPC.ptyListProfiles,
   IPC.projectSetupRun,
   IPC.projectSetupCancel,
   IPC.projectSetupConsentSubmit,

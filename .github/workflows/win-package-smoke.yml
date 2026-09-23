@@ -5,10 +5,10 @@ name: Windows package smoke
 # windows-latest, whose runner image already ships the Visual Studio Build Tools + Python that
 # node-pty/smart-whisper compilation needs.
 #
-# BUILD ONLY — this workflow must NEVER publish. `dist:win` passes `--publish never`, nothing
+# BUILD AND RUNTIME CHECKS ONLY — this workflow must NEVER publish. `dist:win` passes `--publish never`, nothing
 # here uploads to the update feed or creates a release, and the produced installer is unsigned.
-# The session-host phase (#305) has merged and release.yml's `release-win` job now ships this
-# same build as an UNSIGNED BETA on every version tag (#454). Still deliberate follow-ups:
+# The session-host phase (#305) has merged and release.yml's Windows matrix job now ships this
+# same build as an UNSIGNED BETA after a GitHub release is published. Still deliberate follow-ups:
 # code signing, and — gated on it — the auto-update leg (latest.yml on nodeterm.dev/updates);
 # an unsigned auto-update is a trust downgrade, so the beta ships with its updater disabled.
 on:
@@ -25,7 +25,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          node-version: '22.22.2'
           cache: 'npm'
 
       # postinstall patches node-pty and rebuilds node-pty + smart-whisper against Electron's
@@ -47,3 +47,7 @@ jobs:
           version=$(node -p "require('./package.json').version")
           test -f "dist/nodeterm-Setup-${version}.exe" || { echo "::error::NSIS installer missing"; exit 1; }
           ls dist/nodeterm-*-win.zip >/dev/null 2>&1 || { echo "::error::win zip missing"; exit 1; }
+
+      - name: Exercise installed and ZIP runtimes
+        shell: pwsh
+        run: ./scripts/smoke-windows.ps1

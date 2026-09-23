@@ -20,7 +20,8 @@ const REMOTE_HOME_MAX = 4096
 
 export interface CopilotHookCommand {
   type: 'command'
-  bash: string
+  bash?: string
+  powershell?: string
   timeoutSec: number
   matcher?: string
 }
@@ -60,13 +61,13 @@ export function copilotHookConfigPath(): string {
 }
 
 /** Pure config builder shared with the SSH installer, which supplies a remote script path. */
-export function buildCopilotHookConfig(command: string): CopilotHookConfig {
+export function buildCopilotHookConfig(command: string, windows = false): CopilotHookConfig {
   const hooks: Record<string, CopilotHookCommand[]> = {}
   for (const event of COPILOT_HOOK_EVENTS) {
     hooks[event] = [
       {
         type: 'command',
-        bash: command,
+        ...(windows ? { powershell: command } : { bash: command }),
         timeoutSec: 5,
         // Copilot's notification matcher is a regex on notification_type. These are the only two
         // notifications that change nodeterm state; filtering at source avoids one process per
@@ -88,7 +89,7 @@ export function installCopilotHooks(): void {
     fs.mkdirSync(path.dirname(configPath), { recursive: true })
     fs.writeFileSync(
       configPath,
-      `${JSON.stringify(buildCopilotHookConfig(buildManagedHookCommand(script)), null, 2)}\n`,
+      `${JSON.stringify(buildCopilotHookConfig(buildManagedHookCommand(script), process.platform === 'win32'), null, 2)}\n`,
       'utf8'
     )
   } catch (e) {

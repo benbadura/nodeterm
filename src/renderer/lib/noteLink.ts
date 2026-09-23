@@ -1,3 +1,4 @@
+import { helperCommand } from '@shared/helper-command'
 // Pure helpers for canvas link edges: classify a new connection (context link between two
 // agent nodes vs. note link between a sticky and a terminal), build the one-shot push
 // message a note link injects into an agent session, and re-export the link-map builders.
@@ -109,7 +110,7 @@ export function buildContextLinkNote(
   if (!agentId || agentId === 'claude') {
     return `[nodeterm] You are now linked to "${other}". Use the get-linked-context skill to read its context when you need it. No action needed now — just acknowledge briefly.`
   }
-  return `[nodeterm] You are now linked to "${other}". When you need its context (and only then) run: sh "${shimPath}" list — then summary | transcript | terminal --node <id>. Details are in the get-linked-context section of your global agent instructions. No action needed now — acknowledge briefly and do not run these commands yet.`
+  return `[nodeterm] You are now linked to "${other}". When you need its context (and only then) run: ${helperCommand(shimPath)} list — then summary | transcript | terminal --node <id>. Details are in the get-linked-context section of your global agent instructions. No action needed now — acknowledge briefly and do not run these commands yet.`
 }
 
 // The link-map builders moved to @shared: the Server Edition derives the same map from persisted

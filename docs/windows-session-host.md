@@ -8,7 +8,10 @@ long-lived Node process that owns the real PTYs and outlives the Electron app.
 This document describes the Windows desktop implementation. It does not embed Microsoft Windows
 Terminal, and it does not change the Server Edition or mobile companion.
 
-Selected automatically, per session, in this order:
+See [Desktop targets](desktop-targets.md) for packaging, native helper/profile integration,
+the release gate and the remaining native agent-launch work.
+
+Selected automatically for legacy/non-profile sessions in this order:
 
 ```
 real tmux found on this machine  →  tmux (unchanged, every platform)
@@ -17,7 +20,8 @@ neither                          →  plain shell (no persistence, as before)
 ```
 
 Stock Windows provides no native tmux, so the session host is the normal persistence backend
-there. On macOS/Linux nothing changes: if tmux is installed, it is still preferred every time.
+there. New Windows profile sessions explicitly use the session host when persistence is enabled;
+warm sessions keep their existing backend. On macOS/Linux, an installed tmux remains preferred.
 
 ## Why not just port tmux's approach
 

@@ -14,7 +14,7 @@
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
-    "build": "electron-vite build && npm run host:build && npm run build:codex-relay",
+    "build": "electron-vite build && npm run host:build && npm run build:codex-relay && npm run helper:build",
     "build:codex-relay": "node scripts/build-codex-relay.mjs",
     "preview": "electron-vite preview",
     "start": "electron-vite preview",
@@ -24,15 +24,17 @@
     "diagnose:agents": "node scripts/agent-session-scan.mjs",
     "rebuild": "node scripts/patch-node-pty.mjs && electron-rebuild -f -w node-pty,smart-whisper",
     "server:build": "esbuild src/server/main.ts --bundle --platform=node --format=cjs --outfile=out/server/main.cjs --external:node-pty --external:ws --external:smart-whisper --tsconfig=tsconfig.node.json",
+    "helper:build": "esbuild src/core/native-helper-entry.ts --bundle --platform=node --format=cjs --outfile=out/helper/native-helper.cjs --tsconfig=tsconfig.node.json",
     "host:build": "esbuild src/session-host/host.ts --bundle --platform=node --format=cjs --outfile=out/session-host/host.cjs --external:node-pty --tsconfig=tsconfig.node.json",
     "server:start": "node out/server/main.cjs",
     "server:dev": "npm run build && npm run server:build && node out/server/main.cjs",
     "make-icon": "node scripts/make-icon.mjs",
     "make-social": "node scripts/make-social.mjs",
-    "dist": "npm run make-icon && electron-vite build && npm run host:build && electron-builder --mac --arm64 --publish never -c.mac.identity=null -c.mac.notarize=false -c.extraMetadata.nodeTermUpdates=disabled",
-    "dist:linux": "npm run make-icon && electron-vite build && npm run host:build && electron-builder --linux --publish never -c.extraMetadata.nodeTermUpdates=disabled",
-    "dist:win": "npm run make-icon && electron-vite build && npm run host:build && electron-builder --win --x64 --publish never -c.extraMetadata.nodeTermUpdates=disabled",
-    "release": "npm run make-icon && electron-vite build && npm run host:build && sh -c 'electron-builder --mac --arm64 --x64 --publish never; s=$?; npm run rebuild; exit $s'",
+    "dist": "node scripts/package-desktop.mjs",
+    "dist:mac": "node scripts/build-tmux.mjs && npm run make-icon && npm run build && electron-builder --mac --publish never -c.mac.identity=null -c.mac.notarize=false -c.extraMetadata.nodeTermUpdates=disabled && npm run rebuild",
+    "dist:linux": "npm run make-icon && npm run build && electron-builder --linux --publish never -c.extraMetadata.nodeTermUpdates=disabled",
+    "dist:win": "npm run make-icon && npm run build && electron-builder --win --x64 --publish never -c.extraMetadata.nodeTermUpdates=disabled",
+    "release": "node scripts/build-tmux.mjs && npm run make-icon && npm run build && sh -c 'electron-builder --mac --arm64 --x64 --publish never; s=$?; npm run rebuild; exit $s'",
     "postinstall": "node scripts/patch-node-pty.mjs && electron-rebuild -f -w node-pty,smart-whisper"
   },
   "build": {
@@ -140,6 +142,7 @@
       ]
     },
     "nsis": {
+      "include": "build/installer.nsh",
       "artifactName": "${productName}-Setup-${version}.${ext}",
       "oneClick": true,
       "perMachine": false

@@ -67,6 +67,7 @@ export function electronPlatform(): ElectronPlatform {
   }
 
   return {
+    isLocalClient: (id) => !!webContents.fromId(id),
     get userDataDir() {
       return app.getPath('userData')
     },

@@ -76,6 +76,7 @@ const subscribeProjectTrustChanged = subscribe<[{ projectId: string }]>(IPC.proj
 
 const api: NodeTerminalApi = {
   pty: {
+    listProfiles: () => ipcRenderer.invoke(IPC.ptyListProfiles),
     create: (options: PtyCreateOptions) => ipcRenderer.invoke(IPC.ptyCreate, options),
     write: (sessionId, data) => ipcRenderer.send(IPC.ptyWrite, sessionId, data),
     resize: (sessionId, cols, rows, viewerId) =>

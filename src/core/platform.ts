@@ -8,6 +8,8 @@ export interface CorePlatform {
   readonly userDataDir: string
   readonly appVersion: string
   readonly isPackaged: boolean
+  /** True only for a desktop window, never a relay/browser peer. */
+  isLocalClient?(id: number): boolean
   /** Electron's `process.resourcesPath` — `<app>/Contents/Resources` in a packaged build, where
    *  extraResources (today: the bundled tmux, see tmux-hint.ts `bundledTmuxPath`) land. OPTIONAL
    *  because it is an Electron notion: the Server Edition has no such directory and simply omits
