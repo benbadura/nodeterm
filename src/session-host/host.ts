@@ -14,6 +14,7 @@
 
 import fs from 'fs'
 import net from 'net'
+import { hostMessagePane } from './message-pane'
 import path from 'path'
 import crypto from 'crypto'
 import { sessionHostPaths, currentProtocolVersion, type SessionHostState } from './paths'
@@ -30,7 +31,7 @@ import {
   type ListSessionsResult
 } from './protocol'
 import { HostSession } from './session'
-import { sendKeysWrites } from './send-keys-delivery'
+import { sendTextWhenSettled } from '../core/settled-text'
 import { paneCommand as readPaneCommand } from './process-tree'
 import { terminateWindowsProcessTree } from './windows-process-tree'
 import { publishSessionHostState } from './state-file'
@@ -817,17 +818,17 @@ async function main(): Promise<void> {
         s.resumeFor(socket)
         return { ok: true }
       }
-      case 'sendKeys': {
+      case 'sendKeys':
+      case 'sendKeysV2': {
         const s = sessions.get(req.name)
         if (!s || s.exited) return { ok: false, error: 'no such session' }
-        // Framed from the pane's REAL bracketed-paste state, with the Enter as its own write —
-        // the session host's equivalent of tmux's `paste-buffer -p` + `send-keys Enter`. See
-        // send-keys-delivery.ts; the mode read crosses the emulator tail, so re-check liveness
-        // after it rather than writing into a session that exited meanwhile.
-        const bracketed = await s.bracketedPasteRequested()
-        if (s.exited || sessions.get(req.name) !== s) return { ok: false, error: 'no such session' }
-        for (const chunk of sendKeysWrites(req.text, req.enter, bracketed)) s.proc.write(chunk)
-        return { ok: true }
+        const ok = await sendTextWhenSettled(s, req.text, req.enter, {
+          current: () => !s.exited && sessions.get(req.name) === s,
+          bracketed: () => s.bracketedPasteRequested(),
+          capture: () => s.serialize(200),
+          write: (chunk) => s.proc.write(chunk)
+        })
+        return ok !== false ? { ok: true, result: { delivery: ok } } : { ok: false, error: 'session unavailable or delivery busy' }
       }
       case 'paneCommand': {
         const s = sessions.get(req.name)
@@ -835,6 +836,15 @@ async function main(): Promise<void> {
         const command = await readPaneCommand(s.proc.pid)
         return { ok: true, result: { command } satisfies PaneCommandResult }
       }
+      case 'messageOwnerV1':
+        return { ok: true, result: await hostMessagePane(() => sessions.get(req.name)).owner() }
+      case 'messagePasteReadyV1':
+        return { ok: true, result: await hostMessagePane(() => sessions.get(req.name)).pasteReady() }
+      case 'messageEnvelopeV1':
+        return {
+          ok: true,
+          result: await hostMessagePane(() => sessions.get(req.name)).send(req.envelope, req.expected)
+        }
       case 'capture': {
         const s = sessions.get(req.name)
         if (!s || s.exited) return { ok: true, result: { text: '' } satisfies CaptureResult }

@@ -142,7 +142,10 @@ export function registerContextEnsureIpc(deps: ContextEnsureDeps): void {
         if (!tail) return
         // The tail's own path is the authoritative hint for claude's resolver (hook-fed when
         // present) AND the early-out for everyone: a session already tracked needs no scan.
-        if (tail.pathFor(sessionId)) return
+        if (tail.pathFor(sessionId)) {
+          tail.replay(sessionId)
+          return
+        }
         const p = await localTranscriptFor(q, (s) => tail.pathFor(s))
         if (p) tail.track(sessionId, p)
       } finally {

@@ -52,6 +52,7 @@ const REFETCH_DEBOUNCE_MS = 5 * 60 * 1000
 interface OAuthCreds {
   accessToken: string | null
   email: string | null
+  organization?: ClaudeUsage['organization']
 }
 
 /**
@@ -88,7 +89,7 @@ export function parseCreds(raw: string): OAuthCreds {
 }
 
 /**
- * macOS Keychain → {config}/.credentials.json → email backfill from {config}/.claude.json.
+ * macOS Keychain → {config}/.credentials.json; identity metadata from {config}/.claude.json.
  * With an `accountId` the config dir is the managed account's isolated dir (scoped Keychain
  * service first); without, it's exactly the system default (`~/.claude`, unscoped services).
  *
@@ -102,7 +103,9 @@ async function resolveCreds(accountId?: string): Promise<OAuthCreds> {
   let creds: OAuthCreds = { accessToken: null, email: null }
 
   if (process.platform === 'darwin') {
-    for (const service of services) {
+    // An unscoped Keychain entry belongs to the system account. Using it here would
+    // label the system token's limits with the managed account's organization.
+    for (const service of configDir ? services.slice(0, 1) : services) {
       try {
         const { stdout } = await execFileP('security', [
           'find-generic-password',
@@ -130,7 +133,7 @@ async function resolveCreds(accountId?: string): Promise<OAuthCreds> {
     }
   }
 
-  if (creds.accessToken && !creds.email) {
+  if (creds.accessToken) {
     try {
       const raw = await fs.readFile(identityFile, 'utf-8')
       const j = JSON.parse(raw) as Record<string, any>
@@ -139,7 +142,25 @@ async function resolveCreds(accountId?: string): Promise<OAuthCreds> {
         (acct && typeof acct.emailAddress === 'string' && acct.emailAddress) ||
         (acct && typeof acct.email === 'string' && acct.email) ||
         null
-      if (email) creds = { ...creds, email }
+      // Identity may lag a login. A known email mismatch must not label this token
+      // with another user's organization; missing metadata still leaves usage intact.
+      if (!creds.email || !email || creds.email === email) {
+        const text = (value: unknown): string | undefined =>
+          typeof value === 'string' ? value.trim() || undefined : undefined
+        const name = text(acct?.organizationName)
+        creds = {
+          ...creds,
+          email: creds.email || email,
+          ...(name
+            ? { organization: {
+                name,
+                uuid: text(acct?.organizationUuid),
+                type: text(acct?.organizationType),
+                rateLimitTier: text(acct?.organizationRateLimitTier)
+              } }
+            : {})
+        }
+      }
     } catch {
       // best-effort only
     }
@@ -155,8 +176,10 @@ export async function resolveClaudeAccessToken(accountId?: string): Promise<stri
 
 export async function fetchUsage(accountId?: string): Promise<ClaudeUsage> {
   const now = Date.now()
-  const { accessToken, email } = await resolveCreds(accountId)
-  if (!accessToken) return emptyUsage(email, now, 'unavailable')
+  const { accessToken, email, organization } = await resolveCreds(accountId)
+  const identify = (usage: ClaudeUsage): ClaudeUsage =>
+    organization ? { ...usage, organization } : usage
+  if (!accessToken) return identify(emptyUsage(email, now, 'unavailable'))
   try {
     const ctrl = new AbortController()
     const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS)
@@ -168,12 +191,12 @@ export async function fetchUsage(accountId?: string): Promise<ClaudeUsage> {
     if (!res.ok) {
       // 401/403 → token is an API key or expired: no subscription windows to show.
       const status = res.status === 401 || res.status === 403 ? 'unavailable' : 'error'
-      return emptyUsage(email, now, status)
+      return identify(emptyUsage(email, now, status))
     }
     const data = (await res.json()) as Record<string, any>
-    return usageFromPayload(data, email, now)
+    return identify(usageFromPayload(data, email, now))
   } catch {
-    return emptyUsage(email, now, 'error')
+    return identify(emptyUsage(email, now, 'error'))
   }
 }
 

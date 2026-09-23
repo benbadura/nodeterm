@@ -71,7 +71,11 @@ const licenseDir = path.join(repoRoot, 'resources', 'licenses')
 /** Written next to the binary; its exact content is the "is the output already the pinned build?"
  *  test, so bumping a version above automatically invalidates a stale binary. */
 const markerFile = path.join(outDir, '.tmux-build-version')
-const MARKER = `tmux-${TMUX_VERSION} libevent-${LIBEVENT_VERSION} utf8proc-${UTF8PROC_VERSION} universal(${ARCHS.map((a) => a.arch).join('+')}) pipe-fallback-v1\n`
+/** Bump when the build RECIPE changes in a way the pins above do not capture, so a binary built by
+ *  the old recipe on the (self-hosted, persistent) release runner is rebuilt instead of reused.
+ *  r2 = issue #896 (pipe2 weak import). */
+const RECIPE_REV = 'r2'
+const MARKER = `tmux-${TMUX_VERSION} libevent-${LIBEVENT_VERSION} utf8proc-${UTF8PROC_VERSION} universal(${ARCHS.map((a) => a.arch).join('+')}) ${RECIPE_REV}\n`
 
 const force = process.argv.includes('--force')
 const verbose = process.argv.includes('--verbose')
@@ -149,11 +153,6 @@ function buildArch({ arch, triple, minOs }, work, tarballs) {
     ...process.env,
     CFLAGS: `${flags} -O2`,
     LDFLAGS: flags,
-    // New SDKs declare pipe2 as a weak import. Autoconf's link-only probe reports success
-    // even for our older deployment targets; libevent then calls a null function pointer
-    // on systems without that symbol (observed on macOS 26.6.2). Use its pipe+fcntl fallback
-    // for both architectures instead of binding the package to the build machine's SDK.
-    ac_cv_func_pipe2: 'no',
     // Hard off. If the runner happens to have pkg-config + a Homebrew libevent/ncurses installed,
     // tmux's configure would prefer those .pc files and link the bundled binary against
     // /opt/homebrew dylibs that do not exist on a user's machine. Without pkg-config configure
@@ -179,6 +178,18 @@ function buildArch({ arch, triple, minOs }, work, tarballs) {
       '--disable-samples',
       '--disable-libevent-regress',
       '--disable-debug-mode',
+      // Issue #896: the release runner's SDK is NEWER than our deployment target, and autoconf's
+      // AC_CHECK_FUNCS is a LINK test against that SDK. The macOS 27 SDK declares pipe2, so
+      // libevent detected it, the binary weak-linked `_pipe2`, and on macOS 26 (whose libSystem
+      // has no pipe2) the weak symbol resolved to 0x0 — libevent calls it unconditionally from
+      // evutil_make_internal_pipe_, so tmux segfaulted (exit 139) the instant it started a server
+      // and EVERY terminal died with "[Process exited with code 0]". MACOSX_DEPLOYMENT_TARGET does
+      // not prevent this. Pre-answer the probes for linux-era syscalls Apple has started adding;
+      // libevent has a portable fallback for each. `assertNoUnguardedWeakImports` is the backstop
+      // for the next one nobody listed here.
+      'ac_cv_func_pipe2=no',
+      'ac_cv_func_accept4=no',
+      'ac_cv_func_strtonum=no',
       ...hostArg
     ],
     { cwd: evDir, env }
@@ -289,6 +300,36 @@ function assertNoForeignDylibs(file) {
     )
   }
   log(`dylib deps are all system: ${deps.join(', ')}`)
+}
+
+/**
+ * Weak imports that are SAFE because the code that references them checks for NULL first. Anything
+ * else weak-imported from libSystem is a symbol the SDK has but the oldest supported macOS may not
+ * — it resolves to 0x0 there and the first call jumps to address zero (issue #896: `_pipe2`,
+ * SIGSEGV on every terminal on macOS 26). The runner's own smoke test cannot catch it, because the
+ * runner is the NEWEST macOS, where the symbol exists.
+ *  - `___darwin_check_fd_set_overflow`: <sys/_types/_fd_def.h> guards it with an address check.
+ */
+const GUARDED_WEAK_IMPORTS = new Set(['___darwin_check_fd_set_overflow'])
+
+function assertNoUnguardedWeakImports(file) {
+  for (const { arch, minOs } of ARCHS) {
+    const weak = capture('nm', ['-m', '-arch', arch, file])
+      .split('\n')
+      .filter((l) => /\(undefined\) weak external /.test(l))
+      .map((l) => l.trim().split(/\s+/)[3])
+      .filter((sym) => !GUARDED_WEAK_IMPORTS.has(sym))
+    if (weak.length) {
+      throw new Error(
+        `the ${arch} slice weak-imports ${weak.join(', ')} — symbols from an SDK newer than its ` +
+          `deployment target (${minOs}). On an older macOS they resolve to NULL and tmux crashes ` +
+          'on first use (issue #896). Pre-answer the configure probe that found them ' +
+          '(ac_cv_func_<name>=no), or add the symbol to GUARDED_WEAK_IMPORTS only after reading ' +
+          'every call site and confirming it checks for NULL.'
+      )
+    }
+  }
+  log('no unguarded weak imports in either slice')
 }
 
 /**
@@ -422,6 +463,7 @@ function main() {
     if (missing.length) throw new Error(`universal binary is missing slices: ${missing.join(', ')}`)
     assertNoForeignDylibs(outFile)
     assertUtf8procLinked(outFile)
+    assertNoUnguardedWeakImports(outFile)
 
     // -V runs the NATIVE slice; the cross slice is verified structurally (lipo/otool) because the
     // runner may have no Rosetta to execute it with.

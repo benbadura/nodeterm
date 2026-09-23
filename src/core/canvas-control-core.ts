@@ -1,3 +1,4 @@
+import { LINK_ENDPOINT_NOT_FOUND } from '../shared/canvas-link'
 // Pure core for agent canvas control: the verb model, request validation, and the standalone
 // CLI source. No electron imports, so this module + CONTROL_CLI_SCRIPT are unit-testable.
 // Electron/ipc/server wiring lives in canvas-control.ts + index.ts + hook-server.ts.
@@ -423,7 +424,7 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     'Verbs:',
     '- `list` — current nodes (id, kind, title). Start here when you need a node id.',
     '- `help` — print the verb list. Answered by the shim itself, so it works even if the app is down.',
-    '- `open-terminal [--count N] [--cwd P] [--cmd C] [--group <id>] [--after <id,id>] [--project <id>]` — open N plain terminals.',
+    '- `open-terminal [--count N] [--cwd P] [--cmd C] [--group <id>] [--after <id,id>] [--project <id>]` — open N plain terminals. `--cmd` requires verified node identity.',
     '- `open-claude [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--project <id>]` — open N Claude sessions.',
     `- \`open-agent --agent ${agentChoices} [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--project <id>]\` — open`,
     '  any agent CLI. `--group` parents the node(s) into a group frame; a worktree-bound group also',
@@ -448,14 +449,16 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '  returned to YOU in this session. A session opened into a non-active project',
     '  starts when the user next views that project — do not poll for it.',
     '  `--group`/`--after` cannot be combined with `--project`.',
-    '  The reply reports whether anything actually started: `queued` is true (and `queuedIds`',
-    '  lists which) when a node was opened ARMED — waiting on `--after`, on a worktree\'s',
+    '  The reply reports delivery: `queued` is true (and `queuedIds`',
+    '  lists which) while launch delivery is pending, including a visible node waiting for its PTY,',
+    '  or one waiting on `--after`, on a worktree\'s',
     '  setup script, or on a project the user has not viewed yet (a `--project` target, or your',
     '  own project while they are looking elsewhere). A queued node',
-    '  exists on the canvas but has no process behind it: do not route work to it, do not',
+    '  exists on the canvas but its agent launch has not been delivered: do not route work to it, do not',
     '  `send` to it and do not report it as started. It launches itself when its wait ends,',
     '  then reports through the ordinary status hooks — there is nothing to poll.',
-    '  `queued: false` means the session is running.',
+    '  `queued: false` is not proof the agent is running. `deliveredIds` confirms command delivery only.',
+    '  `list` names QUEUED, LAUNCH FAILED, DROPPED and AGENT STATUS UNCONFIRMED where observed.',
     '  `--prompt` arrives on ONE LINE: every run of whitespace in it, newlines included, is',
     '  collapsed to a single space before the session starts (the prompt rides the launch command',
     '  line typed into the pane). For a structured or multi-line brief use `--prompt-file <abs',
@@ -504,6 +507,8 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '  on demand (nodeterm linked-context CLI). `--from` defaults to you; nothing is pushed into the',
     '  linked sessions. Agent sessions you open, and the stations you name in `--after`, are already',
     '  linked — nothing to `link`. Use `link` only for nodes you did not open, or to link two OTHER nodes.',
+    `  Both endpoints must be in your project. A missing endpoint reports: ${LINK_ENDPOINT_NOT_FOUND}.`,
+    '  This does not reveal whether the id exists in another project.',
     '  On Server Edition the ownership rule is stricter: every endpoint must be a node you opened',
     '  during this server run.',
     '- `verify --node <id> [--lenses correctness,security,tests] [--focus "..."] [--synthesis off]` — open a',
@@ -758,8 +763,8 @@ nt_control_post() {
       --data-urlencode "nodeId=\${NODETERM_NODE_ID}" "$@" 2>/dev/null)
   fi
 }
-# An answer from the server — any HTTP code — is authoritative; only a dead transport fails over.
-nt_reached() { [ -n "$nt_code" ] && [ "$nt_code" != "000" ]; }
+# Only a dead transport or an explicit wrong-owner (421) answer permits failover; 403 stays final.
+nt_reached() { [ -n "$nt_code" ] && [ "$nt_code" != "000" ] && [ "$nt_code" != "421" ]; }
 
 nt_had_transport=""
 nt_control_post "$@"
@@ -770,8 +775,9 @@ nt_control_post "$@"
 # to it. Before this walk the hook script healed itself and this shim died on the SAME stale file —
 # "control endpoint unreachable" with the requested verb silently dropped. Skipped under a codex
 # sandbox: there the sandbox denies EVERY connect (issue #367), so each candidate would burn a
-# doomed curl and the sandbox hint below is already the right diagnosis.
-if ! nt_reached && [ -z "$CODEX_SANDBOX_NETWORK_DISABLED" ]; then
+# doomed curl and the sandbox hint below is already the right diagnosis. A 421 is different:
+# it proves the transport worked and the wrong owner rejected this request before dispatch.
+if ! nt_reached && { [ "$nt_code" = "421" ] || [ -z "$CODEX_SANDBOX_NETWORK_DISABLED" ]; }; then
   nt_list=$(nt_candidates "$NODETERM_HOOK_ENDPOINT")
   if [ -n "$nt_list" ]; then
     nt_n=0
@@ -876,7 +882,7 @@ Verbs:
   not seven. It clears itself the moment that station completes another turn.
 - \`help\` — print the verb list. The shim answers this itself, without reaching the app, so it
   is also what to run when you are unsure whether the control endpoint is alive.
-- \`open-terminal [--count N] [--cwd P] [--cmd C] [--group <id>] [--after <id,id>] [--project <id>]\` — open N plain terminals (default 1).
+- \`open-terminal [--count N] [--cwd P] [--cmd C] [--group <id>] [--after <id,id>] [--project <id>]\` — open N plain terminals (default 1). \`--cmd\` requires verified node identity.
 - \`open-claude [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--project <id>]\` — open N Claude sessions (default 1).
 - \`open-agent --agent ${agentChoices} [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--project <id>]\` — open N sessions of any agent CLI.
   \`--group\` parents the node(s) into an existing group frame; a worktree-bound group also
@@ -909,14 +915,15 @@ Verbs:
   **closed**, the node is still saved into it and the reply says so; the tab is not reopened for
   you. So: opening a station is safe to do at any time, but a station you opened while the user was
   elsewhere is not running yet — read \`queued\` before you route work to it.
-  **The reply tells you whether anything actually started.** \`queued\` is true — and
-  \`queuedIds\` names which of the returned ids — whenever a node was opened **armed**: waiting on
+  **The reply reports launch delivery, not agent health.** \`queued\` is true — and
+  \`queuedIds\` names which of the returned ids — while launch delivery is pending: waiting for its PTY, or on
   \`--after\`, on a worktree's setup script, or on a project the user has not viewed yet (a
   \`--project\` target, or your own project while they are looking elsewhere).
-  A queued node exists on the canvas but has **no process behind it**, so do not route work
+  A queued node exists on the canvas but its **agent launch has not been delivered**, so do not route work
   to it, do not \`send\` to it and do not report it as started. It launches itself when its wait
   ends and then reports through the ordinary status hooks, so there is nothing to poll.
-  \`queued: false\` means the session is running.
+  \`queued: false\` does not prove the agent is running. \`deliveredIds\` confirms command delivery only.
+  \`list\` names QUEUED, LAUNCH FAILED, DROPPED and AGENT STATUS UNCONFIRMED where observed.
   \`--prompt\` arrives on ONE LINE. Every run of whitespace in it — newlines included — is
   collapsed to a single space before the session starts, because the prompt is passed as an
   argument on the agent CLI's launch command line and that line is typed into the pane. Two
@@ -995,6 +1002,8 @@ Verbs:
   Agent sessions you open (\`open-claude\`/\`open-agent\`/\`spawn-team\`) and the stations you name in
   \`--after\` are already linked — nothing to \`link\`. Use \`link\` only for nodes you did not open,
   or to link two OTHER nodes together.
+  Both endpoints must be in your project. A missing endpoint reports: ${LINK_ENDPOINT_NOT_FOUND}.
+  This does not reveal whether the id exists in another project.
   On Server Edition the ownership rule is stricter: every endpoint must be a node you opened
   during this server run.
 - \`verify --node <id> [--lenses correctness,security,tests] [--focus "..."] [--agent <id>] [--synthesis off] [--label L]\` —

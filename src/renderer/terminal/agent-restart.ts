@@ -491,7 +491,17 @@ export type AgentRestartFn = (
   // cold-restore auto-resume keeps the same conversation. Uses `clearEnvEligibility` (permits busy,
   // since `terminateForeground` is PID-safe — no `/exit` typed into a dialog) and recycles the same
   // way a model switch does, because tmux env changes do not retroactively change an existing shell.
-  clearEnv?: boolean
+  clearEnv?: boolean,
+  // Only with `restartShell`: runs AFTER the CLI has exited and BEFORE the pane is recycled — the
+  // one moment the conversation's transcript is final and nothing is writing it. The account switch
+  // copies the transcript into the target account here and rebinds the node, so the recycle's
+  // respawn launches under the new CLAUDE_CONFIG_DIR and its cold-restore `--resume` finds the SAME
+  // conversation. It cannot veto the recycle: the CLI is already gone, and the recycle + auto-resume
+  // is how the conversation comes back either way (on the old account when the step did nothing).
+  // The node-data patch it returns is merged into the SAME update as the respawn bump — a separate
+  // Canvas `setNodes` in the same tick races React Flow's `updateNodeData` queue, which rebuilds the
+  // node from the store's copy and can silently drop the rebind.
+  beforeRecycle?: () => Promise<Record<string, unknown> | void>
 ) => Promise<RestartOutcome>
 
 const restartFns = new Map<string, AgentRestartFn>()

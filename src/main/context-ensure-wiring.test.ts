@@ -41,6 +41,10 @@ describe('main wires the context-meter rehydration', () => {
 })
 
 describe('the remote leg keeps the jail and never falls through', () => {
+  it('replays the live remote snapshot when a tracked session remounts', () => {
+    expect(ensureRemoteBody()).toContain('remoteContextTail.replay(sessionId)')
+  })
+
   it('resolves through `remoteTranscriptRefFor`, the one jailed locator', () => {
     const body = ensureRemoteBody()
     expect(body).toContain('await remoteTranscriptRefFor(sessionId, cwd, accountId, nodeId)')

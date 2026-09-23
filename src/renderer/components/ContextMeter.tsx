@@ -28,13 +28,14 @@ export function ContextMeter({ sessionId }: { sessionId: string | null }): JSX.E
   // (issue #78).
   const pillText = contextPillText(usage.usedTokens, usage.windowTokens, usage.usedPercent, percentMode)
   const color = contextFillColor(usage.usedPercent)
+  const estimated = usage.windowSource === 'estimate'
   const modelLabel = formatModelLabel(usage.model)
 
   return (
     <div className="ctx-meter nodrag" ref={ref}>
       {open && (
         <div className="ctx-popover">
-          <div className="ctx-popover__title">Context</div>
+          <div className="ctx-popover__title">Context{estimated ? ' (estimated window)' : ''}</div>
           <div className="ctx-bar">
             <div className="ctx-bar__fill" style={{ width: `${barFillPercent(usage.usedPercent, percentMode)}%`, background: color }} />
           </div>
@@ -51,7 +52,7 @@ export function ContextMeter({ sessionId }: { sessionId: string | null }): JSX.E
       )}
       <button
         className="ctx-pill"
-        title={`Context window — ${percentText(usage.usedPercent, percentMode)}`}
+        title={`${estimated ? 'Estimated context window' : 'Context window'} — ${percentText(usage.usedPercent, percentMode)}`}
         onClick={(e) => {
           e.stopPropagation()
           setOpen((v) => !v)
@@ -61,7 +62,7 @@ export function ContextMeter({ sessionId }: { sessionId: string | null }): JSX.E
         <span className="ctx-pill__bar">
           <span className="ctx-pill__fill" style={{ width: `${barFillPercent(usage.usedPercent, percentMode)}%`, background: color }} />
         </span>
-        <span className="ctx-pill__num">{pillText}</span>
+        <span className="ctx-pill__num">{estimated ? '~' : ''}{pillText}</span>
       </button>
     </div>
   )

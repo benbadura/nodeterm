@@ -412,9 +412,10 @@ describe('parseControlRequest', () => {
       // nodes cannot act on the answer.
       expect(body).toContain('queued')
       expect(body).toContain('queuedIds')
-      // The consequence is the whole point of the field: an armed node has no process, so an
+      // The consequence is the whole point of the field: an armed node has no delivered agent launch, so an
       // orchestrator must not route work to it. Without this sentence the flag reads as trivia.
-      expect(body.toLowerCase()).toContain('no process')
+      expect(body.toLowerCase()).toContain('launch has not been delivered')
+      expect(body).toContain('deliveredIds')
       // And the three ways a node ends up armed must all be named, or a caller learns the third
       // one by reporting a --project session as started when it has not begun.
       expect(body).toContain('--after')
@@ -970,5 +971,14 @@ describe('the --project clause tells the truth about travel (review #363 I-1 + M
       ...sets.storedNode
     ])
     for (const v of answered) expect(offScreenDisposition(v).kind, v).not.toBe('refuse')
+  })
+})
+
+describe('link project boundary guidance', () => {
+  it('explains the scoped refusal in both generated agent instructions', () => {
+    for (const body of [buildCanvasControlInstructions('/shim'), buildCanvasSkillBody('/shim')]) {
+      expect(body).toContain('node not found in this project; cross-project linking is not supported')
+      expect(body).toContain('This does not reveal whether the id exists in another project.')
+    }
   })
 })

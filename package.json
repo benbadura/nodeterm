@@ -1,6 +1,6 @@
 {
   "name": "node-terminal",
-  "version": "0.3.9",
+  "version": "0.3.11",
   "engines": {
     "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   },
@@ -126,6 +126,27 @@
     },
     "win": {
       "icon": "build/icon.ico",
+      "extraResources": [
+        {
+          "from": "out/session-host",
+          "to": "session-host",
+          "filter": [
+            "host.cjs"
+          ]
+        },
+        {
+          "from": "node_modules/node-pty",
+          "to": "session-host/node_modules/node-pty",
+          "filter": [
+            "package.json",
+            "lib/**/*.js",
+            "!lib/**/*.test.js",
+            "build/Release/*.node",
+            "build/Release/*.exe",
+            "build/Release/*.dll"
+          ]
+        }
+      ],
       "target": [
         {
           "target": "nsis",
@@ -142,10 +163,10 @@
       ]
     },
     "nsis": {
-      "include": "build/installer.nsh",
       "artifactName": "${productName}-Setup-${version}.${ext}",
       "oneClick": true,
-      "perMachine": false
+      "perMachine": false,
+      "include": "build/installer.nsh"
     },
     "publish": {
       "provider": "generic",

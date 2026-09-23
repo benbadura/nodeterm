@@ -1,3 +1,6 @@
+import { ptyRefusal } from '@shared/pty-refusal'
+
+import { patchImeModeSwitch } from '../../terminal/ime-mode-switch'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -193,6 +196,7 @@ export function ModalTerminal({ nodeId, spawn, searchOpen, onCloseSearch }: Moda
     fitRef.current = fit
     transportRef.current = transport
     term.open(hostRef.current!)
+    patchImeModeSwitch(term)
     // Renderer-parity with the canvas terminals (see char-size-quantize): the modal co-views
     // the same session, so its column math must match what the canvas draws.
     quantizeCharSize(term)
@@ -314,8 +318,9 @@ export function ModalTerminal({ nodeId, spawn, searchOpen, onCloseSearch }: Moda
       })
       // Refused core-side (the master died inside our round-trip, or `ssh` is missing).
       if (res.unavailable) {
-        term.write('\r\n\x1b[90m[not connected — nothing was started locally]\x1b[0m\r\n')
-        if (projectId) reportSshDrop(projectId, nodeId)
+        const refusal = ptyRefusal(res.unavailable)
+        term.write(`\r\n\x1b[90m[${refusal.message}]\x1b[0m\r\n`)
+        if (refusal.connectionLost && projectId) reportSshDrop(projectId, nodeId)
         return
       }
       // Another client permanently deleted this node's session — never resurrect it (no live session

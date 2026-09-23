@@ -20,7 +20,7 @@ import os from 'os'
 import path from 'path'
 import { platform } from './platform'
 import { IPC } from '../shared/ipc'
-import type { ContextLinkMap } from '../shared/types'
+import type { ContextLinkInfo, ContextLinkMap } from '../shared/types'
 import { type PtyManager } from './pty-manager'
 import { directExecutableInvocation, findInLoginPath } from './exec-path'
 import { TMUX_SOCKET } from './tmux-naming'
@@ -140,27 +140,31 @@ const LINK_LOCATORS = { claude: locateClaude, codex: locateCodex, gemini: locate
 
 // The link documents, by node id — the same objects written to disk, kept in memory because they
 // are what authorizes a read (a node may only ever name a link inside ITS OWN document).
-const linkDocs = new Map<string, LinkDoc>()
+let linkDocs = new Map<string, LinkDoc>()
+let linkRevision = 0
+// Only paths resolved for this exact identity may survive an intermediate publication.
+// Include the hook path so a replaced/invalidated hook cannot reuse an older resolution.
+let verifiedPaths = new Map<string, string>()
+function transcriptIdentity(n: ContextLinkInfo): string {
+  return JSON.stringify([n.id, n.agentId, n.sessionId, n.accountId, n.cwd,
+    !!deps.isRemoteNode?.(n.id), transcriptPathOf(n.id)])
+}
 
 // Write one enriched link file per node id present in the map. Removed links should not
 // linger, so we clear stale per-node files first. Async fs throughout — this runs on edge
 // changes and scales with node/link count, and sync I/O here sits on the main event loop.
-async function writeLinkFiles(map: ContextLinkMap): Promise<void> {
+async function writeLinkFiles(map: ContextLinkMap, revision: number): Promise<void> {
+  if (revision !== linkRevision) return
   const d = contextLinkDir()
   const bin = pty?.getTmuxBin() ?? null
-  try {
-    for (const f of await fs.promises.readdir(d)) {
-      if (f.endsWith('.json')) await fs.promises.rm(path.join(d, f), { force: true })
-    }
-  } catch {
-    /* dir may not exist yet */
-  }
   // Resolve each linked node's transcript once (hook-fed for claude, locator-by-sessionId
   // for codex/gemini), so buildLinkDoc stays pure and sync.
   const resolved = new Map<string, string>()
+  const verified = new Map<string, string>()
   for (const links of Object.values(map)) {
     for (const n of links) {
       if (n.note != null || resolved.has(n.id)) continue
+      const identity = transcriptIdentity(n)
       resolved.set(
         n.id,
         await resolveLinkTranscript(n, {
@@ -169,16 +173,31 @@ async function writeLinkFiles(map: ContextLinkMap): Promise<void> {
           isRemote: deps.isRemoteNode
         })
       )
+      if (identity === transcriptIdentity(n)) verified.set(identity, resolved.get(n.id)!)
+      else resolved.set(n.id, '')
     }
   }
-  linkDocs.clear()
+  if (revision !== linkRevision) return
+  const docs = new Map<string, LinkDoc>()
   for (const [nodeId, links] of Object.entries(map)) {
     const doc = buildLinkDoc(nodeId, links, {
       transcriptOf: (id) => resolved.get(id) ?? '',
       tmuxBin: bin,
       tmuxSocket: TMUX_SOCKET
     })
-    linkDocs.set(nodeId, doc)
+    docs.set(nodeId, doc)
+  }
+  // Publish all enriched documents together; never expose a partially rebuilt map.
+  verifiedPaths = verified
+  linkDocs = docs
+  try {
+    for (const f of await fs.promises.readdir(d)) {
+      if (f.endsWith('.json')) await fs.promises.rm(path.join(d, f), { force: true })
+    }
+  } catch {
+    /* dir may not exist yet */
+  }
+  for (const [nodeId, doc] of docs) {
     try {
       await fs.promises.writeFile(path.join(d, `${nodeId}.json`), JSON.stringify(doc, null, 2))
     } catch (e) {
@@ -288,7 +307,29 @@ let writeChain: Promise<void> = Promise.resolve()
  * (src/server/context-link.ts), which is why the map setter is a function and not only a handler.
  */
 export function setContextLinks(map: ContextLinkMap): Promise<void> {
-  writeChain = writeChain.then(() => writeLinkFiles(map && typeof map === 'object' ? map : {}))
+  const snapshot = structuredClone(map && typeof map === 'object' ? map : {})
+  const revision = ++linkRevision
+  // Authorization changes immediately, before transcript discovery or debug-file I/O. A slow
+  // locator must neither hide a new edge from list nor retain a removed read permission.
+  const retained = new Map<string, string>()
+  const paths = new Map<string, string>()
+  for (const links of Object.values(snapshot)) {
+    for (const n of links) {
+      if (n.note != null) continue
+      // Dependency lookup can fail; leave discovery to report the failure asynchronously.
+      try {
+        const identity = transcriptIdentity(n)
+        const prior = verifiedPaths.get(identity)
+        if (prior) { retained.set(identity, prior); paths.set(n.id, prior) }
+      } catch { /* no verified path */ }
+    }
+  }
+  verifiedPaths = retained
+  linkDocs = new Map(Object.entries(snapshot).map(([nodeId, links]) => [nodeId, buildLinkDoc(
+    nodeId, links, { transcriptOf: (id) => paths.get(id) ?? '', tmuxBin: pty?.getTmuxBin() ?? null, tmuxSocket: TMUX_SOCKET }
+  )]))
+  const write = () => writeLinkFiles(snapshot, revision)
+  writeChain = writeChain.then(write, write)
   return writeChain
 }
 
@@ -316,7 +357,9 @@ export function initContextLink(
 ): void {
   pty = ptyManager
   deps = platformDeps
+  linkRevision++
   linkDocs.clear()
+  verifiedPaths.clear()
   hookServer.setContextLinkHandler(handleContextLinkRequest)
   try {
     const d = contextLinkDir()
