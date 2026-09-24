@@ -9,14 +9,25 @@ New-Item -ItemType Directory -Path $root | Out-Null
 $oldRunAsNode = $env:ELECTRON_RUN_AS_NODE
 $oldPath = $env:PATH
 $guard = $null
+function Invoke-PackageSmoke([string]$executable, [string]$label) {
+  $scriptPath = Join-Path $PSScriptRoot 'package-smoke.cjs'
+  $stdout = Join-Path $root "$label.stdout.log"
+  $stderr = Join-Path $root "$label.stderr.log"
+  # PowerShell can return from a GUI-subsystem .exe before it exits, leaving $LASTEXITCODE
+  # from an earlier command. Wait for this exact Electron process and read its exit code.
+  $smoke = Start-Process -FilePath $executable -ArgumentList @('"' + $scriptPath + '"') -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+  $smoke.WaitForExit()
+  if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout }
+  if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr }
+  if ($smoke.ExitCode -ne 0) { throw "$label package smoke failed: $($smoke.ExitCode)" }
+}
 try {
   $install = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$installDir") -Wait -PassThru
   if ($install.ExitCode -ne 0) { throw "Installer failed: $($install.ExitCode)" }
   $env:ELECTRON_RUN_AS_NODE = '1'
   # Prove that installed runtime/helper paths do not depend on Node, Git Bash or curl on PATH.
   $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\WindowsPowerShell\v1.0"
-  & "$installDir/nodeterm.exe" "$PSScriptRoot/package-smoke.cjs"
-  if ($LASTEXITCODE -ne 0) { throw 'Installed package smoke failed' }
+  Invoke-PackageSmoke "$installDir/nodeterm.exe" 'installed'
   $holdScript = Join-Path $root 'hold.cjs'
   Set-Content -LiteralPath $holdScript -Value 'setInterval(() => {}, 1000)' -Encoding ascii
   $guard = Start-Process -FilePath "$installDir/nodeterm.exe" -ArgumentList @('"' + $holdScript + '"') -PassThru
@@ -29,13 +40,11 @@ try {
   $guard = $null
   $upgrade = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$installDir") -Wait -PassThru
   if ($upgrade.ExitCode -ne 0) { throw 'Reinstall after closing sessions failed' }
-  & "$installDir/nodeterm.exe" "$PSScriptRoot/package-smoke.cjs"
-  if ($LASTEXITCODE -ne 0) { throw 'Upgraded package smoke failed' }
+  Invoke-PackageSmoke "$installDir/nodeterm.exe" 'upgraded'
   $zip = @(Get-ChildItem 'dist/nodeterm-*-win.zip')
   if ($zip.Count -ne 1) { throw 'Expected exactly one Windows ZIP' }
   Expand-Archive -LiteralPath $zip[0].FullName -DestinationPath $zipDir
-  & "$zipDir/nodeterm.exe" "$PSScriptRoot/package-smoke.cjs"
-  if ($LASTEXITCODE -ne 0) { throw 'ZIP package smoke failed' }
+  Invoke-PackageSmoke "$zipDir/nodeterm.exe" 'zip'
 } finally {
   if ($guard -and !$guard.HasExited) { Stop-Process -Id $guard.Id; $guard.WaitForExit() }
   $env:ELECTRON_RUN_AS_NODE = $oldRunAsNode
