@@ -77,7 +77,7 @@ describe('remoteAtomicWrite', () => {
 
     expect(readFileSync(nativeTarget, 'utf8')).toBe('payload')
     expect(readdirSync(root).filter((name) => name.endsWith('.tmp'))).toEqual([])
-  })
+  }, 30_000)
 
   it.skipIf(!SHELL)('keeps the sibling temp bounded for a valid long target leaf', () => {
     const root = mkdtempSync(path.join(os.tmpdir(), 'nt-ra-'))

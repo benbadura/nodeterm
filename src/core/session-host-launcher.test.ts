@@ -16,9 +16,7 @@ const only = (...present: string[]) => (p: string) => present.includes(p)
 
 describe('resolveSessionHostScript', () => {
   it('finds the bundle inside the asar — the packaged path', () => {
-    // This is the one that matters: `build.files` carries `out/**` into the asar, so the bundle is
-    // already there, and a host resolved from inside the asar can reach `node-pty` (a host copied
-    // to <resourcesPath>/session-host cannot — see the module comment).
+    // macOS/Linux use this copy; Windows packages a copy with node-pty in extraResources.
     expect(
       resolveSessionHostScript({ resourcesPath: resources, appPath: asar, repoRoot: repo, exists: only(inAsar) })
     ).toBe(inAsar)
@@ -31,7 +29,7 @@ describe('resolveSessionHostScript', () => {
   })
 
   it('still honours an extraResources copy when one exists, and prefers it', () => {
-    // Kept ahead of the others so an installation that DOES ship the copy is unaffected.
+    // Windows ships this copy with its node-pty dependency and must choose it over the asar copy.
     expect(
       resolveSessionHostScript({ resourcesPath: resources, appPath: asar, exists: only(inResources, inAsar) })
     ).toBe(inResources)

@@ -80,6 +80,7 @@ jobs:
       - name: Build unsigned installers
         env:
           TARGET: ${{ matrix.target }}
+          NODE_OPTIONS: ${{ matrix.target == 'mac' && '--max-old-space-size=4096' || '' }}
         run: npm run "dist:$TARGET"
 
       - name: Exercise packaged macOS runtime
