@@ -13,6 +13,13 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nodeterm package żółć '))
 let child, client
 let ownedSession = false
+let hostStderr = ''
+
+function hostFailure() {
+  let log = ''
+  try { log = fs.readFileSync(path.join(root, 'session-host.log'), 'utf8') } catch {}
+  return new Error(`Packaged host exited: ${child.exitCode}\nHost stderr:\n${hostStderr || '(empty)'}\nHost log:\n${log || '(empty)'}`)
+}
 
 async function connect(state, token) {
   const socket = net.createConnection(state.endpoint)
@@ -84,9 +91,10 @@ async function main() {
     assert(native.stdout.includes('open-terminal'), 'PowerShell could not reach the packaged helper')
   }
   child = spawn(process.execPath, [path.join(asar, 'out/session-host/host.cjs'), root], {
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'ignore', windowsHide: true, detached: true
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true, detached: true
   })
   child.on('error', error => console.error(error.message))
+  child.stderr.on('data', data => { hostStderr = (hostStderr + data.toString()).slice(-16 * 1024) })
   const stateFile = path.join(root, 'session-host.json')
   let state
   for (let i = 0; i < 150; i++) {
@@ -94,7 +102,7 @@ async function main() {
       const candidate = JSON.parse(fs.readFileSync(stateFile, 'utf8'))
       if (candidate.endpoint && candidate.tokenPath && fs.existsSync(candidate.tokenPath)) { state = candidate; break }
     } catch {}
-    if (child.exitCode !== null) throw new Error(`Packaged host exited: ${child.exitCode}`)
+    if (child.exitCode !== null) throw hostFailure()
     await pause(100)
   }
   assert(state, 'Packaged session host never became ready')

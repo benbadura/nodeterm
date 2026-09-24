@@ -61,6 +61,8 @@ jobs:
       - name: Build bundled tmux
         run: node scripts/build-tmux.mjs
       - name: Build and package macOS runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
         run: |
           npm run make-icon
           npm run build
