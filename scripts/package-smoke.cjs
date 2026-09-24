@@ -71,6 +71,16 @@ async function main() {
   const png = await packagedRequire('sharp')({ create: { width: 2, height: 2, channels: 4, background: '#123456' } }).png().toBuffer()
   assert(png.length > 0)
   const helper = path.join(asar, 'out/helper/native-helper.cjs')
+  // Windows ships the host and its native node-pty dependency together outside app.asar.
+  // Match resolveSessionHostScript's production search order: testing the asar copy here
+  // missed a missing node-pty import even though the installed app chooses this copy.
+  const host = process.platform === 'win32'
+    ? path.join(resources, 'session-host', 'host.cjs')
+    : path.join(asar, 'out/session-host/host.cjs')
+  assert(fs.existsSync(host), `Missing packaged session host: ${host}`)
+  if (process.platform === 'win32') {
+    assert.equal(typeof createRequire(host)('node-pty').spawn, 'function')
+  }
   const helperEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1', NODETERM_NODE_ID: '', CODEX_THREAD_ID: '', NODETERM_HELPER_ARGS: '' }
   const help = spawnSync(process.execPath, [helper, 'control', 'help'], { env: helperEnv, timeout: 5000, encoding: 'utf8' })
   assert.equal(help.status, 0, help.stderr)
@@ -90,7 +100,7 @@ async function main() {
     assert.equal(native.status, 0, native.stderr)
     assert(native.stdout.includes('open-terminal'), 'PowerShell could not reach the packaged helper')
   }
-  child = spawn(process.execPath, [path.join(asar, 'out/session-host/host.cjs'), root], {
+  child = spawn(process.execPath, [host, root], {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true, detached: true
   })
   child.on('error', error => console.error(error.message))

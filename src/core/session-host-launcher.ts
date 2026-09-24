@@ -11,23 +11,11 @@ import { spawn } from 'child_process'
 /**
  * Where `out/session-host/host.cjs` lives, in dev vs a packaged build.
  *
- * - Packaged: inside the asar, at `<appPath>/out/session-host/host.cjs`. `build.files` is
- *   `["out/**", "package.json"]`, so the bundle is already carried there by the ordinary packaging
- *   rules — nothing has to copy it anywhere.
- *
- *   This is deliberately NOT `<resourcesPath>/session-host` via `extraResources`, which is what the
- *   original comment here described (an `extraResources` entry that was never actually added). A
- *   host placed there cannot RUN: Electron patches `Module._nodeModulePaths` so a script under
- *   `resourcesPath` may only resolve from paths under `resourcesPath`, and the search list for
- *   `<resourcesPath>/session-host` is just
- *
- *       <resourcesPath>/session-host/node_modules
- *       <resourcesPath>/node_modules
- *
- *   neither of which holds `node-pty` — which the bundle needs, since `host:build` marks it
- *   `--external`. From inside the asar the search list instead reaches
- *   `<resourcesPath>/app.asar/node_modules`, where electron-builder's unpacked-native redirect
- *   makes `node-pty` resolve. Measured on a packaged Windows build; see the tests.
+ * - Packaged Windows: `<resourcesPath>/session-host/host.cjs` has a sibling
+ *   `node_modules/node-pty` copied by `win.extraResources`. This is the first candidate.
+ *   An asar copy exists too, but a directly executed script there cannot resolve its
+ *   external `node-pty` import on Windows.
+ * - Packaged macOS/Linux: `<appPath>/out/session-host/host.cjs` inside the asar.
  *
  * - Dev (`electron-vite dev`): `app.getAppPath()` IS the repo root, so the same candidate answers
  *   both. `repoRoot` (`process.cwd()`) stays as a fallback for shells that supply no app path.

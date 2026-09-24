@@ -36,9 +36,8 @@ function getClient(): SessionHostClient {
     client = new SessionHostClient({
       userDataDir: platform().userDataDir,
       resourcesPath: platform().resourcesPath,
-      // The one that actually answers in a packaged build: `app.getAppPath()` is the asar, where
-      // `build.files` already carries `out/session-host/host.cjs`. In dev it is the repo root, so
-      // the same candidate covers both.
+      // Packaged macOS/Linux use the asar bundle; Windows finds its extraResources copy first.
+      // In dev, app.getAppPath() is the repo root.
       appPath: platform().appPath,
       // Dev-mode fallback, mirroring `findTmux`'s own `process.cwd()` use: under `electron-vite
       // dev` the cwd is the repo root, which is where `npm run host:build` writes its bundle.
