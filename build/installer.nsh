@@ -2,7 +2,7 @@
 # including the detached session host. A renamed hard link still holds the installed image open.
 !macro customCheckAppRunning
   InitPluginsDir
-  File /oname=$PLUGINSDIR\nodeterm-update-preflight.ps1 "${PROJECT_DIR}/scripts/windows-update-preflight.ps1"
+  File "/oname=$PLUGINSDIR\nodeterm-update-preflight.ps1" "${PROJECT_DIR}\scripts\windows-update-preflight.ps1"
   nodeterm_preflight_retry:
     nsExec::Exec /TIMEOUT=15000 '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\nodeterm-update-preflight.ps1" -InstallDirectory "$INSTDIR"'
     Pop $R0

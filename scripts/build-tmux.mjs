@@ -73,8 +73,9 @@ const licenseDir = path.join(repoRoot, 'resources', 'licenses')
 const markerFile = path.join(outDir, '.tmux-build-version')
 /** Bump when the build RECIPE changes in a way the pins above do not capture, so a binary built by
  *  the old recipe on the (self-hosted, persistent) release runner is rebuilt instead of reused.
- *  r2 = issue #896 (pipe2 weak import). */
-const RECIPE_REV = 'r2'
+ *  r2 = issue #896 (pipe2 weak import); r3 = force tmux's compat functions even when Rosetta
+ *  lets the release runner execute the Intel configure probes. */
+const RECIPE_REV = 'r3'
 const MARKER = `tmux-${TMUX_VERSION} libevent-${LIBEVENT_VERSION} utf8proc-${UTF8PROC_VERSION} universal(${ARCHS.map((a) => a.arch).join('+')}) ${RECIPE_REV}\n`
 
 const force = process.argv.includes('--force')
@@ -122,15 +123,35 @@ function download(url, dest, expectedSha256) {
   log(`verified sha256 ${actual.slice(0, 16)}… ok`)
 }
 
+/** tmux uses AC_RUN_IFELSE for these functions, so ac_cv_func_* cannot override the result.
+ *  Rosetta can run the x86_64 probe on an arm64 runner, making configure select SDK symbols
+ *  that are absent on the oldest supported macOS. Use tmux's bundled implementations instead.
+ *  The pinned tarball's generated configure script must contain each expected probe. */
+function forceTmuxCompatProbes(tmuxDir) {
+  const configure = path.join(tmuxDir, 'configure')
+  let source = fs.readFileSync(configure, 'utf8')
+  for (const name of ['strtonum', 'reallocarray', 'recallocarray']) {
+    const marker = `$as_echo_n "checking for working ${name}... " >&6; }`
+    const start = source.indexOf(marker)
+    if (start < 0) throw new Error(`tmux configure has no ${name} probe`)
+    const probe = 'if test "$cross_compiling" = yes; then :'
+    const at = source.indexOf(probe, start)
+    if (at !== start + marker.length + 1) {
+      throw new Error(`tmux configure ${name} probe changed; review the pinned tarball`)
+    }
+    source = source.slice(0, at) + 'if true; then :' + source.slice(at + probe.length)
+  }
+  fs.writeFileSync(configure, source)
+}
+
 /**
  * Build libevent (static only) and then tmux against it, for ONE arch. Returns the path of the
  * single-arch tmux binary.
  *
- * The cross slice (whichever arch is not this machine's) is configured with `--host`, which puts
- * autoconf in cross-compile mode so it never tries to RUN a test binary — the release runner is
- * an Apple Silicon Mac that may not have Rosetta installed. tmux's three AC_RUN_IFELSE probes
- * (strtonum / reallocarray / recallocarray) all fall back to tmux's own compat implementations
- * when cross-compiling, which is the correct, portable answer anyway.
+ * The cross slice (whichever arch is not this machine's) is configured with `--host`, so a
+ * runner without Rosetta will not try to execute it. A runner with Rosetta can run Intel probes
+ * despite --host; forceTmuxCompatProbes selects tmux's portable implementations of strtonum,
+ * reallocarray and recallocarray for both slices.
  */
 function buildArch({ arch, triple, minOs }, work, tarballs) {
   // A FRESH extraction per arch, never a copy of one tree: `tar` restores the archive's mtimes,
@@ -145,6 +166,7 @@ function buildArch({ arch, triple, minOs }, work, tarballs) {
   const evDir = path.join(stage, `libevent-${LIBEVENT_VERSION}`)
   const u8Dir = path.join(stage, `utf8proc-${UTF8PROC_VERSION}`)
   const tmuxDir = path.join(stage, `tmux-${TMUX_VERSION}`)
+  forceTmuxCompatProbes(tmuxDir)
 
   const prefix = path.join(work, `prefix-${arch}`)
   const flags = `-arch ${arch} -mmacosx-version-min=${minOs}`
@@ -323,8 +345,8 @@ function assertNoUnguardedWeakImports(file) {
       throw new Error(
         `the ${arch} slice weak-imports ${weak.join(', ')} — symbols from an SDK newer than its ` +
           `deployment target (${minOs}). On an older macOS they resolve to NULL and tmux crashes ` +
-          'on first use (issue #896). Pre-answer the configure probe that found them ' +
-          '(ac_cv_func_<name>=no), or add the symbol to GUARDED_WEAK_IMPORTS only after reading ' +
+          'on first use (issue #896). Disable the configure probe that found them, or add the ' +
+          'symbol to GUARDED_WEAK_IMPORTS only after reading ' +
           'every call site and confirming it checks for NULL.'
       )
     }

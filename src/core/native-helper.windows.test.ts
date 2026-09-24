@@ -14,20 +14,30 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true })
 })
 const quote = (s: string) => `'${s.replaceAll("'", "''")}'`
-function run(source: string, input: string, env: NodeJS.ProcessEnv = {}) {
-  return new Promise<{ code: number | null; output: string }>((resolve, reject) => {
+function runEncoded(encodedCommand: string, input: string, env: NodeJS.ProcessEnv = {}) {
+  return new Promise<{ code: number | null; output: string; stderr: string }>((resolve, reject) => {
     const child = spawn(path.join(process.env.SystemRoot!, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(source, 'utf16le').toString('base64')],
+      ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedCommand],
       { env: { ...process.env, NODETERM_NODE_ID: '', NODETERM_HOOK_ENDPOINT: '', ...env } })
     let output = ''
+    let stderr = ''
     const timer = setTimeout(() => { child.kill(); reject(new Error('Native helper timed out')) }, 10000)
     child.stdout.on('data', b => { output += b.toString() })
-    child.stderr.on('data', b => { output += b.toString() })
+    child.stderr.on('data', b => { stderr += b.toString() })
     child.once('error', e => { clearTimeout(timer); reject(e) })
-    child.once('exit', code => { clearTimeout(timer); resolve({ code, output }) })
+    child.once('exit', code => { clearTimeout(timer); resolve({ code, output, stderr }) })
     child.stdin.on('error', () => {})
     child.stdin.end(input)
   })
+}
+function run(source: string, input: string, env: NodeJS.ProcessEnv = {}) {
+  return runEncoded(Buffer.from(source, 'utf16le').toString('base64'), input, env)
+}
+function runHook(file: string, input: string, env: NodeJS.ProcessEnv = {}) {
+  const command = nativeHookCommand(file)
+  const encoded = / -EncodedCommand ([A-Za-z0-9+/=]+)$/.exec(command)?.[1]
+  if (!encoded) throw new Error(`Invalid native hook command: ${command}`)
+  return runEncoded(encoded, input, env)
 }
 function wrapper(args: string[], executable = process.execPath) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nt helper żółć ' & "))
@@ -42,7 +52,7 @@ describe.skipIf(process.platform !== 'win32')('native PowerShell helper process'
   it('drains large hook stdin with no session and after runtime removal', async () => {
     for (const exe of [process.execPath, 'C:\\missing-nodeterm.exe']) {
       const { file } = wrapper(['hook', 'claude'], exe)
-      expect((await run(nativeHookCommand(file), 'x'.repeat(256 * 1024))).code).toBe(0)
+      expect((await runHook(file, 'x'.repeat(256 * 1024))).code).toBe(0)
     }
   }, 25000)
   it('preserves Unicode, quotes, empty strings and metacharacters through Windows PowerShell 5.1', async () => {
@@ -59,7 +69,7 @@ describe.skipIf(process.platform !== 'win32')('native PowerShell helper process'
     const result = await run(`& ${quote(file)} sticky --node node-1 ${quote('--text=' + value)} '--label='`, '', {
       NODETERM_NODE_ID: 'node-1', NODETERM_CANVAS_CONTROL: '1', NODETERM_HOOK_ENDPOINT: endpoint
     })
-    expect(result.code, result.output).toBe(0)
+    expect(result.code, result.output + result.stderr).toBe(0)
     expect(received).toHaveLength(1)
     expect(received[0].get('arg.text')).toBe(value)
     expect(received[0].get('arg.label')).toBe('')
@@ -80,11 +90,11 @@ describe.skipIf(process.platform !== 'win32')('native PowerShell helper process'
     servers.push(server); server.listen(0, '127.0.0.1'); await once(server, 'listening')
     const endpoint = path.join(root, 'endpoint.env')
     fs.writeFileSync(endpoint, `NODETERM_HOOK_PORT=${(server.address() as { port: number }).port}\n`)
-    const result = await run(nativeHookCommand(file), payload, {
+    const result = await runHook(file, payload, {
       USERPROFILE: root, HOME: root, NODETERM_NODE_ID: 'node.1', NODETERM_HOOK_ENDPOINT: endpoint,
       NODETERM_PERM_WAIT_SECS: '5'
     })
-    expect(result.code, result.output).toBe(0)
+    expect(result.code, result.output + result.stderr).toBe(0)
     expect(JSON.parse(result.output).hookSpecificOutput.decision.behavior).toBe('allow')
     expect(requests[0].get('payload')).toBe(payload)
     expect(requests.at(-1)?.get('nodeterm_answered')).toBe('allow')

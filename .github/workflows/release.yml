@@ -94,7 +94,7 @@ jobs:
         run: |
           chmod +x dist/*.AppImage
           dist/*.AppImage --appimage-extract > /dev/null
-          ELECTRON_RUN_AS_NODE=1 squashfs-root/nodeterm scripts/package-smoke.cjs
+          ELECTRON_RUN_AS_NODE=1 squashfs-root/node-terminal scripts/package-smoke.cjs
 
       - name: Exercise Windows installer, upgrade, ZIP and uninstall
         if: matrix.target == 'win'

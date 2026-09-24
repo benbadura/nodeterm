@@ -46,7 +46,7 @@ jobs:
         run: |
           npm run make-icon
           npx electron-builder --linux --dir --publish never -c.extraMetadata.nodeTermUpdates=disabled
-          ELECTRON_RUN_AS_NODE=1 dist/linux-unpacked/nodeterm scripts/package-smoke.cjs
+          ELECTRON_RUN_AS_NODE=1 dist/linux-unpacked/node-terminal scripts/package-smoke.cjs
 
   quality-macos:
     runs-on: macos-15
