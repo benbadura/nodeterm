@@ -16,6 +16,9 @@ import {
   takeSessionOffline,
   activeSessionPresence,
   presenceForProject,
+  projectIdsBoundToApi,
+  unbindProject,
+  projectIdsBoundToSession,
 } from './session'
 import { defaultPresence } from '../state/presence'
 import type { NodeTerminalApi } from '@shared/types'
@@ -323,5 +326,45 @@ describe('setMeAll (obligation 2 — a rename re-helloes EVERY live session)', (
     // …and each session's store reflects the new identity.
     expect(getSessionStores(s1.id).presence.store.getState().me).toEqual(me)
     expect(getSessionStores(s2.id).presence.store.getState().me).toEqual(me)
+  })
+})
+
+describe('projectIdsBoundToApi (a relay connection -> the tabs it serves)', () => {
+  it('names exactly the projects bound to a live session holding THIS api', () => {
+    const local = createSession('local', fakeApi, 'This Mac')
+    setActiveSession(local.id)
+    const apiA = { marker: 'a' } as unknown as NodeTerminalApi
+    const apiB = { marker: 'b' } as unknown as NodeTerminalApi
+    const a = createSession('relay', apiA, 'A')
+    const b = createSession('relay', apiB, 'B')
+    bindProjectToSession('pa', a.id)
+    bindProjectToSession('pb', b.id)
+    expect(projectIdsBoundToApi(apiA)).toEqual(['pa'])
+    expect(projectIdsBoundToApi(apiB)).toEqual(['pb'])
+    // The local api binds nothing: an unbound project merely FALLS BACK to local.
+    expect(projectIdsBoundToApi(fakeApi)).toEqual([])
+    disposeSession(a.id)
+    expect(projectIdsBoundToApi(apiA)).toEqual([])
+  })
+})
+
+describe('unbindProject / projectIdsBoundToSession (one session serving several tabs)', () => {
+  it('unbinds ONE project and leaves the session serving its other tabs', () => {
+    const local = createSession('local', fakeApi, 'This Mac')
+    setActiveSession(local.id)
+    const relay = createSession('relay', { marker: 'relay' } as unknown as NodeTerminalApi, 'Team')
+    bindProjectToSession('pa', relay.id)
+    bindProjectToSession('pb', relay.id)
+    expect(projectIdsBoundToSession(relay.id)).toEqual(['pa', 'pb'])
+
+    unbindProject('pa')
+    expect(projectIdsBoundToSession(relay.id)).toEqual(['pb'])
+    expect(sessionForProject('pa')).toBe(local) // unbound → falls back to local
+    expect(sessionForProject('pb')).toBe(relay)
+    expect(sessionCount()).toBe(2) // the session itself lives on
+
+    unbindProject('never-bound') // no-op
+    expect(projectIdsBoundToSession(relay.id)).toEqual(['pb'])
+    expect(projectIdsBoundToSession('relay-999')).toEqual([])
   })
 })

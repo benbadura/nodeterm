@@ -32,7 +32,9 @@ describe('GitHubIssuesClient', () => {
       token: 'secret',
       fetch: async () => response({ id: 123, login: 'octocat' })
     })
-    expect(await client.getAuthenticatedUser()).toEqual({ userId: '123', login: 'octocat' })
+    expect(await client.checkAuthenticatedUser()).toEqual({
+      notModified: false, identity: { userId: '123', login: 'octocat' }
+    })
   })
 
   it('uses the fixed API host and required version headers', async () => {
@@ -190,5 +192,192 @@ describe('GitHubIssuesClient', () => {
     expect(request).not.toBeNull()
     expect(JSON.parse(String((request as unknown as { init: RequestInit }).init.body)))
       .toEqual({ state: 'closed', labels: ['bug', 'status:done'] })
+  })
+  describe('issuesHeartbeat', () => {
+    it('asks for the single most recently updated item, conditionally on the stored ETag', async () => {
+      const calls: Array<{ url: string; headers: Headers }> = []
+      const client = new GitHubIssuesClient({
+        token: 'secret',
+        fetch: async (url, init) => {
+          calls.push({ url: String(url), headers: new Headers(init?.headers) })
+          return new Response(null, { status: 304, headers: { etag: '"strong"' } })
+        }
+      })
+      expect(await client.issuesHeartbeat('nodeterm/nodeterm', 'W/"stored"'))
+        .toEqual({ notModified: true, etag: 'W/"stored"' })
+      // state=all + sort=updated covers issues AND pull requests: the same endpoint and the same
+      // `updated_at` the incremental `since` scan filters on, so the heartbeat can never miss a
+      // change that scan would have picked up.
+      expect(calls[0].url).toBe(
+        'https://api.github.com/repos/nodeterm/nodeterm/issues?state=all&sort=updated&direction=desc&per_page=1'
+      )
+      expect(calls[0].headers.get('if-none-match')).toBe('W/"stored"')
+    })
+
+    it('returns the fresh ETag of a changed repository without decoding the item', async () => {
+      const client = new GitHubIssuesClient({
+        token: 'secret',
+        fetch: async () => response([{ anything: 'the body is not the point' }], {
+          headers: { etag: 'W/"fresh"' }
+        })
+      })
+      expect(await client.issuesHeartbeat('nodeterm/nodeterm')).toEqual({
+        notModified: false, etag: 'W/"fresh"'
+      })
+    })
+
+    it('sends no condition when there is no stored ETag', async () => {
+      let headers: Headers | undefined
+      const client = new GitHubIssuesClient({
+        token: 'secret',
+        fetch: async (_url, init) => { headers = new Headers(init?.headers); return response([]) }
+      })
+      await client.issuesHeartbeat('nodeterm/nodeterm')
+      expect(headers?.has('if-none-match')).toBe(false)
+    })
+  })
+  describe('rate-limit observation', () => {
+    const rateHeaders = {
+      'x-ratelimit-limit': '5000',
+      'x-ratelimit-remaining': '4968',
+      'x-ratelimit-reset': '1790625711',
+      'x-ratelimit-resource': 'core'
+    }
+    const expected = { resource: 'core', limit: 5000, remaining: 4968, resetAt: 1_790_625_711_000 }
+
+    it.each([
+      ['a 200', () => response([], { headers: rateHeaders }), 4968],
+      ['a 304', () => new Response(null, { status: 304, headers: rateHeaders }), 4968],
+      ['a 500', () => new Response('{}', { status: 500, headers: rateHeaders }), 4968],
+      ['a rate-limited 403', () => new Response('{}', {
+        status: 403, headers: { ...rateHeaders, 'x-ratelimit-remaining': '0' }
+      }), 0]
+    ] as const)('reports the budget carried by %s', async (_name, make, remaining) => {
+      const samples: unknown[] = []
+      const client = new GitHubIssuesClient({
+        token: 'secret',
+        fetch: async () => make(),
+        onRateLimit: (sample) => samples.push(sample)
+      })
+      await client.issuesHeartbeat('nodeterm/nodeterm', 'W/"x"').catch(() => undefined)
+      expect(samples).toEqual([{ ...expected, remaining }])
+    })
+
+    it('ignores absent or malformed rate headers instead of recording a zero budget', async () => {
+      const samples: unknown[] = []
+      for (const headers of [
+        {},
+        { ...rateHeaders, 'x-ratelimit-remaining': 'lots' },
+        { ...rateHeaders, 'x-ratelimit-remaining': '9000' },
+        { ...rateHeaders, 'x-ratelimit-resource': 'core; evil' }
+      ]) {
+        const client = new GitHubIssuesClient({
+          token: 'secret',
+          fetch: async () => response([], { headers }),
+          onRateLimit: (sample) => samples.push(sample)
+        })
+        await client.issuesHeartbeat('nodeterm/nodeterm')
+      }
+      expect(samples).toEqual([])
+    })
+
+    it('never lets a throwing observer break the request', async () => {
+      const client = new GitHubIssuesClient({
+        token: 'secret',
+        fetch: async () => response([], { headers: { ...rateHeaders, etag: 'W/"a"' } }),
+        onRateLimit: () => { throw new Error('observer bug') }
+      })
+      await expect(client.issuesHeartbeat('nodeterm/nodeterm')).resolves.toEqual({
+        notModified: false, etag: 'W/"a"'
+      })
+    })
+  })
+  describe('checkAuthenticatedUser', () => {
+    it('answers 304 for an unchanged identity when given its validator', async () => {
+      let sent: string | null = null
+      const client = new GitHubIssuesClient({
+        token: 'secret',
+        fetch: async (_url, init) => {
+          sent = new Headers(init?.headers).get('if-none-match')
+          return new Response(null, { status: 304 })
+        }
+      })
+      expect(await client.checkAuthenticatedUser('W/"me"')).toEqual({ notModified: true })
+      expect(sent).toBe('W/"me"')
+    })
+
+    it('returns the identity with its validator on a 200', async () => {
+      const client = new GitHubIssuesClient({
+        token: 'secret',
+        fetch: async () => response({ id: 7, login: 'octocat' }, { headers: { etag: 'W/"me"' } })
+      })
+      expect(await client.checkAuthenticatedUser()).toEqual({
+        notModified: false, identity: { userId: '7', login: 'octocat' }, etag: 'W/"me"'
+      })
+    })
+
+    it('still surfaces a 401 as a refusal', async () => {
+      const client = new GitHubIssuesClient({
+        token: 'secret',
+        fetch: async () => new Response('{}', { status: 401 })
+      })
+      await expect(client.checkAuthenticatedUser('W/"me"')).rejects.toMatchObject({
+        code: 'request-failed', status: 401
+      })
+    })
+  })
+  describe('close reason', () => {
+    const capture = () => {
+      const bodies: unknown[] = []
+      const client = new GitHubIssuesClient({
+        token: 'secret',
+        fetch: async (_url, init) => {
+          bodies.push(JSON.parse(String(init?.body)))
+          return response(issue(42, { state: 'closed', state_reason: 'not_planned' }))
+        }
+      })
+      return { client, bodies }
+    }
+
+    it('sends state_reason alongside the state change', async () => {
+      const { client, bodies } = capture()
+      await client.updateIssue('nodeterm/nodeterm', 42, { state: 'closed', stateReason: 'not_planned', labels: [] })
+      expect(bodies).toEqual([{ state: 'closed', state_reason: 'not_planned', labels: [] }])
+    })
+
+    it.each([
+      ['a reason without a state change', { stateReason: 'completed', labels: [] }],
+      ['a reason GitHub does not know', { state: 'closed', stateReason: 'wontfix', labels: [] }],
+      ['a close reason on a reopen', { state: 'open', stateReason: 'not_planned', labels: [] }],
+      ['reopened on a close', { state: 'closed', stateReason: 'reopened', labels: [] }]
+    ])('refuses %s without sending anything', async (_name, input) => {
+      const { client, bodies } = capture()
+      await expect(client.updateIssue('nodeterm/nodeterm', 42, input as never))
+        .rejects.toMatchObject({ code: 'invalid-request' })
+      expect(bodies).toEqual([])
+    })
+  })
+  describe('state_reason values GitHub adds later', () => {
+    const list = (reason: unknown) => new GitHubIssuesClient({
+      token: 'secret',
+      fetch: async () => response([issue(1), issue(2, { state: 'closed', state_reason: reason })])
+    }).listIssues('nodeterm/nodeterm', { state: 'all', page: 1, perPage: 50 })
+
+    it('decodes a duplicate instead of failing the whole page', async () => {
+      // Measured 2026-09-29: one of cli/cli's last 100 closed issues carries it. Rejecting it made
+      // the scan fail as malformed, and that repository never synced at all.
+      const page = await list('duplicate')
+      expect(page.items.map((item) => item.stateReason)).toEqual([null, 'duplicate'])
+    })
+
+    it('reads a reason it does not know yet as no reason, keeping the rest of the page', async () => {
+      const page = await list('some_future_reason')
+      expect(page.items.map((item) => item.number)).toEqual([1, 2])
+      expect(page.items[1].stateReason).toBeNull()
+    })
+
+    it('still rejects a state_reason that is not a string at all', async () => {
+      await expect(list(7)).rejects.toMatchObject({ code: 'malformed-response' })
+    })
   })
 })

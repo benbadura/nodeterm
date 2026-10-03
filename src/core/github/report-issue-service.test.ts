@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { GitHubClientError } from './client'
+import { GitHubReachabilityError } from './failure'
 import {
   reportIssue,
   resetReportRunCounters,
@@ -100,6 +101,19 @@ describe('the repository comes from the project, or there is none', () => {
     expect(result.ok).toBe(false)
     expect((result as { message: string }).message).toContain('no GitHub repository configured')
     expect((result as { message: string }).message).toContain('do not file it anywhere else')
+  })
+
+  it('never tells an agent to have the user sign in when GitHub merely could not check the sign-in', async () => {
+    for (const error of [new GitHubReachabilityError('rate-limited', 9), new GitHubReachabilityError('github-unreachable')]) {
+      const result = await reportIssue(deps({ contextForProject: async () => { throw error } }), {
+        projectId: 'p', input: INPUT
+      })
+      expect((result as { message: string }).message).not.toContain('sign in')
+    }
+    const limited = await reportIssue(deps({
+      contextForProject: async () => { throw new GitHubReachabilityError('rate-limited', 9) }
+    }), { projectId: 'p', input: INPUT })
+    expect((limited as { message: string }).message).toContain('report-rate-limited')
   })
 
   it('names the machine-local approval when that is what is missing', async () => {

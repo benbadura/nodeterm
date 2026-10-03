@@ -8,7 +8,9 @@ import { sshFs } from '../terminal/ssh-fs'
 import { useSession } from '../session/session'
 import { promptDialog } from './promptDialog'
 import { ancestorDirs, createTargetDir, newEntryPath, parentDir } from '../lib/explorerCreate'
-import { canRevealLocally, downloadRoute, triggerBrowserDownload } from '../lib/download'
+import { canRevealLocally, downloadRoute, isDownloadablePath } from '../lib/download'
+import { ROW_DOWNLOAD_TITLE, useDownloads, type RowDownloadState } from '../lib/useDownloads'
+import { DownloadStrip } from './DownloadStrip'
 import { explorerOverlayClickCloses } from '../lib/explorerPin'
 import { isBrowserRuntime } from '../bridge/runtime'
 import { IconClose, IconPin, IconReload } from './icons'
@@ -33,31 +35,6 @@ type ContextFn = (x: number, y: number, path: string, isDir: boolean, ignored?: 
 type OpenFn = (path: string) => void
 type SelectFn = (path: string) => void
 type DownloadFn = (path: string, isDir: boolean) => void
-
-/** What a tree row's download button is showing right now. */
-type RowDownloadState = 'running' | 'done' | 'error'
-
-/** How long a finished row keeps its ✓ / ! before falling back to a plain ⤓. Long enough to be
- *  read after a click, short enough that a tree of them doesn't stay decorated. */
-const ROW_FLASH_MS = 2200
-
-/** Row-button tooltip per state. The failure text points at the strip, which carries the reason. */
-const DL_TITLE: Record<RowDownloadState, string> = {
-  running: 'Downloading…',
-  done: 'Downloaded',
-  error: 'Download failed — see the list below'
-}
-
-/** One entry in the drawer's download strip. `localPath` is set once a desktop (scp) download has
- *  landed, which is what makes it revealable. */
-interface DownloadItem {
-  id: number
-  name: string
-  dir: boolean
-  status: 'running' | 'done' | 'error'
-  detail?: string
-  localPath?: string
-}
 
 // Surface a transient error message (matches the Canvas listener at Canvas.tsx:380).
 const toast = (message: string): void => {
@@ -180,7 +157,7 @@ function TreeEntry({
         {onDownload && (
           <button
             className={`ex-dl${dl ? ` ${dl}` : ''}`}
-            title={dl ? DL_TITLE[dl] : entry.dir ? `Download ${entry.name} folder` : `Download ${entry.name}`}
+            title={dl ? ROW_DOWNLOAD_TITLE[dl] : entry.dir ? `Download ${entry.name} folder` : `Download ${entry.name}`}
             aria-label="Download"
             aria-busy={dl === 'running'}
             // A second click while the first transfer is still running would start a duplicate
@@ -272,91 +249,15 @@ export function ExplorerPanel({
     [ssh, session.source]
   )
   const route = downloadRoute(dlCtx)
-  const [downloads, setDownloads] = useState<DownloadItem[]>([])
-  const dlSeq = useRef(0)
-  // Per-ROW download state, keyed by path. The strip at the bottom of the drawer reports the same
-  // transfers, but the user's eye is on the button they just pressed — and on the HTTP route the
-  // whole thing can be over before a glance travels down there. So the row answers for itself.
-  const [rowDl, setRowDl] = useState<Record<string, RowDownloadState>>({})
-  const setRowState = useCallback((path: string, state: RowDownloadState): void => {
-    setRowDl((m) => ({ ...m, [path]: state }))
-  }, [])
-
-  const patchDownload = useCallback((id: number, patch: Partial<DownloadItem>): void => {
-    setDownloads((list) => list.map((d) => (d.id === id ? { ...d, ...patch } : d)))
-  }, [])
-
-  /**
-   * Download one entry. `destDir` (desktop only) overrides the OS Downloads folder — it comes from
-   * the native folder picker, and main still builds the final path itself.
-   *
-   * Both routes report through the same strip, but they finish differently on purpose: an scp pull
-   * is ours from start to finish, so it ends as a revealable local file; an HTTP download is handed
-   * to the BROWSER at the first byte, and its own download shelf owns the progress from there — so
-   * the strip's job is just to cover the mint round-trip and then get out of the way.
-   */
-  const download = useCallback(
-    async (path: string, isDir: boolean, destDir?: string): Promise<void> => {
-      if (route === 'none') return
-      const id = ++dlSeq.current
-      const name = path.split('/').filter(Boolean).pop() || path
-      setDownloads((list) => [...list, { id, name, dir: isDir, status: 'running' }])
-      setRowState(path, 'running')
-      const finish = (state: RowDownloadState): void => {
-        setRowState(path, state)
-        // Clear the row back to a plain ⤓ after the flash. Keyed by PATH, so a second download of
-        // the same entry started meanwhile owns the row and its timer must not wipe that state.
-        setTimeout(
-          () =>
-            setRowDl((m) => {
-              if (m[path] !== state) return m
-              const next = { ...m }
-              delete next[path]
-              return next
-            }),
-          ROW_FLASH_MS
-        )
-      }
-      try {
-        if (route === 'scp') {
-          const res = await window.nodeTerminal.sshProject.downloadFile(project!.id, path, destDir)
-          if (res.ok) patchDownload(id, { status: 'done', localPath: res.localPath })
-          else patchDownload(id, { status: 'error', detail: res.error })
-          finish(res.ok ? 'done' : 'error')
-          return
-        }
-        const ticket = await session.api.files.downloadTicket(path)
-        if (!ticket) {
-          patchDownload(id, { status: 'error', detail: 'Downloading is not available here.' })
-          finish('error')
-          return
-        }
-        triggerBrowserDownload(ticket.url, ticket.name)
-        patchDownload(id, { status: 'done', detail: 'Sent to your browser downloads.' })
-        finish('done')
-        // The browser has it now; the strip row would just be noise from here on.
-        setTimeout(() => setDownloads((list) => list.filter((d) => d.id !== id)), 4000)
-      } catch {
-        patchDownload(id, { status: 'error', detail: 'The download could not be started.' })
-        finish('error')
-      }
-    },
-    [route, project, session.api, patchDownload, setRowState]
-  )
+  const { downloads, rowDl, download, downloadTo, dismiss } = useDownloads({
+    route,
+    projectId: project?.id,
+    files: session.api.files
+  })
 
   const onDownload = useMemo<DownloadFn | undefined>(
     () => (route === 'none' ? undefined : (p, isDir) => void download(p, isDir)),
     [route, download]
-  )
-
-  /** "Download to…" — desktop only (the browser has no native folder picker, and its own download
-   *  location is a browser setting, not ours to ask about). */
-  const downloadTo = useCallback(
-    async (path: string, isDir: boolean): Promise<void> => {
-      const dir = await window.nodeTerminal.dialog.selectFolder()
-      if (dir) await download(path, isDir, dir)
-    },
-    [download]
   )
 
   useEffect(() => {
@@ -529,34 +430,7 @@ export function ExplorerPanel({
           </div>
         )}
 
-        {downloads.length > 0 && (
-          <div className="ex-dls">
-            {downloads.map((d) => (
-              <div key={d.id} className={`ex-dls__row ${d.status}`}>
-                {d.status === 'running' && <span className="ex-dls__spin" />}
-                <span className="ex-dls__name" title={d.detail || d.localPath || d.name}>
-                  {d.name}
-                  {d.dir && d.status === 'running' ? ' (folder)' : ''}
-                </span>
-                {d.status === 'done' && d.localPath && (
-                  <button
-                    className="ex-dls__act"
-                    onClick={() => window.nodeTerminal.shell.reveal(d.localPath!)}
-                  >
-                    Reveal
-                  </button>
-                )}
-                <button
-                  className="ex-dls__act ex-dls__dismiss"
-                  aria-label="Dismiss"
-                  onClick={() => setDownloads((list) => list.filter((x) => x.id !== d.id))}
-                >
-                  <IconClose />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
+        <DownloadStrip downloads={downloads} onDismiss={dismiss} />
       </aside>
 
       {menu &&
@@ -600,7 +474,7 @@ export function ExplorerPanel({
               >
                 New Folder…
               </button>
-              {route !== 'none' && (
+              {route !== 'none' && isDownloadablePath(menu.path) && (
                 <>
                   <div className="ctx-sep" />
                   <button

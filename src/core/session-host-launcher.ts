@@ -71,6 +71,10 @@ export interface HostLinkFs {
  * The binary to spawn the host with — `execPath` everywhere, except on Windows, where it is a hard
  * link beside it named `nodeterm-session-host.exe`.
  *
+ * Since issue #829 step 3 this is the FALLBACK: a packaged Windows build launches the host from a
+ * staged copy outside the install directory (`session-host-runtime.ts`), and only lands here when
+ * staging failed or the staged copy could not start.
+ *
  * The separate image name makes the background host identifiable, but does NOT isolate it from
  * updates: it still maps the installed Electron image and DLLs. NSIS can find processes by path
  * as well as name. The installer preflight must refuse while this host (or the app) is running;
@@ -113,10 +117,68 @@ export function hostLauncherPath(
   }
 }
 
-export function spawnSessionHost(scriptPath: string, userDataDir: string): void {
-  const launch = (bin: string, onError?: () => void): void => {
+/** A host's own controlled failures exit 0 (lost the startup race) or 1 (refused a state it could
+ *  not judge). Any other code from a staged host — 0xC0000135 STATUS_DLL_NOT_FOUND, an access
+ *  violation, a policy block — means the staged COPY could not run, and is worth one launch from the
+ *  installed binary instead. Exported for tests. */
+export function stagedExitWantsFallback(code: number | null, signal: NodeJS.Signals | null): boolean {
+  if (signal) return true
+  return code !== null && code !== 0 && code !== 1
+}
+
+/** How long after spawn an exit still counts as "the staged copy could not start". */
+export const STAGED_EARLY_EXIT_MS = 10_000
+
+/** A launch target: the binary and the host script it runs. */
+export interface HostLaunchTarget {
+  bin: string
+  script: string
+  /** A staged runtime, which gets the early-exit fallback. */
+  staged?: boolean
+}
+
+/**
+ * The ordered launch attempts. A staged runtime (outside the install directory — see
+ * `session-host-runtime.ts`) goes first; the legacy pair (`hostLauncherPath`, then the plain
+ * `execPath`) is what every staged failure falls back to. Exported for tests.
+ */
+export function hostLaunchPlan(
+  scriptPath: string,
+  execPath: string,
+  platformName: NodeJS.Platform | string,
+  staged?: { exe: string; script: string } | null,
+  fsLike?: HostLinkFs
+): HostLaunchTarget[] {
+  const plan: HostLaunchTarget[] = []
+  if (staged && platformName === 'win32') plan.push({ bin: staged.exe, script: staged.script, staged: true })
+  const legacy = hostLauncherPath(execPath, platformName, fsLike)
+  plan.push({ bin: legacy, script: scriptPath })
+  if (legacy !== execPath) plan.push({ bin: execPath, script: scriptPath })
+  return plan
+}
+
+export function spawnSessionHost(
+  scriptPath: string,
+  userDataDir: string,
+  staged?: { exe: string; script: string } | null,
+  onStagedFailure?: () => void
+): void {
+  let plan: HostLaunchTarget[] | null = null
+  const legacyPlan = (): HostLaunchTarget[] => {
+    // The legacy alias is created lazily: a staged host that starts never needs the hard link in
+    // the install directory at all.
+    if (!plan) plan = hostLaunchPlan(scriptPath, process.execPath, os.platform(), null)
+    return plan
+  }
+  const launch = (target: HostLaunchTarget, next: () => void): void => {
+    let failedOver = false
+    const failOver = (): void => {
+      if (failedOver) return
+      failedOver = true
+      next()
+    }
     try {
-      const child = spawn(bin, [scriptPath, userDataDir], {
+      const child = spawn(target.bin, [target.script, userDataDir], {
         detached: true,
         stdio: 'ignore',
         windowsHide: true,
@@ -127,15 +189,33 @@ export function spawnSessionHost(scriptPath: string, userDataDir: string): void 
       // two app processes can race on the alias, and the loser can unlink the link between the
       // winner creating it and spawning through it (ENOENT). The listener is what makes the
       // fallback below real rather than theoretical.
-      child.on('error', () => onError?.())
+      child.on('error', () => {
+        if (target.staged) onStagedFailure?.()
+        failOver()
+      })
+      if (target.staged) {
+        const startedAt = Date.now()
+        child.once('exit', (code, signal) => {
+          if (Date.now() - startedAt > STAGED_EARLY_EXIT_MS) return
+          if (!stagedExitWantsFallback(code, signal)) return
+          onStagedFailure?.()
+          failOver()
+        })
+      }
       child.unref()
     } catch {
-      onError?.()
+      if (target.staged) onStagedFailure?.()
+      failOver()
     }
   }
-  const bin = hostLauncherPath(process.execPath, os.platform())
-  // One retry, and only when the alias was actually used: `execPath` is the path that has always
-  // worked, so the retry can have no listener of its own beyond swallowing.
-  if (bin === process.execPath) launch(bin)
-  else launch(bin, () => launch(process.execPath))
+  const runLegacy = (index: number): void => {
+    const targets = legacyPlan()
+    if (index >= targets.length) return
+    launch(targets[index], () => runLegacy(index + 1))
+  }
+  if (staged && os.platform() === 'win32') {
+    launch({ bin: staged.exe, script: staged.script, staged: true }, () => runLegacy(0))
+  } else {
+    runLegacy(0)
+  }
 }

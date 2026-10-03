@@ -1,0 +1,9 @@
+{"type":"user","content":[{"type":"text","text":"# AGENTS.md\nUse tabs."}],"synthetic_reason":"project_instructions"}
+{"type":"user","content":[{"type":"text","text":"Remember to update the todo list."}],"synthetic_reason":"system_reminder"}
+{"type":"user","content":[{"type":"text","text":"real prompt"}],"prompt_index":0}
+{"type":"assistant","content":"working on it","model_id":"grok-4.6-build","model_fingerprint":"fp_0000000000synthetic","reasoning_effort":"xhigh"}
+{"type":"user","content":[{"type":"text","text":"Background task t-1 finished."}],"synthetic_reason":"task_completed","prompt_index":1}
+{"type":"user","content":[{"type":"text","text":"Subagent explore-1 returned."}],"synthetic_reason":"subagent_completed"}
+{"type":"user","content":[{"type":"text","text":"The user rejected run_terminal_cmd."}],"synthetic_reason":"permission_rejected"}
+{"type":"user","content":[{"type":"text","text":"Summary of the conversation so far: the user asked for a plan."}],"synthetic_reason":"compaction_meta"}
+{"type":"user","content":[{"type":"text","text":"blank reason reads as the user"}],"synthetic_reason":"   "}

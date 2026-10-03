@@ -54,3 +54,18 @@ describe('githubMoveConfirmation', () => {
     expect(githubMoveConfirmation(closed, 'done', 'done')).toBeNull()
   })
 })
+
+describe('close reason', () => {
+  it('offers Completed and Not planned when closing, Completed first and preselected', () => {
+    const confirmation = githubMoveConfirmation(open, 'done', 'done')
+    expect(confirmation?.closeReasons).toEqual([
+      { value: 'completed', label: 'Completed' },
+      { value: 'not_planned', label: 'Not planned' }
+    ])
+    expect(confirmation?.defaultCloseReason).toBe('completed')
+  })
+
+  it('asks no reason for a reopen, which GitHub records as reopened', () => {
+    expect(githubMoveConfirmation(closed, null, 'done')?.closeReasons).toBeUndefined()
+  })
+})

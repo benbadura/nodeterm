@@ -1,0 +1,9 @@
+{"sessionId":"3e7b9c21-4d5a-4f60-8b19-a2c3d4e5f607","projectHash":"c0ffee0000000000000000000000000000000000000000000000000000000000","startTime":"2026-09-28T10:00:00.000Z","lastUpdated":"2026-09-28T10:00:00.000Z","kind":"main"}
+{"id":"u0","timestamp":"2026-09-28T10:00:01.000Z","type":"user","content":[{"text":"<session_context>\nThis is the Gemini CLI. We are setting up the context for our chat.\n</session_context>"}]}
+{"id":"u1","timestamp":"2026-09-28T10:00:02.000Z","type":"user","content":[{"text":"my prompt"},{"text":"<hook_context>added by a BeforeAgent hook</hook_context>"}]}
+{"id":"u2","timestamp":"2026-09-28T10:00:03.000Z","type":"user","content":[{"text":"explain @src/app.ts"},{"text":"\n--- Content from referenced files ---"},{"text":"FILE BODY"}],"displayContent":[{"text":"explain @src/app.ts"}]}
+{"id":"u3","timestamp":"2026-09-28T10:00:04.000Z","type":"user","content":[{"inlineData":{"mimeType":"image/png","data":"iVBORw0KGgo="}},{"text":"what is in this image?"}]}
+{"id":"g1","timestamp":"2026-09-28T10:00:05.000Z","type":"gemini","content":"","thoughts":[{"subject":"Looking","description":"at the image","timestamp":"2026-09-28T10:00:05.000Z"}],"model":"gemini-3.5-flash"}
+{"id":"g2","timestamp":"2026-09-28T10:00:06.000Z","type":"gemini","content":[{"text":"Binary content received. Proceeding with analysis.","thought":true,"thoughtSignature":"sig"}]}
+{"id":"i1","timestamp":"2026-09-28T10:00:07.000Z","type":"info","content":[{"inlineData":{"mimeType":"image/png","data":"iVBORw0KGgo="}}]}
+{"id":"g3","timestamp":"2026-09-28T10:00:08.000Z","type":"gemini","content":[{"text":"**Looking** at the image","thought":true},{"text":"A cat."}],"model":"gemini-3.5-flash"}

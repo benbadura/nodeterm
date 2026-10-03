@@ -1,0 +1,5 @@
+{
+  "ok": true,
+  "content": "{\"hookSpecificOutput\":{\"hookEventName\":\"PermissionRequest\",\"decision\":{\"behavior\":\"allow\",\"updatedInput\":{\"questions\":[{\"question\":\"Which surfaces should get it?\",\"header\":\"Surfaces\",\"multiSelect\":true,\"options\":[{\"label\":\"Desktop\",\"description\":\"Electron\"},{\"label\":\"Server Edition\",\"description\":\"Browser\"},{\"label\":\"Mobile\",\"description\":\"iOS\"}]}],\"answers\":{\"Which surfaces should get it?\":\"Desktop, Mobile\"}}}}}",
+  "decision": "allow"
+}

@@ -1,0 +1,77 @@
+{
+  "sessionId": "ses_0a1b2c3d4ffeSynthetic000001",
+  "parse": {
+    "messages": [
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "older"
+          }
+        ],
+        "at": 1780000001000
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "next"
+          }
+        ],
+        "at": 1780000002000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "newest"
+          }
+        ],
+        "at": 1780000003000
+      }
+    ],
+    "skipped": 0,
+    "model": "newest-model"
+  },
+  "page": {
+    "messages": [
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "older"
+          }
+        ],
+        "at": 1780000001000
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "next"
+          }
+        ],
+        "at": 1780000002000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "newest"
+          }
+        ],
+        "at": 1780000003000
+      }
+    ],
+    "found": true,
+    "olderCursor": null,
+    "unmatchedResults": [],
+    "model": "newest-model"
+  }
+}

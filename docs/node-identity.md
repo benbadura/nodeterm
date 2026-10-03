@@ -151,7 +151,7 @@ the data dir and restarting. What that does:
 
 | Surface | Holds | How |
 | --- | --- | --- |
-| Desktop (Electron) | The **secret** | `node-auth-key.json`, sealed with `safeStorage`, 0600, tmp+rename. |
+| Desktop (Electron) | The **secret** | `node-auth-key.json`, sealed with `safeStorage`, 0600, tmp+rename — or, when `safeStorage` cannot seal at all (Linux with no keyring, issue #1088), `node-auth-key.bin` exactly as the Server Edition stores it. |
 | Server Edition | The **secret** | `node-auth-key.bin`, **raw 32 bytes**, 0600, tmp+rename. |
 | SSH host | Per-node **tokens** only | `$HOME/.nodeterm/node-tokens/<nodeId>`, 0600 under a 0700 dir, written over the ControlMaster with the token on **stdin**. |
 | Phone | Nothing | No secret, no token, no change. |
@@ -162,6 +162,18 @@ in that configuration the sealing is obfuscation, and the protection that actual
 **0600 file mode**. That is worth knowing before anyone reasons "it's encrypted at rest, therefore…".
 Two distinct file names (`.json` vs `.bin`) exist so a data dir moved between shells can never have
 one format misread as the other.
+
+**And on Linux it may not seal at all** (issue #1088, measured on Electron 42 under xvfb with no
+session bus): a session with no Secret Service or kwallet — a bare window manager — selects
+`basic_text`, reports `isEncryptionAvailable() === false`, and `encryptString` **throws**. The
+loader used to reject on every boot, so the instance ran with no secret forever: no token file was
+ever written, every session was `legacy`, and every verified-only verb (`send`, `settings`, …) was
+refused permanently, while `hook-endpoint.env` still advertised a token dir that would never fill.
+Now, when sealing throws and no sealed key exists, the desktop writes the raw 0600 `.bin` — the
+Server Edition's format, which on that backend gives up nothing real. A raw key from an earlier
+keyring-less boot is reused when a keyring appears later (never rotated); a **sealed** key that
+merely cannot be unsealed right now (keyring locked at boot) still fails the load rather than being
+replaced, because rotating the secret orphans every bound codex thread.
 
 **The Server Edition stores it raw, deliberately.** A headless Linux host has no keychain; there is
 no `safeStorage` to reach. Inventing a passphrase prompt would make the app un-bootable
@@ -239,8 +251,12 @@ can act on. A sentence it can read is the better failure.
 **Why no gate at all when there is no secret.** An instance that cannot mint can never verify anyone,
 so warning or refusing `legacy` there would hit **every** caller on the machine with advice that
 cannot work ("restart this node to pick up an identity" — there is none to pick up). That is the
-desktop's `safeStorage`-unavailable path and the Server Edition's uncreatable-key-file path; both
-keep working exactly as before.
+desktop's locked-keyring path and the Server Edition's uncreatable-key-file path; the open verbs
+keep working exactly as before. The **verified-only** verbs cannot (nothing is verified), so their
+flat refusal is followed by `identityUnavailableNote`: one sentence saying the cause is the
+INSTANCE, with the error the shell recorded via `hookServer.setNodeIdentityUnavailable` — the only
+place a refusal here carries a diagnosis, because it is a fact about the machine that no caller can
+act on. Before #1088 that cause was a `console.warn` nobody could see.
 
 ## Migration
 

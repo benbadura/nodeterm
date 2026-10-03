@@ -3,7 +3,7 @@ import { act, useLayoutEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { applyNodeChanges, MiniMap, ReactFlowProvider, useStoreApi, type Node } from '@xyflow/react'
 import { afterEach, expect, it, vi } from 'vitest'
-import { VisibleMiniMap } from './VisibleMiniMap'
+import { MINIMAP_FULL_SYNC_DEBOUNCE_MS, MiniMapProjection, VisibleMiniMap } from './VisibleMiniMap'
 import { mergeWithKeepAlive, retireIntoPool } from '../lib/webviewKeepAlive'
 import type { CanvasNode } from '../state/workspace'
 
@@ -130,4 +130,85 @@ it('routes wheel zoom, drag and map clicks through the original camera', () => {
   act(() => vi.runAllTimers())
   act(() => svg.dispatchEvent(new MouseEvent('click', { clientX: 50, clientY: 60, bubbles: true })))
   expect(mapClicked).toHaveBeenCalledTimes(1)
+})
+
+// The projection's own store, read directly: the map's rendered output cannot tell a rebuilt
+// node array from a reused one, and reuse on pan frames is the whole point of the fast path.
+let target: ReturnType<typeof useStoreApi>
+function CaptureTarget() {
+  const api = useStoreApi()
+  useLayoutEffect(() => { target = api }, [api])
+  return null
+}
+function ProjectionHarness() {
+  const source = useStoreApi()
+  return (
+    <ReactFlowProvider>
+      <MiniMapProjection source={source} />
+      <CaptureTarget />
+    </ReactFlowProvider>
+  )
+}
+function mountProjection() {
+  host = document.createElement('div')
+  document.body.append(host)
+  root = createRoot(host)
+  act(() => root.render(
+    <ReactFlowProvider>
+      <Capture />
+      <ProjectionHarness />
+    </ReactFlowProvider>
+  ))
+  act(() => store.setState({ width: 800, height: 600, transform: [-2000, -2000, 1] }))
+  setNodes([node('a'), node('b', 'terminal', 2400)])
+}
+const targetState = () => target.getState()
+
+it('a transform-only change updates transform without rebuilding nodes/nodeLookup', () => {
+  vi.useFakeTimers()
+  mountProjection()
+  const before = targetState()
+  expect(before.nodes).toHaveLength(2)
+  act(() => store.setState({ transform: [10, 20, 1] }))
+  const after = targetState()
+  expect(after.transform).toEqual([10, 20, 1])
+  expect(after.nodes).toBe(before.nodes) // same array identity — no rebuild
+  expect(after.nodeLookup).toBe(before.nodeLookup)
+})
+
+it('a transform-only change is followed by a full sync after the debounce', () => {
+  vi.useFakeTimers()
+  mountProjection()
+  const before = targetState()
+  act(() => store.setState({ transform: [10, 20, 1] }))
+  act(() => vi.advanceTimersByTime(MINIMAP_FULL_SYNC_DEBOUNCE_MS - 1))
+  expect(targetState().nodes).toBe(before.nodes) // still inside the move
+  act(() => vi.advanceTimersByTime(2))
+  expect(targetState().nodes).not.toBe(before.nodes) // rebuilt once the move settles
+  expect(targetState().nodes).toHaveLength(2)
+})
+
+it('an in-place internals update (set({}) with the same nodeLookup) still does a full sync immediately', () => {
+  vi.useFakeTimers()
+  mountProjection()
+  const before = targetState()
+  const lookup = store.getState().nodeLookup
+  const [id, n] = [...lookup][0]
+  lookup.set(id, { ...n, measured: { width: 999, height: 999 } }) // xyflow mutates in place
+  act(() => store.setState({})) // …then set({})
+  const after = targetState()
+  expect(after.nodes).not.toBe(before.nodes)
+  expect(after.nodeLookup.get(id)?.measured?.width).toBe(999)
+})
+
+it('a camera update carries the viewport size with it, and a nodes change riding it syncs at once', () => {
+  vi.useFakeTimers()
+  mountProjection()
+  act(() => store.setState({ transform: [1, 2, 1], width: 1000, height: 500 }))
+  expect(targetState()).toMatchObject({ width: 1000, height: 500 })
+  const before = targetState()
+  const nodes = store.getState().nodes.slice(0, 1)
+  act(() => store.setState({ transform: [3, 4, 1], nodes }))
+  expect(targetState().nodes).not.toBe(before.nodes)
+  expect(targetState().nodes.map((x) => x.id)).toEqual(['a'])
 })

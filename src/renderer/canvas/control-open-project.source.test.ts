@@ -99,28 +99,48 @@ describe('the --project targeted-opens block (source pins)', () => {
   })
 
   it('the gate order is refusal-before-write: every refusal precedes every store/canvas write', () => {
-    // A refused target must write NOTHING. The flag refusal, the source checks, the
-    // unknown-target belt and the SSH belt all return before the first applyNodeMutation or
-    // setNodes — moving a write above any of them is the gate-before-write mutation.
+    // A refused target must write NOTHING. The flag refusal and the source/target belt both
+    // return before the first applyOwnNodeMutation or setNodes — moving a write above either is the
+    // gate-before-write mutation. Both are decided by pure helpers whose logic (and every refusal
+    // sentence) is red-capable in projectOpen.test.ts; what only the source can show is that the
+    // dispatch relays their answer before it writes.
     const body = targetedOpensBody()
     const firstWrite = Math.min(
-      ...['applyNodeMutation', 'setNodes'].map((s) => {
+      ...['applyOwnNodeMutation', 'setNodes'].map((s) => {
         const i = body.indexOf(s)
         return i === -1 ? body.length : i
       })
     )
     for (const refusal of [
-      // The flag exclusion is decided by the pure projectTargetFlagRefusal (its logic is
-      // red-capable in projectOpen.test.ts — review #363 I-2); here we pin its CALL SITE's
-      // position, like the inline refusals below.
       'projectTargetFlagRefusal(args)',
-      'project-target-refused',
-      'project-target-ssh-unsupported',
-      'source node is not a control-capable agent'
+      'resolveProjectTarget(',
+      "if (tgResolved.kind === 'refused') {"
     ]) {
       const at = body.indexOf(refusal)
       expect(at, refusal).toBeGreaterThan(-1)
       expect(at, `${refusal} after a write`).toBeLessThan(firstWrite)
+    }
+    expect(body).toMatch(
+      /if \(tgResolved\.kind === 'refused'\) \{\s+reply\(\{ ok: false, error: tgResolved\.error \}\)\s+return/
+    )
+  })
+
+  it('the --project belt is ONE definition: open-* and run both call resolveProjectTarget (#925)', () => {
+    // Two hand-copies of the caller-project resolution + source + target checks are how one of
+    // them drifts (CLAUDE.md "Adding a new agent" rule 10). Neither block may re-grow an inline
+    // copy of the belt; each passes only the word its refusal differs in.
+    const body = targetedOpensBody()
+    expect(body.match(/resolveProjectTarget\(/g)?.length).toBe(2)
+    expect(body).toMatch(/resolveProjectTarget\(\{[^}]*sshVerbWord: 'opening'/)
+    expect(body).toMatch(/resolveProjectTarget\(\{[^}]*sshVerbWord: 'starting'/)
+    for (const inline of [
+      'project-target-refused',
+      'project-target-ssh-unsupported',
+      'source node is not in any open project',
+      'source node is not a control-capable agent',
+      'callerProjectId'
+    ]) {
+      expect(body, inline).not.toContain(inline)
     }
   })
 
@@ -139,7 +159,9 @@ describe('the --project targeted-opens block (source pins)', () => {
     // command into pendingLaunch is the silent-never-starts mutation (Task 2.0's pins prove the
     // round-trip; this pins that the store path actually uses the mover).
     const body = targetedOpensBody()
-    expect(body).toMatch(/flowToNodeStates\(\[armForColdOpen\(node\)\]\)\[0\]/)
+    // `withLaunchBrief` records the prompt file and `withPrHold` the `--after-pr` wait, both on the
+    // launch armForColdOpen already moved.
+    expect(body).toMatch(/flowToNodeStates\(\[withPrHold\(withLaunchBrief\(armForColdOpen\(node\), openPrompt\.promptFile\), prHoldPre\)\]\)\[0\]/)
   })
 
   it('the store path persists (writeDisk) and states the cold-open contract in the reply', () => {
@@ -152,8 +174,10 @@ describe('the --project targeted-opens block (source pins)', () => {
   })
 
   it('the caller’s OWN project id falls through to the legacy path (B3a) — no return on that leg', () => {
+    // `own` is the one resolution with no branch of its own: only `refused` and `target` return.
     const body = targetedOpensBody()
-    expect(body).toContain('if (targetId !== callerProjectId)')
+    expect(body).toContain("if (tgResolved.kind === 'target') {")
+    expect(body).not.toMatch(/kind === 'own'/)
     expect(body).toContain('fall through to the legacy path unchanged')
   })
 

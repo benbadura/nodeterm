@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normaliseProjectKanbanGitHub, parseGitHubRepository } from './config'
+import { githubMappingDigest, normaliseProjectKanbanGitHub, parseGitHubRepository } from './config'
 
 const columns = [
   { id: 'todo', title: 'To Do', color: '#0a84ff' },
@@ -80,5 +80,44 @@ describe('normaliseProjectKanbanGitHub', () => {
     [{ columnMappings: [{ columnId: 'todo', label: 'x'.repeat(51) }] }, 'label-too-long']
   ])('rejects invalid configuration with %s', (input, reason) => {
     expect(normaliseProjectKanbanGitHub(input, columns)).toEqual({ ok: false, reason })
+  })
+})
+
+describe('githubMappingDigest', () => {
+  const base = {
+    columnMappings: [
+      { columnId: 'todo', label: 'status:todo' },
+      { columnId: 'done', label: 'status:done' }
+    ],
+    completionColumnId: 'done'
+  }
+
+  it('ignores what does not change a write: column order and mapping order', () => {
+    const reordered = [...columns].reverse()
+    const a = normaliseProjectKanbanGitHub(base, columns)
+    const b = normaliseProjectKanbanGitHub({
+      ...base, columnMappings: [...base.columnMappings].reverse()
+    }, reordered)
+    if (!a.ok || !b.ok) throw new Error('fixture')
+    expect(githubMappingDigest('o/r', a.value)).toBe(githubMappingDigest('o/r', b.value))
+    // The config revision DOES move with column order — which is why approval cannot reuse it:
+    // dragging a column would silently revoke every write until the user re-approved.
+    expect(a.value.revision).not.toBe(b.value.revision)
+  })
+
+  it.each([
+    ['the repository', 'x/y', base],
+    ['the completion column', 'o/r', { ...base, completionColumnId: 'todo' }],
+    ['no completion column', 'o/r', { columnMappings: base.columnMappings }],
+    ['a label spelling', 'o/r', { ...base, columnMappings: [
+      { columnId: 'todo', label: 'status:Todo' }, { columnId: 'done', label: 'status:done' }
+    ] }],
+    ['a dropped mapping', 'o/r', { columnMappings: [{ columnId: 'done', label: 'status:done' }], completionColumnId: 'done' }]
+  ])('changes with %s', (_name, repository, changed) => {
+    const a = normaliseProjectKanbanGitHub(base, columns)
+    const b = normaliseProjectKanbanGitHub(changed, columns)
+    if (!a.ok || !b.ok) throw new Error('fixture')
+    expect(githubMappingDigest(repository, b.value)).not.toBe(githubMappingDigest('o/r', a.value))
+    expect(githubMappingDigest('o/r', a.value)).toMatch(/^[0-9a-f]{64}$/)
   })
 })

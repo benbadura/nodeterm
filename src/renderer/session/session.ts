@@ -170,6 +170,17 @@ export function bindProjectToSession(projectId: string, sessionId: string): void
   PROJECT_BINDINGS.set(projectId, sessionId)
 }
 
+/** Unbind ONE project (a hosted team stopped sharing it, or the user closed that one of the team's
+ *  tabs). The session lives on for its other tabs. No-op when unbound. */
+export function unbindProject(projectId: string): void {
+  PROJECT_BINDINGS.delete(projectId)
+}
+
+/** Every project bound to `sessionId` (a hosted team's tabs, live or greyed). */
+export function projectIdsBoundToSession(sessionId: string): string[] {
+  return [...PROJECT_BINDINGS].filter(([, sid]) => sid === sessionId).map(([projectId]) => projectId)
+}
+
 /** The local session (the fallback every unbound tab resolves to), or the active one if — in a
  *  node-environment test — no 'local' session was created. */
 function localOrActiveSession(): WorkspaceSession {
@@ -191,6 +202,17 @@ export function sessionForProject(projectId: string): WorkspaceSession {
     PROJECT_BINDINGS.delete(projectId) // stale binding (session disposed) → resolve local
   }
   return localOrActiveSession()
+}
+
+/** The projects bound to a live session whose api IS `api`, i.e. the tabs one relay connection
+ *  serves. An unbound project merely falls back to the local session, so the local api binds none. */
+export function projectIdsBoundToApi(api: NodeTerminalApi): string[] {
+  const out: string[] = []
+  for (const [projectId, sessionId] of PROJECT_BINDINGS) {
+    const e = SESSIONS.get(sessionId)
+    if (e && !e.disposed && e.session.api === api) out.push(projectId)
+  }
+  return out
 }
 
 /** Re-broadcast the local human's identity on EVERY live session (obligation 2). Renaming yourself

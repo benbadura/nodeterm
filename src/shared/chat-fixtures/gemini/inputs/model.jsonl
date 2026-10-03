@@ -1,0 +1,6 @@
+{"sessionId":"3e7b9c21-4d5a-4f60-8b19-a2c3d4e5f607","projectHash":"c0ffee0000000000000000000000000000000000000000000000000000000000","startTime":"2026-09-28T10:00:00.000Z","lastUpdated":"2026-09-28T10:00:00.000Z","kind":"main"}
+{"id":"g1","timestamp":"2026-09-28T10:00:01.000Z","type":"gemini","content":"one","model":"gemini-2.5-pro"}
+{"id":"g2","timestamp":"2026-09-28T10:00:02.000Z","type":"gemini","content":"two","model":"🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪"}
+{"id":"g3","timestamp":"2026-09-28T10:00:03.000Z","type":"gemini","content":"three"}
+{"id":"g4","timestamp":"2026-09-28T10:00:04.000Z","type":"gemini","content":"four","model":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
+{"id":"i1","timestamp":"2026-09-28T10:00:05.000Z","type":"info","content":"an info record carrying a model","model":"not-a-model-turn"}

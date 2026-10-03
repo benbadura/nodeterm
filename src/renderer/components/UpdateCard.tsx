@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { IconClose } from './icons'
 import { noSelfInstallCopy } from '@shared/update-platform'
 import type { UpdateProgress } from '@shared/types'
+import { RELEASES_URL, usePendingUpdate } from '../state/pendingUpdate'
 
 // The full updater lifecycle as one status union, driving a fixed bottom-right card.
 // `checking` is only ever shown for a user-initiated manual check; automatic checks stay
@@ -21,12 +22,25 @@ type Status =
   | { kind: 'required'; minSupported: string | null }
   | { kind: 'error'; message: string }
 
-const RELEASES_URL = 'https://nodeterm.dev/releases'
-
 export function UpdateCard(): JSX.Element | null {
   const [status, setStatus] = useState<Status>({ kind: 'idle' })
   const [minimized, setMinimized] = useState(false)
   const upToDateTimer = useRef<number | null>(null)
+  // Windows session host (issue #829): the installer refuses to run while the host is up, so the
+  // card offers the in-app "Prepare for update" flow. Main answers `unsupported` everywhere else.
+  const [canPrepare, setCanPrepare] = useState(false)
+  useEffect(() => {
+    let live = true
+    void window.nodeTerminal.updates
+      .prepareInspect()
+      .then((r) => {
+        if (live) setCanPrepare(r.kind !== 'unsupported')
+      })
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [])
 
   useEffect(() => {
     const offAvailable = window.nodeTerminal.updates.onAvailable((info) => {
@@ -115,9 +129,28 @@ export function UpdateCard(): JSX.Element | null {
     }
   }, [])
 
+  // Mirror an owed update into the title-bar button. Deliberately never cleared from here: the
+  // card's ✕ sets `idle`, and dismissing the card must not take the install path away with it.
+  const setPending = usePendingUpdate((s) => s.setPending)
+  useEffect(() => {
+    if (status.kind === 'downloaded' || status.kind === 'manual') {
+      setPending({ kind: status.kind, version: status.version })
+    } else if (status.kind === 'required') {
+      setPending({ kind: 'required', minSupported: status.minSupported })
+    }
+  }, [status, setPending])
+
   if (status.kind === 'idle') return null
 
   const openReleases = () => window.open(RELEASES_URL, '_blank', 'noopener')
+  const prepareButton = canPrepare ? (
+    <button
+      className="update-card__link"
+      onClick={() => window.dispatchEvent(new Event('nodeterm:prepare-update'))}
+    >
+      Prepare for update…
+    </button>
+  ) : null
   const dismiss = () => setStatus({ kind: 'idle' })
 
   if (minimized) {
@@ -207,6 +240,7 @@ export function UpdateCard(): JSX.Element | null {
           <button className="update-card__btn" onClick={openReleases}>
             {noSelfInstallCopy('manual-install', status.version).action}
           </button>
+          {prepareButton}
         </>
       )}
 
@@ -216,6 +250,7 @@ export function UpdateCard(): JSX.Element | null {
           <button className="update-card__btn" onClick={openReleases}>
             {noSelfInstallCopy('no-channel').action}
           </button>
+          {prepareButton}
         </>
       )}
 
@@ -257,6 +292,7 @@ export function UpdateCard(): JSX.Element | null {
           <button className="update-card__link" onClick={openReleases}>
             Download manually
           </button>
+          {prepareButton}
         </>
       )}
     </div>

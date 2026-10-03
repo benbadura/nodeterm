@@ -122,7 +122,17 @@ export function terminalShortcutPolicy(): TerminalShortcutPolicy {
  *  listeners own them and this helper must not reroute their chords. Main-intercepted commands
  *  are excluded too: the window dispatcher deliberately has no handlers for them. If the main
  *  process stands down (notably Ctrl+W in a focused Linux/Windows terminal), xterm must retain the
- *  chord so the control byte reaches the pty. */
+ *  chord so the control byte reaches the pty.
+ *
+ *  **Except `node.toggleMarkdown`, which bubbles.** Its Server Edition owner is a WINDOW keydown
+ *  listener (`bridge/markdown-toggle-key.ts` — a browser has no main process to intercept it), and
+ *  xterm would turn Ctrl+M into a \r write and cancel the event, leaving ⌘M dead in exactly the
+ *  terminal the user is looking at. On desktop this changes nothing: under app-first main claims
+ *  the chord above the page so this never runs for it, under terminal-first the resolver above
+ *  already refuses it (`null` — the byte stays with the shell), and the one other main stand-down
+ *  (an armed shortcut recorder) has the recorder, not a terminal, focused. Unlike Ctrl+W there is
+ *  no terminal-focus stand-down in main for it, so there is no desktop case where xterm must keep
+ *  it. */
 export function terminalChordBubbles(e: ShortcutKeyEvent, kanbanOpen: boolean): boolean {
   const id = resolveCommandForKeyEvent(
     e,
@@ -135,7 +145,8 @@ export function terminalChordBubbles(e: ShortcutKeyEvent, kanbanOpen: boolean): 
     activeKeybindingOverrides(),
     isMacPlatform()
   )
-  if (id === null || MAIN_INTERCEPTED_COMMAND_IDS.includes(id)) return false
+  if (id === null) return false
+  if (id !== 'node.toggleMarkdown' && MAIN_INTERCEPTED_COMMAND_IDS.includes(id)) return false
   return COMMANDS_BY_ID.get(id)?.scope !== 'terminal'
 }
 

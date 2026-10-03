@@ -19,6 +19,7 @@
 import { isMediaFile } from '../state/workspace'
 import { opensInEditor } from './openTarget'
 import { folderTitle } from './explorerCreate'
+import { isDownloadablePath, type DownloadRoute } from './download'
 
 export { folderTitle, parentDir } from './explorerCreate'
 
@@ -190,4 +191,147 @@ export function fileOpenTarget(path: string, opts: { remote?: boolean } = {}): '
   if (opts.remote) return 'canvas'
   if (isMediaFile(path)) return 'canvas'
   return opensInEditor(path) ? 'canvas' : 'os'
+}
+
+/** One Download row in a files node's context menu. `pickFolder` = ask for a destination first
+ *  ("Download to…"), which only the desktop scp route can honour. */
+export interface DownloadMenuEntry {
+  label: string
+  pickFolder: boolean
+}
+
+/**
+ * The Download rows a files node's context menu offers for `path`. Where the route is `none`
+ * (a desktop local project — the file is already here — or a relay tab) there are none, and so
+ * for a path that cannot name a download: the node can stand on `/`, and a "Download this folder"
+ * there would stream the whole server filesystem.
+ *
+ * `here` = the menu was opened on empty space, so `path` is the folder being shown rather than a
+ * row in it — named as such, because "Download folder" over a blank area does not say which one.
+ * An HTTP folder download arrives as a `.tar.gz` (the server archives it on the fly) and the label
+ * says so; scp brings a folder down AS a folder.
+ */
+export function downloadMenuEntries(
+  route: DownloadRoute,
+  path: string,
+  { dir, here }: { dir: boolean; here: boolean }
+): DownloadMenuEntry[] {
+  if (route === 'none' || !isDownloadablePath(path)) return []
+  const what = dir ? (here ? 'Download this folder' : 'Download folder') : 'Download'
+  const entries: DownloadMenuEntry[] = [
+    { label: dir && route === 'http' ? `${what} (.tar.gz)` : what, pickFolder: false }
+  ]
+  // The browser has no native folder picker, and where its downloads land is a browser setting.
+  if (route === 'scp') entries.push({ label: 'Download to…', pickFolder: true })
+  return entries
+}
+
+/**
+ * How long a pause ends a type-ahead word. Typing "bu" within this window searches for "bu…";
+ * after it, the next key starts over.
+ */
+export const TYPEAHEAD_RESET_MS = 1000
+
+/**
+ * Windows-Explorer type-ahead: the index of the entry `buffer` selects, or -1 for no match.
+ *
+ *  - One letter — or the same letter repeated ("b", "bb") — CYCLES: the next entry after
+ *    `current` starting with it, wrapping. That is how pressing B three times walks the B's.
+ *  - A word ("bui") is a prefix search from `current` INCLUSIVE, so extending a word that still
+ *    matches the selected entry keeps it rather than jumping past it.
+ *
+ * Case-insensitive; `current` is -1 when nothing is selected.
+ */
+export function typeAheadIndex(names: readonly string[], current: number, buffer: string): number {
+  if (!buffer || names.length === 0) return -1
+  const q = buffer.toLowerCase()
+  const cycling = [...q].every((c) => c === q[0])
+  const needle = cycling ? q[0] : q
+  const start = cycling ? current + 1 : Math.max(current, 0)
+  for (let i = 0; i < names.length; i++) {
+    const idx = (start + i) % names.length
+    if (names[idx].toLowerCase().startsWith(needle)) return idx
+  }
+  return -1
+}
+
+export interface TypeAheadState {
+  buffer: string
+  /** When the last key was typed (ms). */
+  at: number
+}
+
+/** Fold one typed key into the type-ahead word and resolve what it selects. */
+export function typeAhead(
+  state: TypeAheadState,
+  key: string,
+  now: number,
+  names: readonly string[],
+  current: number
+): { state: TypeAheadState; index: number } {
+  const buffer = (now - state.at > TYPEAHEAD_RESET_MS ? '' : state.buffer) + key
+  return { state: { buffer, at: now }, index: typeAheadIndex(names, current, buffer) }
+}
+
+export type ListKeyAction = { kind: 'select'; index: number } | { kind: 'open'; index: number } | { kind: 'up' } | null
+
+/**
+ * What a navigation key does in a files node's listing. `current` is the selected index (-1 for
+ * none) and `count` the number of entries shown. Windows and Finder chords both work, because a
+ * user reaches for whichever their hands know: Enter / ⌘↓ open, Backspace / Alt+↑ / ⌘↑ go up.
+ * `null` = not a listing key; the caller lets it through.
+ */
+export function listKeyAction(
+  e: { key: string; alt?: boolean; meta?: boolean; ctrl?: boolean },
+  current: number,
+  count: number
+): ListKeyAction {
+  if (e.ctrl) return null
+  if (e.key === 'ArrowUp' && (e.alt || e.meta)) return { kind: 'up' }
+  if (e.key === 'ArrowDown' && e.meta) return current >= 0 ? { kind: 'open', index: current } : null
+  if (e.alt || e.meta) return null
+  if (e.key === 'Backspace') return { kind: 'up' }
+  if (e.key === 'Enter') return current >= 0 ? { kind: 'open', index: current } : null
+  if (count === 0) return null
+  const last = count - 1
+  switch (e.key) {
+    case 'ArrowDown':
+      return { kind: 'select', index: current < 0 ? 0 : Math.min(current + 1, last) }
+    case 'ArrowUp':
+      return { kind: 'select', index: current < 0 ? last : Math.max(current - 1, 0) }
+    case 'Home':
+      return { kind: 'select', index: 0 }
+    case 'End':
+      return { kind: 'select', index: last }
+    default:
+      return null
+  }
+}
+
+/**
+ * The entry of `to` that leads back toward `from`, when `to` is a strict ancestor of it — so going
+ * up (the ↑ button, Backspace, a breadcrumb) lands with the folder you came out of selected, the
+ * way Windows Explorer and Finder do. `null` when `to` is not an ancestor (entering a subfolder,
+ * or a jump elsewhere), which means "select nothing".
+ */
+export function childOnPath(to: string, from: string): string | null {
+  if (to.startsWith('/') !== from.startsWith('/')) return null
+  const a = to.split('/').filter(Boolean)
+  const b = from.split('/').filter(Boolean)
+  if (b.length <= a.length) return null
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return null
+  return b[a.length]
+}
+
+/**
+ * The list's `scrollTop` that brings a row fully into view, moving as little as possible (the
+ * `block: 'nearest'` rule). Computed by hand rather than with `scrollIntoView`, which also scrolls
+ * every scrollable ANCESTOR — inside the canvas that includes React Flow's own overflow:hidden
+ * containers, and it would shove the whole pane sideways under a transformed viewport.
+ * All values are layout pixels (offsetTop/offsetHeight/clientHeight), so canvas zoom is irrelevant.
+ */
+export function scrollTopToReveal(rowTop: number, rowHeight: number, scrollTop: number, viewHeight: number): number {
+  if (rowTop < scrollTop) return rowTop
+  if (rowTop + rowHeight > scrollTop + viewHeight) return rowTop + rowHeight - viewHeight
+  return scrollTop
 }

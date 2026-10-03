@@ -1,0 +1,54 @@
+[
+  {
+    "before": null,
+    "maxBytes": 262144,
+    "grownMaxBytes": 262144,
+    "start": 0,
+    "parse": {
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "before the junk"
+            }
+          ],
+          "at": 1790627717000,
+          "key": 446
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "kept"
+            },
+            {
+              "kind": "tool",
+              "name": "view",
+              "arg": "/p",
+              "id": "ok"
+            }
+          ],
+          "key": 1113
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "after the junk"
+            }
+          ],
+          "at": 1790627718000,
+          "key": 1496
+        }
+      ],
+      "olderCursor": null,
+      "unmatchedResults": [],
+      "model": "gpt-5.5",
+      "noCompleteLine": false
+    }
+  }
+]

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   TUNNEL_REPAIR_DELAYS_MS,
+  describeTunnelProbe,
+  shouldReportTunnelLost,
   recordTunnelRepair,
   shouldAttemptTunnelRepair,
   tunnelRepairDelayMs
@@ -74,5 +76,25 @@ describe('recordTunnelRepair', () => {
 
   it('stamps the ATTEMPT time, not the outcome time — the window starts when we spent the work', () => {
     expect(recordTunnelRepair(undefined, false, 4_242).lastAttemptAt).toBe(4_242)
+  })
+})
+
+describe('shouldReportTunnelLost', () => {
+  it('waits for a SECOND consecutive failure — one slow probe is not a lost tunnel', () => {
+    expect(shouldReportTunnelLost(0)).toBe(false)
+    expect(shouldReportTunnelLost(1)).toBe(false)
+    expect(shouldReportTunnelLost(2)).toBe(true)
+    expect(shouldReportTunnelLost(5)).toBe(true)
+  })
+})
+
+describe('describeTunnelProbe', () => {
+  it('names the cause the exit code carries (ssh 255, curl 7 / 28) and keeps the raw values', () => {
+    expect(describeTunnelProbe(255, '')).toBe('ssh failed (exit 255, http none)')
+    expect(describeTunnelProbe(7, '000')).toBe('nothing listening on the socket (exit 7, http 000)')
+    expect(describeTunnelProbe(28, '000\n')).toBe('curl timed out (exit 28, http 000)')
+    expect(describeTunnelProbe(0, '421')).toBe('another hook server answered (bearer mismatch) (exit 0, http 421)')
+    expect(describeTunnelProbe(0, '500')).toBe('unexpected HTTP answer (exit 0, http 500)')
+    expect(describeTunnelProbe(1, '')).toBe('probe failed (exit 1, http none)')
   })
 })

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolveAppTheme, type AppThemePref } from './appTheme'
+import { isLiquidGlass, resolveAppTheme, type AppThemePref } from './appTheme'
 
 describe('resolveAppTheme', () => {
   it('follows the terminal theme on auto', () => {
@@ -17,5 +17,16 @@ describe('resolveAppTheme', () => {
   it('falls back to dark for an unrecognised preference', () => {
     expect(resolveAppTheme('sepia' as AppThemePref, true)).toBe('dark')
     expect(resolveAppTheme(undefined as unknown as AppThemePref, false)).toBe('dark')
+  })
+})
+
+describe('Liquid Glass appearance', () => {
+  it('follows the terminal theme for its light/dark base, like auto', () => {
+    expect(resolveAppTheme('liquid-glass', true)).toBe('dark')
+    expect(resolveAppTheme('liquid-glass', false)).toBe('light')
+  })
+  it('is on only for the liquid-glass value', () => {
+    expect(isLiquidGlass('liquid-glass')).toBe(true)
+    for (const v of ['auto', 'dark', 'light', undefined, true]) expect(isLiquidGlass(v)).toBe(false)
   })
 })

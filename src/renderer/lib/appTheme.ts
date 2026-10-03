@@ -1,5 +1,11 @@
 /** What the app chrome follows. `auto` takes it from the terminal colour theme. */
-export type AppThemePref = 'auto' | 'dark' | 'light'
+export type AppThemePref = 'auto' | 'dark' | 'light' | 'liquid-glass'
+
+/** Is the Liquid Glass appearance on? It is a theme choice whose light/dark base follows the
+ *  terminal theme, exactly like `auto`. */
+export function isLiquidGlass(pref: unknown): boolean {
+  return pref === 'liquid-glass'
+}
 
 /** What actually gets rendered. */
 export type ResolvedAppTheme = 'dark' | 'light'
@@ -19,7 +25,7 @@ export type ResolvedAppTheme = 'dark' | 'light'
 export function resolveAppTheme(pref: AppThemePref, terminalThemeIsDark: boolean): ResolvedAppTheme {
   if (pref === 'light') return 'light'
   if (pref === 'dark') return 'dark'
-  if (pref !== 'auto') return 'dark'
+  if (pref !== 'auto' && pref !== 'liquid-glass') return 'dark'
   return terminalThemeIsDark ? 'dark' : 'light'
 }
 

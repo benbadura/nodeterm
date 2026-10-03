@@ -28,6 +28,9 @@ export const HIDEABLE_MENU_ITEMS: readonly HideableRow[] = [
   { id: 'collapse', label: 'Collapse / Expand' },
   { id: 'markdown-view', label: 'Markdown view' },
   { id: 'refresh-terminal', label: 'Refresh terminal' },
+  // The ROW that opens the create dialog. The LIVE chip that says a terminal IS being broadcast is
+  // deliberately in neither inventory (lib/live-link.guard.test.ts).
+  { id: 'live-link', label: 'Share live link' },
   { id: 'vanilla-restart', label: 'Restart on subscription' }
 ]
 
@@ -39,7 +42,10 @@ export const HIDEABLE_HEADER_BUTTONS: readonly HideableRow[] = [
   { id: 'ai-name', label: 'Name with AI' },
   { id: 'comments', label: 'Comments' },
   { id: 'hide-fanout', label: 'Hide cards & connections' },
-  { id: 'tidy-fanout', label: 'Tidy subagent cards' }
+  { id: 'tidy-fanout', label: 'Tidy subagent cards' },
+  // Not in the header proper but the label row right under it (`lib/mdViewHint.ts`); it is the
+  // same kind of quiet per-node affordance, so it lives in the same Settings list.
+  { id: 'md-hint', label: 'Markdown / chat view hint' }
 ]
 
 /** Every id the user may hide — the guard that makes everything else unhideable. */

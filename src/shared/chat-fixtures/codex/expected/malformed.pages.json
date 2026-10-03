@@ -1,0 +1,49 @@
+[
+  {
+    "before": null,
+    "maxBytes": 262144,
+    "grownMaxBytes": 262144,
+    "start": 0,
+    "parse": {
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "no timestamp survives"
+            }
+          ],
+          "key": 431
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool",
+              "name": "exec_command",
+              "arg": "",
+              "id": "c1"
+            }
+          ],
+          "at": 1790240400000,
+          "key": 545
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "The last line still renders."
+            }
+          ],
+          "at": 1790240400000,
+          "key": 978
+        }
+      ],
+      "olderCursor": null,
+      "unmatchedResults": [],
+      "noCompleteLine": false
+    }
+  }
+]

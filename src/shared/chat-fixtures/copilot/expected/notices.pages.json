@@ -1,0 +1,93 @@
+[
+  {
+    "before": null,
+    "maxBytes": 262144,
+    "grownMaxBytes": 262144,
+    "start": 0,
+    "parse": {
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "trigger an error"
+            }
+          ],
+          "at": 1790627717000,
+          "key": 446
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Error: 400 synthetic upstream failure"
+            }
+          ],
+          "at": 1790627720000,
+          "key": 1283
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "slow one"
+            }
+          ],
+          "at": 1790627721000,
+          "key": 1530
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Warning: An MCP server is slow to start"
+            }
+          ],
+          "at": 1790627725000,
+          "key": 2536
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Info: Press ctrl+s to stash a prompt"
+            }
+          ],
+          "at": 1790627726000,
+          "key": 2768
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "still here"
+            }
+          ],
+          "at": 1790627739000,
+          "key": 5898
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Recovered."
+            }
+          ],
+          "at": 1790627741000,
+          "key": 6538
+        }
+      ],
+      "olderCursor": null,
+      "unmatchedResults": [],
+      "model": "gpt-5.5",
+      "noCompleteLine": false
+    }
+  }
+]

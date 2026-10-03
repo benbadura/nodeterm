@@ -98,7 +98,7 @@ function MachinePanel({
       <div className="flex flex-wrap items-center gap-2">
         <span
           className={`inline-block h-2 w-2 rounded-full ${
-            !remote || connected ? 'bg-[color:var(--ok,#30d158)]' : 'bg-[color:var(--muted-2)]'
+            !remote || connected ? 'bg-[color:var(--state-success)]' : 'bg-[color:var(--muted-2)]'
           }`}
           aria-hidden
           title={!remote ? 'This machine' : connected ? 'Connected' : 'Not connected'}

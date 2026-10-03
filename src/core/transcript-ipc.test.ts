@@ -8,7 +8,7 @@ import os from 'os'
 import path from 'path'
 import { fakePlatform } from './platform-fake'
 import { initPlatform, resetPlatformForTests } from './platform'
-import { registerTranscriptIpc } from './transcript-ipc'
+import { readChatTranscript, registerTranscriptIpc } from './transcript-ipc'
 import { rememberGrokSessionDir } from './grok-session'
 import { IPC } from '../shared/ipc'
 import type { ChatTranscriptResult, TranscriptLine } from '../shared/types'
@@ -270,5 +270,325 @@ describe('registerTranscriptIpc — transcript presence', () => {
       registerTranscriptIpc()
       expect(await exists(SID, undefined, 'node-1')).toBe('present')
     })
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// Paged chat reads — the trailing optional `page` argument. Absent = the legacy read (every test
+// above), present = one byte window plus the paging fields.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+describe('registerTranscriptIpc — paged chat reads', () => {
+  const paged = (page: unknown, nodeId?: string, agentId?: string) =>
+    f.handlers[IPC.chatReadTranscript](
+      SID,
+      CWD,
+      undefined,
+      nodeId,
+      agentId,
+      page
+    ) as Promise<ChatTranscriptResult>
+
+  const bigBody = (n: number): string => {
+    const out: object[] = []
+    for (let i = 0; i < n; i++) out.push(i % 2 ? assistantLine(`a${i} ${'x'.repeat(200)}`) : userLine(`u${i} ${'y'.repeat(200)}`))
+    return lines(...out)
+  }
+
+  it('readChatTranscript is what the IPC handler serves (same result for the same query)', async () => {
+    writeTranscript(
+      lines(
+        userLine('merhaba'),
+        { type: 'assistant', effort: 'xhigh', message: { model: 'claude-opus-5-5', content: [{ type: 'text', text: 'selam' }] } }
+      )
+    )
+    registerTranscriptIpc()
+    const q = { sessionId: SID, cwd: CWD }
+    for (const page of [undefined, { maxBytes: 65536 }]) {
+      const viaIpc = await paged(page)
+      const direct = await readChatTranscript(q, page, {})
+      expect(direct).toStrictEqual(viaIpc)
+    }
+    const pagedRes = await readChatTranscript(q, { maxBytes: 65536 }, {})
+    expect(pagedRes.model).toBe('claude-opus-5-5')
+    expect(pagedRes.effort).toBe('xhigh')
+  })
+
+  it('the legacy (unpaged) result gains no model/effort keys', async () => {
+    writeTranscript(
+      lines({ type: 'assistant', effort: 'high', message: { model: 'claude-opus-5', content: [{ type: 'text', text: 'x' }] } })
+    )
+    registerTranscriptIpc()
+    const res = await chat()
+    expect(Object.keys(res).sort()).toEqual(['found', 'messages'])
+  })
+
+  it('legacy (no page) result carries none of the paging fields', async () => {
+    writeTranscript(lines(userLine('merhaba')))
+    registerTranscriptIpc()
+    const res = await chat()
+    expect(Object.keys(res).sort()).toEqual(['found', 'messages'])
+    expect(res.messages[0]).not.toHaveProperty('key')
+  })
+
+  it('reads only the newest window, keyed, with a cursor to page back to the start', async () => {
+    const body = bigBody(1000) // ~220 KB
+    const p = writeTranscript(body)
+    registerTranscriptIpc()
+    const first = await paged({ maxBytes: 65536 })
+    expect(first.found).toBe(true)
+    expect(first.messages.length).toBeGreaterThan(0)
+    expect(first.messages.length).toBeLessThan(1000)
+    expect(typeof first.olderCursor).toBe('number')
+    expect(first.unmatchedResults).toEqual([])
+    const all = [...first.messages]
+    let cursor = first.olderCursor
+    while (cursor !== null && cursor !== undefined) {
+      const older = await paged({ before: cursor, maxBytes: 65536 })
+      expect(older.olderCursor === null || older.olderCursor! < cursor).toBe(true)
+      all.unshift(...older.messages)
+      cursor = older.olderCursor
+    }
+    expect(all.length).toBe(1000)
+    // Keys are unique absolute offsets of real line starts.
+    const text = fs.readFileSync(p)
+    for (const m of all) expect(m.key === 0 || text[m.key! - 1] === 0x0a).toBe(true)
+    expect(new Set(all.map((m) => m.key)).size).toBe(1000)
+  })
+
+  // A pasted screenshot is a `type:user` line carrying base64 image data, routinely far bigger than
+  // one page (measured on a real host: 378 lines > 256 KB in 30 days, 133 of the > 512 KB ones
+  // image-bearing user records). A window with no complete line in it must GROW, not skip it.
+  it('pages back THROUGH a line bigger than the window — the big record is shown, not skipped', async () => {
+    const big = userLine(`screenshot ${'i'.repeat(600 * 1024)}`)
+    writeTranscript(lines(userLine('before'), big, assistantLine('after 1'), assistantLine('after 2')))
+    registerTranscriptIpc()
+    const seen: string[] = []
+    let res = await paged({ maxBytes: 65536 })
+    for (let guard = 0; guard < 50; guard++) {
+      seen.unshift(...res.messages.map((m) => (m.parts[0] as { text: string }).text.slice(0, 10)))
+      if (res.olderCursor === null || res.olderCursor === undefined) break
+      res = await paged({ before: res.olderCursor, maxBytes: 65536 })
+    }
+    expect(seen).toEqual(['before', 'screenshot', 'after 1', 'after 2'])
+    // The internal flag never leaks onto the wire.
+    expect(res).not.toHaveProperty('noCompleteLine')
+  })
+
+  it('a line bigger than the 5 MB cap is the ONLY thing ever skipped, and paging still ends', async () => {
+    const huge = userLine(`h${'z'.repeat(5 * 1024 * 1024 + 10)}`)
+    writeTranscript(lines(userLine('oldest'), huge, assistantLine('newest')))
+    registerTranscriptIpc()
+    const seen: string[] = []
+    let res = await paged({ maxBytes: 65536 })
+    for (let guard = 0; guard < 50; guard++) {
+      seen.unshift(...res.messages.map((m) => (m.parts[0] as { text: string }).text))
+      if (res.olderCursor === null || res.olderCursor === undefined) break
+      res = await paged({ before: res.olderCursor, maxBytes: 65536 })
+    }
+    expect(seen).toEqual(['oldest', 'newest'])
+  })
+
+  it('an unresolvable transcript is still not-found, with no cursor to follow', async () => {
+    registerTranscriptIpc()
+    expect(await paged({})).toEqual({ messages: [], found: false, olderCursor: null, unmatchedResults: [] })
+  })
+
+  it('rejects a forged `before` instead of reading some other window', async () => {
+    writeTranscript(lines(userLine('merhaba')))
+    registerTranscriptIpc()
+    await expect(paged({ before: -5 })).rejects.toThrow(/Invalid transcript page/)
+    await expect(paged({ before: '1; id' })).rejects.toThrow(/Invalid transcript page/)
+  })
+
+  it('grok does not page: its whole read, olderCursor null', async () => {
+    const GROK_SID = '01a06126-b981-73f1-8b68-4547e4d7da84'
+    const dir = path.join(home, '.grok', 'sessions', 'proj', GROK_SID)
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'chat_history.jsonl'), lines({ type: 'user', content: 'hey grok' }))
+    rememberGrokSessionDir(GROK_SID, dir)
+    registerTranscriptIpc()
+    const res = (await f.handlers[IPC.chatReadTranscript](
+      GROK_SID, CWD, undefined, undefined, 'grok', { maxBytes: 65536 }
+    )) as ChatTranscriptResult
+    expect(res.found).toBe(true)
+    expect(res.olderCursor).toBeNull()
+    expect(res.unmatchedResults).toEqual([])
+    expect(JSON.stringify(res.messages)).toContain('hey grok')
+  })
+
+  describe('the remote leg', () => {
+    it('asks the host for the RANGED window and parses it like the local one', async () => {
+      writeTranscript(lines(assistantLine('the LOCAL machine')))
+      const body = Buffer.from(lines(userLine('older'), assistantLine('on the HOST')))
+      const asked: unknown[] = []
+      registerTranscriptIpc({
+        readRemote: async () => {
+          throw new Error('the paged read must not pull the legacy 5 MB tail')
+        },
+        readRemotePage: async (_q, page) => {
+          asked.push(page)
+          const start = 10
+          return { ok: true, data: body.subarray(start), start }
+        }
+      })
+      const res = await paged({ maxBytes: 70000 }, 'nt-1')
+      expect(asked).toEqual([{ before: null, maxBytes: 70000 }])
+      expect(res.found).toBe(true)
+      expect(res.messages.map((m) => m.role)).toEqual(['assistant'])
+      expect(JSON.stringify(res.messages)).toContain('on the HOST')
+      expect(res.olderCursor).toBe(body.indexOf(0x0a) + 1)
+    })
+
+    it('a failed host read is not-found — never an empty conversation, never the local disk', async () => {
+      writeTranscript(lines(assistantLine('the LOCAL machine')))
+      registerTranscriptIpc({ readRemotePage: async () => ({ ok: false }) })
+      expect(await paged({}, 'nt-1')).toEqual({
+        messages: [],
+        found: false,
+        olderCursor: null,
+        unmatchedResults: [],
+        unreadable: true
+      })
+    })
+
+    it('grows a window that holds no complete line by re-asking the HOST for the same end', async () => {
+      const body = Buffer.from(lines(userLine('small'), userLine(`img ${'b'.repeat(300 * 1024)}`)))
+      const asked: Array<{ before: number | null; maxBytes: number }> = []
+      registerTranscriptIpc({
+        readRemotePage: async (_q, page) => {
+          asked.push(page)
+          const end = page.before === null ? body.length : page.before
+          const ws = Math.max(0, end - page.maxBytes)
+          const start = ws > 0 ? ws - 1 : 0
+          return { ok: true, data: body.subarray(start, end), start }
+        }
+      })
+      const res = await paged({ maxBytes: 65536 }, 'nt-1')
+      expect(asked.map((a) => a.maxBytes)).toEqual([65536, 262144, 1048576])
+      expect(asked.every((a) => a.before === null)).toBe(true)
+      expect(res.messages.map((m) => (m.parts[0] as { text: string }).text.slice(0, 5))).toEqual(['small', 'img b'])
+      expect(res.olderCursor).toBeNull()
+    })
+
+    it('a failed host read while growing is not-found — never the skipped-line answer', async () => {
+      const body = Buffer.from(lines(userLine(`img ${'b'.repeat(300 * 1024)}`)))
+      let n = 0
+      registerTranscriptIpc({
+        readRemotePage: async (_q, page) => {
+          if (n++ > 0) return { ok: false }
+          const start = body.length - page.maxBytes - 1
+          return { ok: true, data: body.subarray(start), start }
+        }
+      })
+      expect(await paged({ maxBytes: 65536 }, 'nt-1')).toEqual({
+        messages: [],
+        found: false,
+        olderCursor: null,
+        unmatchedResults: [],
+        unreadable: true
+      })
+    })
+
+    it('null means "not a remote session" — the local path pages', async () => {
+      writeTranscript(lines(assistantLine('local')))
+      registerTranscriptIpc({ readRemotePage: async () => null })
+      const res = await paged({}, 'nt-1')
+      expect(res.messages[0].parts[0]).toMatchObject({ text: 'local' })
+      expect(res.olderCursor).toBeNull()
+    })
+  })
+})
+
+describe('readChatTranscript — remoteOnly (a node the host KNOWS is remote)', () => {
+  it('never takes the local leg when the remote leg cannot resolve it (unmounted SSH node)', async () => {
+    writeTranscript(lines(assistantLine('the LOCAL machine')))
+    const pathFor = vi.fn(() => undefined)
+    for (const readRemotePage of [async () => null, undefined]) {
+      const res = await readChatTranscript(
+        { sessionId: SID, cwd: CWD, nodeId: 'nt-1', agentId: 'claude', remoteOnly: true },
+        {},
+        { pathFor, ...(readRemotePage ? { readRemotePage } : {}) }
+      )
+      expect(res).toEqual({ messages: [], found: false, olderCursor: null, unmatchedResults: [], unreadable: true })
+    }
+    expect(pathFor).not.toHaveBeenCalled()
+  })
+  it('a remote grok node is not read from this machine either', async () => {
+    const res = await readChatTranscript({ sessionId: SID, nodeId: 'nt-1', agentId: 'grok', remoteOnly: true }, {}, {})
+    expect(res).toMatchObject({ found: false, unreadable: true, messages: [] })
+  })
+  it('without remoteOnly a null remote leg still means "local session" (unchanged)', async () => {
+    writeTranscript(lines(assistantLine('local')))
+    const res = await readChatTranscript({ sessionId: SID, cwd: CWD, nodeId: 'nt-1' }, {}, { readRemotePage: async () => null })
+    expect(res.found).toBe(true)
+    expect(res.unreadable).toBeUndefined()
+  })
+})
+
+// ⌘M (the renderer's `chat:read-transcript`) never said which node was remote, so a mounted SSH
+// node whose host locate missed — or whose master was down — fell through to THIS machine's
+// resolver, cwd-newest fallback included: a wrong-machine, wrong-session read. The shell now
+// decides remoteness from its own records (`isRemoteNode`), never from anything the renderer sends.
+describe('registerTranscriptIpc — a node the SHELL knows is remote (isRemoteNode)', () => {
+  const pagedFor = (nodeId: string) =>
+    f.handlers[IPC.chatReadTranscript](SID, CWD, undefined, nodeId, 'claude', {}) as Promise<ChatTranscriptResult>
+  const exists = (nodeId: string) =>
+    f.handlers[IPC.transcriptExists](SID, undefined, nodeId) as Promise<string>
+  const notFound = { messages: [], found: false, olderCursor: null, unmatchedResults: [] }
+
+  it('host looked, no file (clean miss) → found:false, NOT unreadable, and no local read', async () => {
+    writeTranscript(lines(assistantLine('the LOCAL machine')))
+    const pathFor = vi.fn(() => undefined)
+    registerTranscriptIpc({ pathFor, isRemoteNode: () => true, readRemotePage: async () => ({ ok: false, absent: true }) })
+    expect(await pagedFor('nt-ssh')).toEqual(notFound)
+    expect(pathFor).not.toHaveBeenCalled()
+  })
+
+  it('master down (the remote leg cannot resolve a remote node) → unreadable, no local read', async () => {
+    writeTranscript(lines(assistantLine('the LOCAL machine')))
+    const pathFor = vi.fn(() => undefined)
+    registerTranscriptIpc({ pathFor, isRemoteNode: () => true, readRemotePage: async () => null })
+    expect(await pagedFor('nt-ssh')).toEqual({ ...notFound, unreadable: true })
+    expect(pathFor).not.toHaveBeenCalled()
+  })
+
+  it('a local node is unchanged: a null remote leg still reads this machine', async () => {
+    writeTranscript(lines(assistantLine('local')))
+    const isRemoteNode = vi.fn(() => false)
+    registerTranscriptIpc({ isRemoteNode, readRemotePage: async () => null })
+    const res = await pagedFor('nt-local')
+    expect(res.found).toBe(true)
+    expect(res.messages[0].parts[0]).toMatchObject({ text: 'local' })
+    expect(isRemoteNode).toHaveBeenCalledWith('nt-local')
+  })
+
+  it('the legacy unpaged read does not leak either', async () => {
+    writeTranscript(lines(assistantLine('the LOCAL machine')))
+    registerTranscriptIpc({ isRemoteNode: () => true, readRemote: async () => null })
+    expect(await chat('nt-ssh')).toEqual({ messages: [], found: false })
+  })
+
+  it('the find-bar index (claude:read-transcript) does not index this machine for a remote node', async () => {
+    writeTranscript(lines(assistantLine('the LOCAL machine')))
+    registerTranscriptIpc({ isRemoteNode: () => true, readRemote: async () => null })
+    expect(await search('nt-ssh')).toEqual([])
+  })
+
+  it('presence of a remote node the remote leg could not ask is unknown — never a local scan', async () => {
+    writeTranscript(lines(assistantLine('the LOCAL machine')))
+    registerTranscriptIpc({ isRemoteNode: () => true, remoteExists: async () => null })
+    expect(await exists('nt-ssh')).toBe('unknown')
+  })
+})
+
+describe('readChatTranscript — the phone path (remoteOnly) tells a clean miss from a failure', () => {
+  it('a clean miss on the host is found:false without unreadable', async () => {
+    writeTranscript(lines(assistantLine('the LOCAL machine')))
+    const res = await readChatTranscript(
+      { sessionId: SID, cwd: CWD, nodeId: 'nt-1', agentId: 'claude', remoteOnly: true },
+      {},
+      { readRemotePage: async () => ({ ok: false, absent: true }) }
+    )
+    expect(res).toEqual({ messages: [], found: false, olderCursor: null, unmatchedResults: [] })
   })
 })

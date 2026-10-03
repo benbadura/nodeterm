@@ -38,8 +38,6 @@ export async function locateCodex(sessionId: string): Promise<string | undefined
   return undefined
 }
 
-// gemini: ~/.gemini/tmp/<proj>/chats/session-*.jsonl — find the file whose first-line
-// header sessionId equals the requested sessionId.
 /**
  * grok's transcript, from the session directory a hook told us about — DERIVED, never searched.
  *
@@ -68,8 +66,36 @@ export async function locateGrok(sessionId: string): Promise<string | undefined>
   }
 }
 
+// gemini: <home>/.gemini/tmp/<proj>/chats/session-*.jsonl — find the file whose first-line
+// header sessionId equals the requested sessionId. `<home>` is `GEMINI_CLI_HOME` when set — the
+// CLI's own relocation (`homedir()` in its bundle) — else the OS home.
+//
+// Only the header is read: the ⌘M chat view locates on every live reload, and a session file grows
+// with every rewrite of a message, so reading every candidate whole cost the size of the project's
+// entire history per hook event. A header longer than the bounded head (it never is in practice —
+// sessionId comes first) falls back to the whole-file read, so nothing that resolved before stops
+// resolving.
+const GEMINI_HEAD_BYTES = 64 * 1024
+
+async function geminiHeaderLine(p: string): Promise<string> {
+  // One handle for both reads: the fallback reads the SAME file the head came from, never the path
+  // again (which could name a different file by then).
+  const fh = await fs.promises.open(p, 'r')
+  try {
+    const buf = Buffer.alloc(GEMINI_HEAD_BYTES)
+    const { bytesRead } = await fh.read(buf, 0, buf.length, 0)
+    const nl = buf.subarray(0, bytesRead).indexOf(0x0a)
+    if (nl >= 0) return buf.toString('utf8', 0, nl)
+    if (bytesRead < buf.length) return buf.toString('utf8', 0, bytesRead)
+    // A positional read does not move the file position, so this reads the whole file from 0.
+    return (await fh.readFile('utf8')).split('\n', 1)[0]
+  } finally {
+    await fh.close()
+  }
+}
+
 export async function locateGemini(sessionId: string): Promise<string | undefined> {
-  const tmp = path.join(os.homedir(), '.gemini', 'tmp')
+  const tmp = path.join(process.env.GEMINI_CLI_HOME || os.homedir(), '.gemini', 'tmp')
   let projects: string[]
   try {
     projects = await fs.promises.readdir(tmp)
@@ -88,8 +114,7 @@ export async function locateGemini(sessionId: string): Promise<string | undefine
       if (!f.endsWith('.jsonl')) continue
       const p = path.join(chats, f)
       try {
-        const head = (await fs.promises.readFile(p, 'utf8')).split('\n', 1)[0]
-        const o = JSON.parse(head) as { sessionId?: string }
+        const o = JSON.parse(await geminiHeaderLine(p)) as { sessionId?: string }
         if (o.sessionId === sessionId) return p
       } catch {
         /* keep looking */

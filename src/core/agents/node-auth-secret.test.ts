@@ -126,6 +126,46 @@ describe('node-auth secret behind CorePlatform', () => {
     expect(fs.existsSync(path.join(dir, 'node-auth-key.bin'))).toBe(false)
   })
 
+  // Issue #1088 — Electron 42 on a Linux session with no Secret Service/kwallet: backend
+  // `basic_text`, isEncryptionAvailable() false, encryptString THROWS. Measured under xvfb.
+  const noKeyring = (): Buffer => {
+    throw new Error('Error while encrypting the text provided to safeStorage.encryptString. Encryption is not available.')
+  }
+  const cannotUnseal = (): Buffer => {
+    throw new Error('Error while decrypting the ciphertext provided to safeStorage.decryptString. Decryption is not available.')
+  }
+
+  it('Desktop without a usable keyring: stores the secret raw 0600 instead of running legacy forever', async () => {
+    initPlatform(fakePlatform({ userDataDir: dir, sealSecret: noKeyring, unsealSecret: cannotUnseal }))
+    const first = await loadOrCreateNodeAuthSecret()
+    expect(first.byteLength).toBe(32)
+    const file = path.join(dir, 'node-auth-key.bin')
+    expect(fs.readFileSync(file).equals(first)).toBe(true)
+    expect(mode(file)).toBe(0o600)
+    expect(fs.existsSync(path.join(dir, 'node-auth-key.json'))).toBe(false)
+
+    // Restart-stable: the next boot (still no keyring) reads the same secret, so tokens keep verifying.
+    resetNodeAuthSecretForTests()
+    expect((await loadOrCreateNodeAuthSecret()).equals(first)).toBe(true)
+
+    // And a keyring that appears later does not rotate it (the secret signs codex thread records).
+    resetPlatformForTests()
+    initPlatform(fakePlatform({ userDataDir: dir, sealSecret: xor, unsealSecret: xor }))
+    resetNodeAuthSecretForTests()
+    expect((await loadOrCreateNodeAuthSecret()).equals(first)).toBe(true)
+    expect(fs.existsSync(path.join(dir, 'node-auth-key.json'))).toBe(false)
+  })
+
+  it('Desktop: a SEALED key that cannot be unsealed right now still rejects — never replaced by a raw one', async () => {
+    const file = path.join(dir, 'node-auth-key.json')
+    fs.writeFileSync(file, sealedBody(randomBytes(32)), { mode: 0o600 })
+    const before = fs.readFileSync(file, 'utf8')
+    initPlatform(fakePlatform({ userDataDir: dir, sealSecret: noKeyring, unsealSecret: cannotUnseal }))
+    await expect(loadOrCreateNodeAuthSecret()).rejects.toThrow(/Decryption is not available/)
+    expect(fs.readFileSync(file, 'utf8')).toBe(before)
+    expect(fs.existsSync(path.join(dir, 'node-auth-key.bin'))).toBe(false)
+  })
+
   it('reject-then-retry: a rejected load clears the single-flight cache so a later healthy call succeeds', async () => {
     // The whole fail-open series leans on this: if a rejection LEFT the rejected promise cached, the
     // shell's catch would swallow it once and every subsequent boot-path retry would re-await the same

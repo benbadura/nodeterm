@@ -31,6 +31,17 @@ describe('DEFAULT_SETTINGS', () => {
     expect(DEFAULT_SETTINGS.autoHideFinishedSubagentCards).toBe(false)
   })
 
+  it('ships copy-on-select OFF, so an update never starts rewriting the clipboard', () => {
+    // Issue #759: opt-in on purpose — silently changing what is on the clipboard is a surprise.
+    expect(DEFAULT_SETTINGS.copyOnSelect).toBe(false)
+  })
+
+  it('does not offer to close a project after its last session by default (issue #848)', () => {
+    // Opt-in: not everyone closes their last session when they are done with a project, so an
+    // install that never turns this on must never see the question.
+    expect(DEFAULT_SETTINGS.offerCloseProjectOnLastSession).toBe(false)
+  })
+
   it('keeps common identifier and path characters inside terminal word selections', () => {
     expect(DEFAULT_SETTINGS.terminalWordSeparator).not.toMatch(/[-_/.]/)
   })

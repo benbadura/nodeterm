@@ -73,9 +73,9 @@ const licenseDir = path.join(repoRoot, 'resources', 'licenses')
 const markerFile = path.join(outDir, '.tmux-build-version')
 /** Bump when the build RECIPE changes in a way the pins above do not capture, so a binary built by
  *  the old recipe on the (self-hosted, persistent) release runner is rebuilt instead of reused.
- *  r2 = issue #896 (pipe2 weak import); r3 = force tmux's compat functions even when Rosetta
- *  lets the release runner execute the Intel configure probes. */
-const RECIPE_REV = 'r3'
+ *  r2 = issue #896 (pipe2 weak import); r3 = strtonum weak import, fixed twice in parallel
+ *  (force tmux's compat probes under Rosetta; rename strtonum via CPPFLAGS); r4 = both together. */
+const RECIPE_REV = 'r4'
 const MARKER = `tmux-${TMUX_VERSION} libevent-${LIBEVENT_VERSION} utf8proc-${UTF8PROC_VERSION} universal(${ARCHS.map((a) => a.arch).join('+')}) ${RECIPE_REV}\n`
 
 const force = process.argv.includes('--force')
@@ -211,7 +211,6 @@ function buildArch({ arch, triple, minOs }, work, tarballs) {
       // for the next one nobody listed here.
       'ac_cv_func_pipe2=no',
       'ac_cv_func_accept4=no',
-      'ac_cv_func_strtonum=no',
       ...hostArg
     ],
     { cwd: evDir, env }
@@ -244,7 +243,12 @@ function buildArch({ arch, triple, minOs }, work, tarballs) {
   // link is static with no -static flag and no chance of picking up a system libevent.dylib.
   const tmuxEnv = {
     ...env,
-    CPPFLAGS: `-I${path.join(prefix, 'include')}`,
+    // tmux tests strtonum with AC_RUN_IFELSE, which has no cache variable to pre-answer. On an
+    // Apple Silicon runner executing Node under Rosetta, the x86_64 probe runs successfully and
+    // selects the new SDK symbol even for our 10.15 deployment target. Rename every reference so
+    // the probe cannot link, tmux adds compat/strtonum.c, and that definition plus every caller
+    // resolve to the private bundled symbol instead of weak-importing libSystem's `_strtonum`.
+    CPPFLAGS: `-I${path.join(prefix, 'include')} -Dstrtonum=nodeterm_strtonum`,
     LDFLAGS: `${flags} -L${path.join(prefix, 'lib')}`,
     // Pre-answer tmux's PKG_CHECK_MODULES for utf8proc. That macro is invoked with NO
     // action-if-not-found, so with pkg-config disabled it would abort configure outright

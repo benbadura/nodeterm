@@ -15,6 +15,7 @@ export const TERMINAL_RESET_KEYS = [
   'fontFamily',
   'fontSize',
   'terminalWordSeparator',
+  'copyOnSelect',
   'fontWeight',
   'fontWeightBold',
   'drawBoldTextInBrightColors',
@@ -37,9 +38,13 @@ export const APPEARANCE_RESET_KEYS = [
   'uiScale',
   'tabBarHeight',
   'accent',
+  'desktopWallpaper',
   'hiddenNodeMenuItems',
   'hiddenHeaderButtons',
   'showResumeCard',
+  'canvasDots',
+  'glassTint',
+  'glassBlurWhileMoving',
   'windowTitleActiveSession'
 ] as const satisfies readonly (keyof Settings)[]
 

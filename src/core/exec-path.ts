@@ -274,3 +274,15 @@ export function findExecutableSync(bin: string, fallbacks: string[] = []): strin
   }
   return null
 }
+
+/**
+ * The key an environment object ALREADY holds its search path under. POSIX spells it `PATH`; a
+ * spread of Windows' `process.env` spells it `Path` (the OS is case-insensitive, a plain object is
+ * not). Writing `PATH` onto a Windows copy therefore does not update the path — it adds a second,
+ * case-insensitively equal variable beside it. An exact `PATH` wins when present; no key at all ⇒
+ * `PATH`.
+ */
+export function envPathKey(env: Record<string, string | undefined>): string {
+  if ('PATH' in env) return 'PATH'
+  return Object.keys(env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH'
+}

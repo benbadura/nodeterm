@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { mapUsageLimits, parseResetTimestamp } from './claude-usage-map'
+import {
+  HOLD_LAST_GOOD_MAX_MS,
+  emptyUsage,
+  holdLastGood,
+  mapUsageLimits,
+  parseResetTimestamp,
+  usageFromPayload
+} from './claude-usage-map'
 import { findLimit, limitLabel, limitShortLabel } from '../../shared/usage-limits'
 
 /**
@@ -153,5 +160,72 @@ describe('parseResetTimestamp', () => {
     expect(parseResetTimestamp(null)).toBeNull()
     expect(parseResetTimestamp('')).toBeNull()
     expect(parseResetTimestamp('not a date')).toBeNull()
+  })
+})
+
+describe('holdLastGood', () => {
+  const NOW = 10_000_000
+  const good = usageFromPayload(
+    { limits: [{ kind: 'session', group: 'session', percent: 40, resets_at: (NOW + 3_600_000) / 1000 }] },
+    'me@example.com',
+    NOW - 60_000
+  )
+  const failed = (extra: Partial<ReturnType<typeof emptyUsage>> = {}) => ({
+    ...emptyUsage('me@example.com', NOW, 'error'),
+    ...extra
+  })
+
+  it('passes a good read straight through', () => {
+    const next = usageFromPayload({ limits: [] }, 'me@example.com', NOW)
+    expect(holdLastGood(good, next, NOW)).toBe(next)
+  })
+
+  it('keeps the last numbers when the next read fails, marked as an error with their own age', () => {
+    const held = holdLastGood(good, failed({ rateLimited: true }), NOW)
+    expect(held.status).toBe('error')
+    expect(held.limits).toEqual(good.limits)
+    expect(held.session).toEqual(good.session)
+    // "Updated N ago" must describe the NUMBERS, not the failed read.
+    expect(held.updatedAt).toBe(good.updatedAt)
+    expect(held.rateLimited).toBe(true)
+  })
+
+  it('does not claim a rate limit the latest failure did not report', () => {
+    const once = holdLastGood(good, failed({ rateLimited: true }), NOW)
+    const twice = holdLastGood(once, failed(), NOW)
+    expect(twice.limits).toEqual(good.limits)
+    expect(twice.rateLimited).toBeUndefined()
+  })
+
+  it('keeps holding across repeated failures, aged from the last GOOD read', () => {
+    let u = holdLastGood(good, failed({ rateLimited: true }), NOW)
+    u = holdLastGood(u, failed({ rateLimited: true }), NOW + 60_000)
+    expect(u.limits).toEqual(good.limits)
+    const expired = holdLastGood(u, failed(), good.updatedAt + HOLD_LAST_GOOD_MAX_MS + 1)
+    expect(expired.limits).toEqual([])
+  })
+
+  it('has nothing to hold without an earlier snapshot that carried numbers', () => {
+    const next = failed()
+    expect(holdLastGood(undefined, next, NOW)).toBe(next)
+    expect(holdLastGood(emptyUsage('me@example.com', NOW, 'error'), next, NOW)).toBe(next)
+    expect(holdLastGood(emptyUsage(null, NOW, 'unavailable'), next, NOW)).toBe(next)
+  })
+
+  it('never lends one account’s numbers to another', () => {
+    const next = failed({ email: 'someone-else@example.com' })
+    expect(holdLastGood(good, next, NOW)).toBe(next)
+  })
+
+  it('drops the snapshot once one of its windows has reset — those numbers are provably wrong', () => {
+    const next = failed()
+    expect(holdLastGood(good, next, NOW + 3_600_000)).toBe(next)
+  })
+
+  it('does not hold over a logged-out or in-flight answer', () => {
+    for (const status of ['unavailable', 'fetching'] as const) {
+      const next = emptyUsage('me@example.com', NOW, status)
+      expect(holdLastGood(good, next, NOW)).toBe(next)
+    }
   })
 })

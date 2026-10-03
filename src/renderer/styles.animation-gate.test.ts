@@ -30,7 +30,11 @@ const PLAY_STATE = 'animation-play-state: var(--nt-anim-state)'
  * rule without removing the entry fails below.
  */
 const STATIC_WHEN_IDLE: Record<string, string> = {
-  'nt-unread-glow': 'rests at opacity 0; pausing could hide the "finished while you were away" glow',
+  // Bounded (4 cycles) and resting lit since the second CPU/GPU pass; the entry stays for the same
+  // reason as the working glow's.
+  'nt-unread-glow': 'held lit rather than frozen mid-cycle, alongside its two siblings',
+  // Bounded (4 cycles) since the CPU/GPU pass, so the infinite scan no longer sees it; the entry
+  // stays because its idle and Reduce Motion rules still hold it lit mid-pulse.
   'nt-working-glow': 'held lit rather than frozen mid-cycle, alongside its two siblings',
   'nt-attention-glow': 'held lit rather than frozen mid-cycle, alongside its two siblings'
 }
@@ -39,6 +43,20 @@ function readStyles(): string {
   // Normalized per the repo's line-endings rule: `.gitattributes` only applies on re-checkout, so
   // a tree cloned before it still has CRLF working files and every `\n` slice below would miss.
   return fs.readFileSync(STYLES, 'utf8').replace(/\r\n/g, '\n')
+}
+
+/** The body of the first rule whose selector is exactly `sel` (up to its closing brace). */
+function ruleBody(css: string, sel: string): string {
+  const i = css.indexOf(sel + ' {')
+  expect(i, `no rule for ${sel}`).toBeGreaterThanOrEqual(0)
+  return css.slice(i, css.indexOf('}', i))
+}
+
+/** The body of `@keyframes name`, up to its closing brace at column 0. */
+function keyframesBody(css: string, name: string): string {
+  const i = css.indexOf(`@keyframes ${name}`)
+  expect(i, `no @keyframes ${name}`).toBeGreaterThanOrEqual(0)
+  return css.slice(i, css.indexOf('\n}', i))
 }
 
 /** Every `animation:` shorthand in the file that runs forever, with its line number. */
@@ -98,6 +116,38 @@ describe('idle-window animation gate', () => {
       )
       expect(selector, `${keyframe} is allowlisted (${reason}) but nothing sets animation: none`)
         .not.toBeNull()
+    }
+  })
+
+  it('the working glow is bounded and rests at the static-lit opacity', () => {
+    // An infinite pulse kept the compositor at display rate for a whole agent turn while the
+    // window was focused (measured +3 points CPU, ~25 style recalcs/s per visible working node).
+    // Four cycles keep the "it just started working" signal; the rest is the idle gate's 0.7.
+    const rule = ruleBody(css, '.react-flow__node:has(.term-node.working)::after')
+    expect(rule).toMatch(/animation:\s*nt-working-glow\s+2\.6s\s+ease-in-out\s+4\b/)
+    expect(rule).not.toMatch(/infinite/)
+    expect(rule).toMatch(/opacity:\s*0\.7/)
+    const kf = keyframesBody(css, 'nt-working-glow')
+    // Starts and ends at the resting value, so the settle is seamless.
+    expect(kf).toMatch(/0%,\s*100%\s*\{\s*opacity:\s*0\.7/)
+  })
+
+  it('the unread glow and the minimap working/unread beats are bounded and rest lit', () => {
+    // Infinite, these kept the compositor at display rate for as long as any node stayed unread
+    // (measured: ~120% -> ~26% idle renderer+GPU with every status animation paused).
+    const rule = ruleBody(css, '.react-flow__node:has(.term-node.unread)::after')
+    expect(rule).toMatch(/animation:\s*nt-unread-glow\s+2s\s+ease-in-out\s+4\b/)
+    expect(rule).toMatch(/opacity:\s*0\.85/)
+    expect(keyframesBody(css, 'nt-unread-glow')).toMatch(/0%,\s*100%\s*\{\s*opacity:\s*0\.85/)
+    for (const [sel, kf] of [
+      ['.minimap .mm-unread', 'mm-pulse-unread'],
+      ['.minimap .mm-working', 'mm-pulse-soft']
+    ]) {
+      // The selector also heads a shared stroke-width group rule; take the rule that animates.
+      const r = css.split(sel + ' {').slice(1).map((b) => b.slice(0, b.indexOf('}'))).find((b) => b.includes('animation:')) ?? ''
+      expect(r).toMatch(new RegExp(`animation:\\s*${kf}\\s+[\\d.]+s\\s+ease-in-out\\s+4\\b`))
+      expect(r).not.toMatch(/infinite/)
+      expect(keyframesBody(css, kf)).toMatch(/0%,\s*100%\s*\{\s*stroke-opacity:\s*1\b/)
     }
   })
 

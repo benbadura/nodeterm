@@ -14,6 +14,7 @@
 // a capped read lands mid-multibyte routinely, and only base64 keeps the byte accounting exact.
 import { type BrowserWindow } from 'electron'
 import { IPC } from '../shared/ipc'
+import { subagentReplay } from '../core/subagent-replay'
 import { formatSubagentChunk, splitCompleteLines, SUBAGENT_READ_CAP } from '../core/subagent-tail'
 import type { RemoteFile, RemoteFileRef } from './remote-ssh/remote-file'
 
@@ -35,9 +36,14 @@ export interface RemoteSubagentTail {
 export function createRemoteSubagentTail(win: BrowserWindow, remoteFile: RemoteFile): RemoteSubagentTail {
   const tracked = new Map<string, Tracked>()
   let timer: ReturnType<typeof setInterval> | null = null
+  // Where each untracked entry stopped, so a resumed Claude subagent (same agent_id, second
+  // SubagentStart — see core/subagent-tail.ts) continues instead of re-reading from byte 0.
+  const resumeAt = new Map<string, { path: string; offset: number }>()
 
   const send = (toolUseId: string, chunk: string): void => {
-    if (chunk && !win.isDestroyed()) win.webContents.send(IPC.agentSubagentActivity, { toolUseId, chunk })
+    if (!chunk) return
+    subagentReplay.touch(toolUseId) // a streaming subagent is alive: keep it in the reload replay
+    if (!win.isDestroyed()) win.webContents.send(IPC.agentSubagentActivity, { toolUseId, chunk })
   }
 
   // One async read+stream pass. Fail-open: RemoteFile returns empty on error. The `reading`
@@ -71,13 +77,20 @@ export function createRemoteSubagentTail(win: BrowserWindow, remoteFile: RemoteF
   return {
     track(toolUseId, ref) {
       if (!ref || tracked.has(toolUseId)) return
-      tracked.set(toolUseId, { ref, offset: 0, reading: false, carry: null })
+      const resumed = resumeAt.get(toolUseId)
+      resumeAt.delete(toolUseId)
+      const offset = resumed?.path === ref.path ? resumed.offset : 0
+      tracked.set(toolUseId, { ref, offset, reading: false, carry: null })
       void readOne(toolUseId, tracked.get(toolUseId)!) // immediate first read
       if (!timer) timer = setInterval(tick, POLL_MS)
     },
     untrack(toolUseId) {
       const e = tracked.get(toolUseId)
       tracked.delete(toolUseId)
+      if (e) {
+        resumeAt.set(toolUseId, { path: e.ref.path, offset: e.offset })
+        if (resumeAt.size > 256) resumeAt.delete(resumeAt.keys().next().value!)
+      }
       // The transcript is complete on untrack — a held-back carry is a final line missing
       // only its trailing newline; flush instead of dropping it.
       if (e?.carry?.length) {

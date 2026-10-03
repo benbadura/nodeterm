@@ -56,3 +56,14 @@ describe('kanban source registry', () => {
     expect(() => kanbanSource('nope' as never)).toThrow()
   })
 })
+
+// A saved view stores the source filter in the shared file, and its sanitizer (which core runs)
+// cannot import this registry. So the shared list is a second spelling — pinned here, so a source
+// added to the registry without it is refused on load instead of silently dropped from views.
+describe('saved-view source parity', () => {
+  it('KANBAN_VIEW_SOURCES is exactly "all" plus the registry', async () => {
+    const { KANBAN_VIEW_SOURCES } = await import('@shared/kanban-views')
+    const { KANBAN_SOURCES } = await import('./kanbanSources')
+    expect([...KANBAN_VIEW_SOURCES].sort()).toEqual(['all', ...KANBAN_SOURCES.map((s) => s.id)].sort())
+  })
+})

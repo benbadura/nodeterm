@@ -1,0 +1,13 @@
+{
+  "session_id": "5f0c2a9e-3b7d-4e61-9a24-7c1d8e0f4b32",
+  "transcript_path": "/home/demo/.claude/projects/-srv-demo/5f0c2a9e-3b7d-4e61-9a24-7c1d8e0f4b32.jsonl",
+  "cwd": "/srv/demo",
+  "permission_mode": "plan",
+  "hook_event_name": "PermissionRequest",
+  "tool_name": "ExitPlanMode",
+  "tool_input": {
+    "plan": "# Plan: add a chat view to the phone\n\n1. **Core** — export `readChatTranscript` and report `model` / `effort`.\n2. **Fixtures** — golden files the Swift port is locked to.\n\n```ts\nconst page = await readChatTranscript(q, { maxBytes: 262144 }, deps)\n```\n\n- Risks: a line larger than the window (grow ×4).",
+    "planFilePath": "/home/demo/.claude/plans/demo.md"
+  },
+  "permission_suggestions": []
+}

@@ -1,3 +1,5 @@
+import { AGENT_CONFIG } from '@shared/agents/config'
+import { SYSTEM_COLORS } from './palette'
 // Walking agent mascots — desktop canvas RUNNING badge (docs/mascot-sprites.md).
 //
 // The Claude critter is drawn at runtime from a terminal quadrant-block pixel map (no image
@@ -13,8 +15,8 @@
 // Codex uses a real spritesheet asset (pet-codex.webp) imported by the component; here we only
 // export its frame geometry so the CSS animation and the component agree on the numbers.
 
-/** Anthropic coral / clay — rgb(217, 120, 87) (= 0.85, 0.47, 0.34). */
-export const CORAL = 'rgb(217, 120, 87)'
+/** Anthropic coral / clay — the Claude brand colour, from the one agent table. */
+export const CORAL = AGENT_CONFIG.claude.color
 
 /** Sub-pixel grid of one Claude frame: 9 quadrant cols × 2 = 18, 3 rows × 2 = 6. */
 export const SUB_COLS = 18
@@ -139,7 +141,7 @@ export const CLAUDE_MASCOT = {
 // the Claude sprite above, so the HUD stays plain-DOM with no per-pixel JS.
 
 /** systemGreen — matches agent-notch's NSColor.systemGreen done blob. */
-export const DONE_GREEN = 'rgb(48, 209, 88)'
+export const DONE_GREEN = SYSTEM_COLORS.dark.green
 
 /** 7×7 filled-circle mask (1 = green pixel). */
 export const DONE_BLOB_ART: readonly (readonly number[])[] = [
@@ -182,7 +184,7 @@ export const DONE_BLOB = {
 
 // --- Codex pet spritesheet geometry (asset imported by the component) ----------------------
 
-/** pet-codex.webp layout: 8 cols × 9 rows of 192×208 frames; walk = the first row. */
+/** pet-codex.webp layout: 8 cols × 9 rows of 192×208 frames; first-row cycle = six populated frames, then two empty cells. */
 export const CODEX_MASCOT = {
   cols: 8,
   rows: 9,

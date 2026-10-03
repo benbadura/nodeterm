@@ -1,0 +1,27 @@
+[
+  {
+    "before": null,
+    "maxBytes": 262144,
+    "grownMaxBytes": 262144,
+    "start": 0,
+    "parse": {
+      "messages": [
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "capped"
+            }
+          ],
+          "at": 1790627717000,
+          "key": 446
+        }
+      ],
+      "olderCursor": null,
+      "unmatchedResults": [],
+      "model": "🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪",
+      "noCompleteLine": false
+    }
+  }
+]

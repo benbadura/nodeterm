@@ -34,7 +34,8 @@ function firstCwd(rawText: string): string {
 }
 
 export function extractEntryFields(rawText: string): { cwd: string; title: string; text: string } {
-  const lines = parseTranscriptLines(rawText)
+  // Pastes stay as recorded (no code fences in a title), as before the ⌘M view fenced them.
+  const lines = parseTranscriptLines(rawText, { expandPastes: false })
   const firstUser = lines.find((l) => l.role === 'user')
   const title = (firstUser?.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 80)
   let text = lines.map((l) => l.text).join('\n')
@@ -55,7 +56,10 @@ export function makeSnippet(text: string, query: string): string {
 export function searchEntries(
   entries: TranscriptIndexEntry[],
   query: string,
-  limit = 20
+  limit = 20,
+  /** The managed/linked account whose root holds a transcript (undefined = system). A resume of the
+   *  hit must run under that account, or the CLI answers "No conversation found". */
+  accountOf?: (transcriptPath: string) => string | undefined
 ): TranscriptHit[] {
   const q = query.trim().toLowerCase()
   if (q.length < 2) return []
@@ -69,7 +73,8 @@ export function searchEntries(
       snippet: makeSnippet(`${e.title}\n${e.text}`, q),
       cwd: e.cwd,
       projectLabel: e.cwd ? e.cwd.split('/').filter(Boolean).pop() ?? e.cwd : '',
-      mtime: e.mtime
+      mtime: e.mtime,
+      ...((a) => (a ? { accountId: a } : {}))(accountOf?.(e.transcriptPath))
     }))
 }
 

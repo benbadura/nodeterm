@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import type { NormalizedAgentEvent } from '@shared/agents/normalize'
+import { normalizeClaude, type NormalizedAgentEvent } from '@shared/agents/normalize'
 import { syntheticAnsweredEvent } from './agents/pending-approvals'
 import {
   reduceEntry,
@@ -34,6 +34,7 @@ import {
   trimInboxFeed,
   workingNodes,
   _resetForTest,
+  pendingTicketsFor,
   _snapshot,
   _inboxSnapshot,
   DONE_HOLDOFF_MS,
@@ -1112,6 +1113,49 @@ describe('recordAgentEvent enrichment (returned broadcast event)', () => {
     expect(out.state).toBe('blocked')
     expect(out.askKind).toBe('question')
     expect(out.pendingId).toBeUndefined() // suppressed — approve/deny on a question is wrong UX
+  })
+
+  it('a held QUESTION keeps its `held` ticket for structured answers while pendingId stays stripped', () => {
+    // Real sequence: the picker's PreToolUse, then its PermissionRequest held by the managed hook.
+    const input = { questions: [{ question: 'Which theme?', options: [{ label: 'Dark' }, { label: 'Light' }] }] }
+    const pre = { hook_event_name: 'PreToolUse', session_id: 's', tool_name: 'AskUserQuestion', tool_use_id: 't1', tool_input: input }
+    recordRawToolEvent('e9', pre)
+    const first = normalizeClaude({ nodeId: 'e9', agentId: 'claude', payload: pre })
+    if (first) recordAgentEvent(first)
+    const perm = normalizeClaude({
+      nodeId: 'e9',
+      agentId: 'claude',
+      payload: { hook_event_name: 'PermissionRequest', session_id: 's', tool_name: 'AskUserQuestion', tool_input: input, nodeterm_pending_id: 'e9-1-1' }
+    })!
+    const out = recordAgentEvent(perm)
+    expect(out.askKind).toBe('question')
+    expect(out.pendingId).toBeUndefined() // no approve/deny on a picker — unchanged
+    // The question texts ride along (answer controls match their card by them).
+    expect(out.held).toEqual({ pendingId: 'e9-1-1', toolName: 'AskUserQuestion', questions: ['Which theme?'] })
+  })
+
+  it('a held question with NO PreToolUse stash is classified as an approval and keeps pendingId', () => {
+    // Why the header needs its own AskUserQuestion gate (renderer/lib/approveGate.ts).
+    const perm = normalizeClaude({
+      nodeId: 'e11',
+      agentId: 'claude',
+      payload: { hook_event_name: 'PermissionRequest', session_id: 's', tool_name: 'AskUserQuestion', tool_input: {}, nodeterm_pending_id: 'e11-1-1' }
+    })!
+    const out = recordAgentEvent(perm)
+    expect(out.pendingId).toBe('e11-1-1')
+    expect(out.held).toEqual({ pendingId: 'e11-1-1', toolName: 'AskUserQuestion' })
+  })
+
+  it('a held PLAN is an approval: keeps pendingId (header Approve works) and names ExitPlanMode', () => {
+    const perm = normalizeClaude({
+      nodeId: 'e10',
+      agentId: 'claude',
+      payload: { hook_event_name: 'PermissionRequest', session_id: 's', tool_name: 'ExitPlanMode', tool_input: { plan: 'p' }, nodeterm_pending_id: 'e10-1-1' }
+    })!
+    const out = recordAgentEvent(perm)
+    expect(out.askKind).toBe('approval')
+    expect(out.pendingId).toBe('e10-1-1')
+    expect(out.held).toEqual({ pendingId: 'e10-1-1', toolName: 'ExitPlanMode' })
   })
 
   it('a genuine approval keeps its pendingId and gains askKind:approval', () => {
@@ -2547,5 +2591,22 @@ describe('MirrorEntry.account (observed Claude account)', () => {
     const now = EXPIRE_MS + 100_000
     const doc = buildFile({ stale: { state: 'working', account, updatedAt: now - EXPIRE_MS - 1 } }, now)
     expect(Object.keys(doc.nodes)).toEqual([])
+  })
+})
+
+// The phone's `agent.answer` binds a pendingId to the node it names (main/remote/host-chat.ts): a
+// ticket the mirror recorded for THIS node passes, one recorded for another node — or one it has
+// since resolved — does not.
+describe('pendingTicketsFor', () => {
+  beforeEach(() => _resetForTest())
+  it('lists the node\'s unresolved approval tickets only', () => {
+    recordAgentEvent(ev({ state: 'working', newTurn: true }))
+    recordAgentEvent(ev({ state: 'blocked', lastMessage: 'Approve write', pendingId: 'n1-1-1' }))
+    recordAgentEvent(ev({ nodeId: 'n2', state: 'blocked', lastMessage: 'Approve', pendingId: 'n2-1-1' }))
+    expect(pendingTicketsFor('n1')).toEqual(['n1-1-1'])
+    expect(pendingTicketsFor('n2')).toEqual(['n2-1-1'])
+    expect(pendingTicketsFor('nope')).toEqual([])
+    recordAgentEvent(syntheticAnsweredEvent('n1', 'n1-1-1', 'allow')!)
+    expect(pendingTicketsFor('n1')).toEqual([])
   })
 })

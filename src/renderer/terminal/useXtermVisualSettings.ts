@@ -3,6 +3,7 @@ import { useShallow } from 'zustand/react/shallow'
 import { useSettings } from '../state/settings'
 import { useProjectVisuals } from '../state/projectLaunchInfo'
 import { mergeProjectVisuals, XTERM_VISUAL_KEYS, type XtermVisualSettings } from './terminal-config'
+import { withTerminalFontSize } from './terminal-font-zoom'
 
 /**
  * The appearance slice of Settings for ONE project's terminals, as two subscriptions.
@@ -28,12 +29,22 @@ import { mergeProjectVisuals, XTERM_VISUAL_KEYS, type XtermVisualSettings } from
  * re-rendering when one of those moves. Shallow again, and over the two values only.
  *
  * SPEC DEVIATION, deliberate (Task 5): the spec said a project's appearance applies "when a terminal
- * is created", with existing terminals keeping theirs. There is no per-node appearance in this app —
+ * is created", with existing terminals keeping theirs. There is no per-node appearance in this app
+ * (the one exception, since #915, is the node's font size — below) —
  * every terminal renders from the live settings and re-options itself through `applyLiveOptions` —
  * so the honest implementation is live and project-scoped: changing a project's theme repaints that
  * project's terminals, including ones already open, and leaves every other project's alone.
+ *
+ * `fontSizeOverride` is the NODE's own font size (issue #915, `data.terminalFontSize`), layered
+ * last — over the global size and whatever the project set — through `withTerminalFontSize`. It is
+ * a parameter HERE rather than a second merge at each call site so the canvas node and the card
+ * modal (a second view of the same session) cannot apply it differently; the settings preview
+ * passes none. Typed `unknown` because it comes straight off node data: the helper validates it.
  */
-export function useXtermVisualSettings(projectId?: string): XtermVisualSettings {
+export function useXtermVisualSettings(
+  projectId?: string,
+  fontSizeOverride?: unknown
+): XtermVisualSettings {
   const base = useSettings(
     useShallow((s) => {
       const out = {} as Record<string, unknown>
@@ -51,5 +62,8 @@ export function useXtermVisualSettings(projectId?: string): XtermVisualSettings 
   )
   // Identity-stable while neither half changed: this value is the dependency the terminal
   // components' live re-option effects hang off.
-  return useMemo(() => mergeProjectVisuals(base, overrides), [base, overrides])
+  const merged = useMemo(() => mergeProjectVisuals(base, overrides), [base, overrides])
+  // Identity-preserving too (`withTerminalFontSize` returns `merged` itself when there is no
+  // effective override), so nodes without one re-option exactly as before.
+  return useMemo(() => withTerminalFontSize(merged, fontSizeOverride), [merged, fontSizeOverride])
 }

@@ -1,0 +1,82 @@
+[
+  {
+    "before": null,
+    "maxBytes": 262144,
+    "grownMaxBytes": 262144,
+    "start": 0,
+    "parse": {
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Summarise the diff"
+            }
+          ],
+          "at": 1790240401000,
+          "key": 375
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "[error] You've hit your usage limit. Upgrade to Pro or try again later."
+            }
+          ],
+          "at": 1790240402000,
+          "key": 776
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Try again"
+            }
+          ],
+          "at": 1790240403000,
+          "key": 1133
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Working on it."
+            }
+          ],
+          "at": 1790240404000,
+          "key": 1525
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "[turn aborted: interrupted]"
+            }
+          ],
+          "at": 1790240405000,
+          "key": 1798
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "[turn aborted]"
+            }
+          ],
+          "at": 1790240408000,
+          "key": 2626
+        }
+      ],
+      "olderCursor": null,
+      "unmatchedResults": [],
+      "model": "gpt-5.6-sol",
+      "noCompleteLine": false
+    }
+  }
+]

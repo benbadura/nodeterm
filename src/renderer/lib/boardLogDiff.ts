@@ -1,4 +1,5 @@
 import type { BoardLogEvent, KanbanCardMeta, ProjectKanban } from '@shared/types'
+import { cardAssignees } from '@shared/kanban-labels'
 
 // Pure prev→next board diff → the events worth recording in the board log. No fs, no IPC:
 // the caller computes the next board (renderer/lib/kanban.ts) and asks here what changed.
@@ -82,8 +83,8 @@ export function boardLogEvents(
     const pm = prevM.get(nodeId)
     const nm = nextM.get(nodeId)
     if (!nm && !cardTitle(nodeId)) continue // node gone (prune) → nothing to narrate
-    const pa = pm?.assignees ?? []
-    const na = nm?.assignees ?? []
+    const pa = cardAssignees(pm)
+    const na = cardAssignees(nm)
     for (const a of na) if (!pa.some((x) => x.name === a.name))
       out.push({ nodeId, event: { type: 'member-assigned', to: a.name } })
     for (const a of pa) if (!na.some((x) => x.name === a.name))

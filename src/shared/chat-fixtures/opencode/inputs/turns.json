@@ -1,0 +1,247 @@
+{
+  "info": {
+    "id": "ses_0a1b2c3d4ffeSynthetic000001",
+    "slug": "quiet-harbor",
+    "projectID": "prj_fixture",
+    "directory": "/srv/demo",
+    "path": "",
+    "title": "Fixture session",
+    "agent": "build",
+    "model": {
+      "id": "demo-model",
+      "providerID": "opencode"
+    },
+    "version": "1.18.25",
+    "summary": {
+      "additions": 0,
+      "deletions": 0,
+      "files": 0
+    },
+    "cost": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "time": {
+      "created": 1780000000000,
+      "updated": 1780000000000
+    }
+  },
+  "messages": [
+    {
+      "info": {
+        "role": "user",
+        "time": {
+          "created": 1780000001000
+        },
+        "agent": "build",
+        "model": {
+          "providerID": "opencode",
+          "modelID": "demo-model"
+        },
+        "summary": {
+          "diffs": []
+        },
+        "id": "msg_1",
+        "sessionID": "ses_0a1b2c3d4ffeSynthetic000001"
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "Explain the **retry** policy.\n\n- one\n- two",
+          "id": "prt_fixture0001",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        }
+      ]
+    },
+    {
+      "info": {
+        "parentID": "msg_parent",
+        "role": "assistant",
+        "mode": "build",
+        "agent": "build",
+        "path": {
+          "cwd": "/srv/demo",
+          "root": "/srv/demo"
+        },
+        "cost": 0,
+        "tokens": {
+          "total": 20,
+          "input": 12,
+          "output": 8,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "modelID": "demo-model",
+        "providerID": "opencode",
+        "time": {
+          "created": 1780000002000,
+          "completed": 1780000002500
+        },
+        "finish": "stop",
+        "id": "msg_2",
+        "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+        "variant": "high"
+      },
+      "parts": [
+        {
+          "type": "step-start",
+          "snapshot": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+          "id": "prt_fixture0002",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        },
+        {
+          "type": "reasoning",
+          "text": "The user wants the retry policy.",
+          "time": {
+            "start": 1780000000000,
+            "end": 1780000000001
+          },
+          "id": "prt_fixture0003",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        },
+        {
+          "type": "text",
+          "text": "## Retry\n\nThree attempts, then a backoff:\n\n```ts\nconst n = 3\n```",
+          "id": "prt_fixture0004",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        },
+        {
+          "type": "text",
+          "text": "Second block — ğüşçöı 😀",
+          "id": "prt_fixture0005",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        },
+        {
+          "type": "step-finish",
+          "reason": "stop",
+          "snapshot": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+          "cost": 0,
+          "tokens": {
+            "total": 20,
+            "input": 12,
+            "output": 8,
+            "reasoning": 0,
+            "cache": {
+              "write": 0,
+              "read": 0
+            }
+          },
+          "id": "prt_fixture0006",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        }
+      ]
+    },
+    {
+      "info": {
+        "role": "user",
+        "time": {
+          "created": 1780000003000
+        },
+        "agent": "build",
+        "model": {
+          "providerID": "opencode",
+          "modelID": "demo-model"
+        },
+        "summary": {
+          "diffs": []
+        },
+        "id": "msg_3",
+        "sessionID": "ses_0a1b2c3d4ffeSynthetic000001"
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "Thanks!",
+          "id": "prt_fixture0007",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        }
+      ]
+    },
+    {
+      "info": {
+        "parentID": "msg_parent",
+        "role": "assistant",
+        "mode": "build",
+        "agent": "build",
+        "path": {
+          "cwd": "/srv/demo",
+          "root": "/srv/demo"
+        },
+        "cost": 0,
+        "tokens": {
+          "total": 20,
+          "input": 12,
+          "output": 8,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "modelID": "demo-model",
+        "providerID": "opencode",
+        "time": {
+          "created": 1780000004000,
+          "completed": 1780000004500
+        },
+        "finish": "stop",
+        "id": "msg_4",
+        "sessionID": "ses_0a1b2c3d4ffeSynthetic000001"
+      },
+      "parts": [
+        {
+          "type": "step-start",
+          "snapshot": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+          "id": "prt_fixture0008",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        },
+        {
+          "type": "reasoning",
+          "text": "thinking only",
+          "time": {
+            "start": 1780000000000
+          },
+          "id": "prt_fixture0009",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        },
+        {
+          "type": "step-finish",
+          "reason": "stop",
+          "snapshot": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+          "cost": 0,
+          "tokens": {
+            "total": 20,
+            "input": 12,
+            "output": 8,
+            "reasoning": 0,
+            "cache": {
+              "write": 0,
+              "read": 0
+            }
+          },
+          "id": "prt_fixture0010",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        }
+      ]
+    }
+  ]
+}

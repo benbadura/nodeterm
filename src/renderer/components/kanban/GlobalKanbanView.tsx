@@ -1,20 +1,24 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ProjectKanban } from '@shared/types'
+import type { BridgeLink, CanvasNodeState, ProjectKanban } from '@shared/types'
 import { AGENT_CONFIG, BUILTIN_AGENT_IDS, type AgentId } from '@shared/agents/config'
 import { useProjects } from '../../state/projects'
 import { useSettings } from '../../state/settings'
+import { useBoardWallpaperStyle } from '../../state/wallpaper'
 import {
   addColumn, assignNode, assignedTo, boardLabels, cardMatchesLabelFilter, cardMeta, columnForNode,
   deleteColumn, labelsForCard, moveColumn,
-  nextColumnColor, pruneAssignments, recolorColumn, renameColumn, unassigned, defaultKanban
+  nextColumnColor, pruneAssignments, recolorColumn, renameColumn, unassigned, defaultKanban, AT_COLUMN_END
 } from '../../lib/kanban'
 import { KanbanColumn, type KanbanLane } from './KanbanColumn'
 import { SessionCard } from './SessionCard'
+import { projectSessionSource } from '../LiveLinkChip'
 import { toKanbanSessionState } from '../../canvas/toKanbanSessionState'
 import { createAgentNode, createBrowserNode, createStickyNode, createTerminalNode, flowToNodeStates, resolveNewNodeAccount } from '../../state/workspace'
 import { markCanvasCovered } from '../../lib/canvasCovered'
-import { useViewMode } from '../../state/viewMode'
-import { useSession } from '../../session/session'
+import { showCanvas, useViewMode } from '../../state/viewMode'
+import { KanbanScopeSwitch } from './KanbanScopeSwitch'
+import { sessionForProject } from '../../session/session'
+import { isHostedReadOnly } from '../../state/hostedTeams'
 import { activePermissionMode } from '../../state/permissionMode'
 import { CardModal } from './CardModal'
 import { ContextMenu, type MenuItem } from '../ContextMenu'
@@ -24,6 +28,10 @@ import { boardLogEvents } from '../../lib/boardLogDiff'
 import { markWorkspaceDirty } from '../../state/workspaceDirty'
 import type { KanbanCreateChoice, KanbanSession } from './KanbanView'
 import type { NodeIcon } from '@shared/node-icon'
+import { columnCategory } from '@shared/kanban-category'
+import { NO_STATIONS, stationsByOpener, type TeamStation } from '../../lib/teamProgress'
+import { stationNodeFromState } from '../../state/teamStations'
+import { nodeOwner } from '../../lib/nodeOwner'
 
 /**
  * Global (Omni) Kanban overview — one swimlane per open project.
@@ -48,9 +56,14 @@ import type { NodeIcon } from '@shared/node-icon'
 interface SwimlaneProps {
   projectId: string
   projectName: string
+  projectIndex: number
   projectColor?: string
   board: ProjectKanban
   sessions: KanbanSession[]
+  /** The project's persisted ropes and nodes — the source of each card's team-progress ring
+   *  (lib/teamProgress). The ropes are hand-editable input; the reader tolerates anything. */
+  ropes?: BridgeLink[]
+  nodes: CanvasNodeState[]
   onChangeBoard: (next: ProjectKanban) => void
   onOpenNode: (nodeId: string, projectId: string) => void
   onCreateNode: (projectId: string, choice: KanbanCreateChoice, columnId: string | null) => void
@@ -59,22 +72,31 @@ interface SwimlaneProps {
   onEditSticky: (projectId: string, nodeId: string, text: string) => void
   onBrowserNav: (projectId: string, nodeId: string, patch: { url?: string; title?: string }) => void
   onSetIcon: (projectId: string, nodeId: string, icon: NodeIcon | undefined) => void
-  onModalChange: (nodeId: string | null) => void
+  /** This lane's open card modal (null = none). Owned by the overview, not the lane: the modal is
+   *  ONE app-wide fact (Canvas's `setKanbanModalNode`), and N lanes each reporting their own
+   *  `null` would clobber whichever lane actually has one open. */
+  modalNodeId: string | null
+  onModalChange: (projectId: string, nodeId: string | null) => void
+  /** Team progress computed by the caller from LIVE canvas ropes — set for the active project's
+   *  lane only; other lanes derive it from their persisted ropes. */
+  liveTeams?: ReadonlyMap<string, readonly TeamStation[]>
   highlight?: boolean
+  /** Canvas's "Share live link…" row builder, asked for THIS lane's project (R49): creating a link
+   *  does not need the node on screen, so a card of another project can share too. */
+  liveLinkMenuItems?: (nodeId: string, projectId: string) => MenuItem[]
 }
 
 const Swimlane = memo(function Swimlane({
-  projectId, projectName, projectColor, board, sessions, onChangeBoard, onOpenNode, onCreateNode, onDeleteNode, onRenameNode, onEditSticky, onBrowserNav, onSetIcon, onModalChange, highlight
+  projectId, projectName, projectIndex, projectColor, board, sessions, ropes, nodes, onChangeBoard, onOpenNode, onCreateNode, onDeleteNode, onRenameNode, onEditSticky, onBrowserNav, onSetIcon, modalNodeId, onModalChange, liveTeams, highlight, liveLinkMenuItems
 }: SwimlaneProps) {
   const dragRef = useRef<{ kind: 'column'; id: string } | { kind: 'card'; id: string } | null>(null)
-  const [modalNodeId, setModalNodeId] = useState<string | null>(null)
+  const setModalNodeId = useCallback((nodeId: string | null) => onModalChange(projectId, nodeId), [onModalChange, projectId])
   const [cardMenu, setCardMenu] = useState<{ x: number; y: number; nodeId: string } | null>(null)
   const [labelFilter, setLabelFilter] = useState<string[]>([])
   const [collapsed, setCollapsed] = useState(false)
+  const activePortsProjectId = useProjects((s) => s.activeProjectId)
   const customAgents = useSettings((s) => s.settings.customAgents)
   const disabledAgents = useSettings((s) => s.settings.disabledAgents)
-
-  useEffect(() => { onModalChange(modalNodeId) }, [modalNodeId, onModalChange])
 
   const requestedCardNodeId = useViewMode((s) => s.requestedCardNodeId)
   useEffect(() => {
@@ -83,9 +105,20 @@ const Swimlane = memo(function Swimlane({
       setModalNodeId(requestedCardNodeId)
       useViewMode.getState().clearCardRequest()
     }
-  }, [requestedCardNodeId, sessions])
+  }, [requestedCardNodeId, sessions, setModalNodeId])
 
   const byId = useMemo(() => new Map(sessions.map(s => [s.id, s])), [sessions])
+  // Team progress per opener. The previous map is threaded back in so an unchanged team keeps its
+  // array identity and the memoized card does not re-render.
+  const teamsRef = useRef<ReadonlyMap<string, readonly TeamStation[]>>()
+  const teams = useMemo(() => {
+    if (liveTeams) return liveTeams
+    teamsRef.current = stationsByOpener(ropes, Array.isArray(nodes) ? nodes.map(stationNodeFromState) : [], teamsRef.current)
+    return teamsRef.current
+  }, [liveTeams, ropes, nodes])
+  const travel = useCallback((nodeId: string) => onOpenNode(nodeId, projectId), [onOpenNode, projectId])
+  // Which machine this lane's nodes run on: only a local lane shows this machine's LIVE chips (R57).
+  const liveLinkSource = projectSessionSource(projectId)
   const sessionIds = useMemo(() => sessions.map(s => s.id), [sessions])
 
   const paletteLabels = useMemo(() => boardLabels(board), [board])
@@ -141,7 +174,7 @@ const Swimlane = memo(function Swimlane({
     if (drag.kind === 'column') {
       if (columnId !== null) commit(moveColumn(board, drag.id, columnId))
     } else {
-      commit(assignNode(board, drag.id, columnId, null))
+      commit(assignNode(board, drag.id, columnId, AT_COLUMN_END))
     }
   }, [board, commit])
 
@@ -152,10 +185,10 @@ const Swimlane = memo(function Swimlane({
       return
     }
     const ids = columnId === null ? unassigned(board, sessionIds) : assignedTo(board, columnId)
-    let beforeId: string | null = targetNodeId
+    let beforeId: string | typeof AT_COLUMN_END = targetNodeId
     if (side === 'after') {
       const i = ids.indexOf(targetNodeId)
-      beforeId = i >= 0 && i + 1 < ids.length ? ids[i+1] : null
+      beforeId = i >= 0 && i + 1 < ids.length ? ids[i+1] : AT_COLUMN_END
     }
     commit(assignNode(board, drag.id, columnId, beforeId))
   }, [board, commit, sessionIds])
@@ -173,6 +206,7 @@ const Swimlane = memo(function Swimlane({
   const lanesFor = (columnId: string | null): KanbanLane[] => {
     const cards = columnId === null ? columnCards.ungrouped : columnCards.byColumn.get(columnId) ?? []
     const onDropAt = dropAtCardFor(columnId)
+    const category = columnId === null ? undefined : columnCategory(board.columns.find(c => c.id === columnId))
     return [{
       sourceId: 'sessions' as const,
       count: cards.length,
@@ -187,6 +221,10 @@ const Swimlane = memo(function Swimlane({
           onDragStart={handleCardDragStart}
           onDragEnd={handleDragEnd}
           onDropAt={onDropAt}
+          team={teams.get(s.id) ?? NO_STATIONS}
+          onTravel={travel}
+          columnCategory={category}
+          liveLinkSource={liveLinkSource}
         />
       ))
     }]
@@ -202,6 +240,7 @@ const Swimlane = memo(function Swimlane({
       { label: 'Open card', icon: <IconExternal />, onClick: () => setModalNodeId(nodeId) },
       { label: 'Open on canvas', icon: <IconExternal />, onClick: () => onOpenNode(nodeId, projectId) },
       ...(moveTargets.length ? [{ type: 'submenu', label: 'Move to', icon: <IconSwitch />, children: moveTargets } as MenuItem] : []),
+      ...(liveLinkMenuItems?.(nodeId, projectId) ?? []),
       { type: 'separator' },
       { label: 'Delete', icon: <IconTrash />, danger: true, onClick: () => onDeleteNode(projectId, nodeId) }
     ]
@@ -233,7 +272,7 @@ const Swimlane = memo(function Swimlane({
       >
         <span className="kanban-swimlane__toggle" aria-hidden="true">{collapsed ? '▸' : '▾'}</span>
         <span className="kanban-header__dot" style={{ background: projectColor || '#444' }} />
-        <span className="kanban-header__name">{projectName}</span>
+        <span className="kanban-header__name">{projectIndex}. {projectName}</span>
         <span className="kanban-swimlane__count">{sessions.length} sessions</span>
       </div>
       {!collapsed && (
@@ -271,28 +310,70 @@ const Swimlane = memo(function Swimlane({
       )}
       {modalNodeId && byId.has(modalNodeId) && (
         <CardModal
+          projectName={projectName}
+          projectColor={projectColor}
           session={byId.get(modalNodeId)!}
+          projectId={projectId}
           columnTitle={columnForNode(board, modalNodeId)?.title ?? null}
           board={board}
           onChangeBoard={commit}
           onClose={() => setModalNodeId(null)}
+          portsProjectId={projectId === activePortsProjectId ? projectId : undefined}
           onOpenCanvas={() => { setModalNodeId(null); onOpenNode(modalNodeId, projectId) }}
           onRename={(t) => onRenameNode(modalNodeId, t)}
           onEditSticky={(t) => onEditSticky(projectId, modalNodeId, t)}
           onBrowserNav={(patch) => onBrowserNav(projectId, modalNodeId, patch)}
           onSetIcon={(icon) => onSetIcon(projectId, modalNodeId, icon)}
+          team={teams.get(modalNodeId) ?? NO_STATIONS}
+          onTravel={(nodeId) => { setModalNodeId(null); travel(nodeId) }}
         />
       )}
     </div>
   )
 })
 
-export const GlobalKanbanView = memo(function GlobalKanbanView() {
+/**
+ * The ACTIVE project's lane, read from the live canvas rather than the store. React Flow is the
+ * source of truth for the active project, and its edits (a sticky keystroke, a rename, a node the
+ * board just created) reach `p.nodes` only at the next `commitActiveToStore` — ~800 ms later on
+ * the autosave. A lane fed from the store therefore reverted the card modal's controlled sticky
+ * textarea on every keystroke, and pruned the assignment of a card created a moment earlier.
+ */
+export interface GlobalKanbanLive {
+  projectId: string
+  sessions: KanbanSession[]
+  teams: ReadonlyMap<string, readonly TeamStation[]>
+}
+
+export interface GlobalKanbanViewProps {
+  live?: GlobalKanbanLive | null
+  /** Canvas's "Share live link…" row builder (the node menu's), for every lane's card menu.
+   *  Optional: an overview with no canvas behind it offers none. */
+  liveLinkMenuItems?: (nodeId: string, projectId: string) => MenuItem[]
+  /** Canvas's `setKanbanModalNode` — the same hook the per-project board reports to. It is what
+   *  makes an open card "watched" (Eco must not hibernate it), wakes a hibernated agent on open,
+   *  and points the dictation shortcut at the card instead of the selected canvas node. */
+  onModalNodeChange?: (nodeId: string | null) => void
+}
+
+export const GlobalKanbanView = memo(function GlobalKanbanView({ live = null, onModalNodeChange, liveLinkMenuItems }: GlobalKanbanViewProps) {
   // Same rule as the per-project board: the canvas is covered but mounted underneath.
   useEffect(() => markCanvasCovered(document.documentElement), [])
-  const projects = useProjects(s => s.projects.filter(p => !p.closed))
-  const { api } = useSession()
-  const modalRef = useRef<string | null>(null)
+  const boardStyle = useBoardWallpaperStyle()
+  const allProjects = useProjects(s => s.projects)
+  const projects = useMemo(() => allProjects.filter(p => !p.closed), [allProjects])
+  const liveRef = useRef(live)
+  liveRef.current = live
+  const [modal, setModal] = useState<{ projectId: string; nodeId: string } | null>(null)
+  const onModalChange = useCallback((projectId: string, nodeId: string | null) => {
+    setModal(nodeId ? { projectId, nodeId } : null)
+  }, [])
+  const modalNodeId = modal?.nodeId ?? null
+  useEffect(() => { onModalNodeChange?.(modalNodeId) }, [modalNodeId, onModalNodeChange])
+  // Closing the overview with a card open must not leave the node "watched" forever.
+  const onModalNodeChangeRef = useRef(onModalNodeChange)
+  onModalNodeChangeRef.current = onModalNodeChange
+  useEffect(() => () => onModalNodeChangeRef.current?.(null), [])
   const highlightId = useViewMode(s => s.highlightedSwimlaneId)
   const setHighlightId = useViewMode(s => s.setHighlightedSwimlaneId)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -311,10 +392,22 @@ export const GlobalKanbanView = memo(function GlobalKanbanView() {
   }, [jumpTo])
 
   const onChangeBoard = useCallback((projectId: string, next: ProjectKanban) => {
-    const prev = useProjects.getState().getProject(projectId)?.kanban ?? defaultKanban()
+    // Each lane belongs to ITS project's session — a relay/hosted tab's board is not the active
+    // session's. Same rule as the per-project board: a hosted Viewer/Commenter's board is the
+    // host's to change, and a move here would only diverge.
+    const session = sessionForProject(projectId)
+    if (isHostedReadOnly(session.id)) return
+    const prev = useProjects.getState().getProject(projectId)?.kanban ?? defaultKanban(projectId)
     useProjects.getState().setProjectKanban(projectId, next)
     markWorkspaceDirty()
+    const lv = liveRef.current
     const cardTitle = (nodeId: string) => {
+      // The active lane's cards are live; a card created a moment ago is not in the store yet,
+      // and '' would read as "pruned removal" in the diff.
+      if (lv && lv.projectId === projectId) {
+        const card = lv.sessions.find(x => x.id === nodeId)
+        return card ? card.title || 'Untitled' : ''
+      }
       const proj = useProjects.getState().getProject(projectId)
       const n = proj?.nodes.find(x => x.id === nodeId)
       if (!n) return ''
@@ -322,9 +415,9 @@ export const GlobalKanbanView = memo(function GlobalKanbanView() {
       return s ? s.title || 'Untitled' : ''
     }
     for (const { nodeId, event } of boardLogEvents(prev, next, cardTitle)) {
-      useBoardLog.getState().append(api, projectId, { kind: 'event', nodeId, event })
+      useBoardLog.getState().append(session.api, projectId, { kind: 'event', nodeId, event })
     }
-  }, [api])
+  }, [])
 
   const onCreateNode = useCallback((projectId: string, choice: KanbanCreateChoice, columnId: string | null) => {
     // Delegate to Canvas's createNodeInColumn which correctly mounts the TerminalNode
@@ -341,7 +434,9 @@ export const GlobalKanbanView = memo(function GlobalKanbanView() {
   }, [])
 
   const onRenameNode = useCallback((nodeId: string, title: string) => {
-    const proj = useProjects.getState().projects.find(p => p.nodes.some(n => n.id === nodeId))
+    // The board lists open projects, and `nodeOwner` prefers an open one over a closed, handed-off
+    // SSH project holding the same node id.
+    const proj = nodeOwner(useProjects.getState().projects, nodeId)
     if (!proj) return
     window.dispatchEvent(new CustomEvent('nodeterm:global-rename', { detail: { projectId: proj.id, nodeId, title } }))
   }, [])
@@ -358,47 +453,49 @@ export const GlobalKanbanView = memo(function GlobalKanbanView() {
     window.dispatchEvent(new CustomEvent('nodeterm:global-set-icon', { detail: { projectId, nodeId, icon } }))
   }, [])
 
-  const onOpenNode = useCallback((nodeId: string, _projectId: string) => {
-    const vm = useViewMode.getState()
-    if (vm.globalKanban) vm.toggleGlobalKanban()
+  const onOpenNode = useCallback((nodeId: string, projectId: string) => {
+    // "Open on canvas" leaves the board for the OWNING project's canvas. Only clearing the scope
+    // would land on that project's own board whenever its view is the board, and focusNodeById
+    // then opens the card again instead of framing the node.
+    showCanvas(projectId)
     // Let Canvas's focusNodeById handle project switching and canvas framing
     setTimeout(() => window.dispatchEvent(new CustomEvent('nodeterm:focus-node', { detail: { nodeId } })), 50)
   }, [])
 
   if (projects.length === 0) {
     return (
-      <div className="kanban-overlay global-kanban">
-        <div className="kanban-header"><span className="kanban-header__name">All Projects — Kanban</span></div>
+      <div className="kanban-overlay global-kanban" style={boardStyle}>
+        <div className="kanban-header"><span className="kanban-header__name">All Projects</span><KanbanScopeSwitch scope="all" /></div>
         <div className="kanban-empty">No projects yet. Create a project to see its swimlane.</div>
       </div>
     )
   }
 
   return (
-    <div className="kanban-overlay global-kanban" ref={containerRef}>
+    <div className="kanban-overlay global-kanban" ref={containerRef} style={boardStyle}>
       <div className="kanban-header">
         <span className="kanban-header__name">All Projects</span>
+        <KanbanScopeSwitch scope="all" />
         <span className="kanban-swimlane__hint">{projects.length} projects — {mod}+1..{Math.min(9, projects.length)} to jump</span>
-        <button
-          className="kanban-header__close"
-          title={`Back to canvas (${mod}+Shift+B)`}
-          onClick={() => useViewMode.getState().toggleGlobalKanban()}
-        >
-          ✕
-        </button>
       </div>
       <div className="global-kanban__scroll">
         {projects.map((p, idx) => {
-          const board = p.kanban ?? defaultKanban()
-          const sessions = p.nodes.map(n => toKanbanSessionState(n as never)).filter((s): s is KanbanSession => s !== null)
+          const board = p.kanban ?? defaultKanban(p.id)
+          const isLive = live !== null && live.projectId === p.id
+          const sessions = isLive
+            ? live.sessions
+            : p.nodes.map(n => toKanbanSessionState(n as never)).filter((s): s is KanbanSession => s !== null)
           return (
             <Swimlane
               key={p.id}
               projectId={p.id}
-              projectName={`${idx+1}. ${p.name}`}
+              projectName={p.name}
+              projectIndex={idx + 1}
               projectColor={p.color}
               board={board}
               sessions={sessions}
+              ropes={p.ropes}
+              nodes={p.nodes}
               onChangeBoard={next => onChangeBoard(p.id, next)}
               onOpenNode={onOpenNode}
               onCreateNode={onCreateNode}
@@ -407,8 +504,11 @@ export const GlobalKanbanView = memo(function GlobalKanbanView() {
               onEditSticky={onEditSticky}
               onBrowserNav={onBrowserNav}
               onSetIcon={onSetIcon}
-              onModalChange={id => { modalRef.current = id }}
+              modalNodeId={modal?.projectId === p.id ? modal.nodeId : null}
+              onModalChange={onModalChange}
+              liveTeams={isLive ? live.teams : undefined}
               highlight={highlightId === p.id}
+              liveLinkMenuItems={liveLinkMenuItems}
             />
           )
         })}

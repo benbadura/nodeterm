@@ -1,0 +1,9 @@
+{"sessionId":"3e7b9c21-4d5a-4f60-8b19-a2c3d4e5f607","projectHash":"c0ffee0000000000000000000000000000000000000000000000000000000000","startTime":"2026-09-28T10:00:00.000Z","lastUpdated":"2026-09-28T10:00:00.000Z","kind":"main"}
+{"$set":{"messages":[{"id":"s0","timestamp":"2026-09-28T10:00:00.000Z","type":"user","content":[{"text":"<session_context>\nThis is the Gemini CLI. We are setting up the context for our chat.\n</session_context>"}]}],"lastUpdated":"2026-09-28T10:00:00.000Z"}}
+{"id":"u1","timestamp":"2026-09-28T10:00:01.000Z","type":"user","content":[{"text":"Özet çıkar: **README** — 3 madde ✓"}]}
+{"$set":{"lastUpdated":"2026-09-28T10:00:01.000Z"}}
+{"id":"g1","timestamp":"2026-09-28T10:00:02.000Z","type":"gemini","content":"## Özet\n\n- bir\n- iki\n- üç\n\n```ts\nconst x = 1\n```","thoughts":[{"subject":"Reading","description":"The user wants a summary.","timestamp":"2026-09-28T10:00:02.000Z"}],"tokens":{"input":1200,"output":40,"cached":800,"thoughts":60,"tool":0,"total":1300},"model":"gemini-3.5-flash"}
+{"$set":{"lastUpdated":"2026-09-28T10:00:02.000Z"}}
+{"id":"u2","timestamp":"2026-09-28T10:00:03.000Z","type":"user","content":"a string content (older record shape)"}
+{"id":"u3","timestamp":"2026-09-28T10:00:04.000Z","type":"user","content":[{"text":"first part"},{"text":"second part"}]}
+{"id":"g2","timestamp":"2026-09-28T10:00:05.000Z","type":"gemini","content":[{"text":"answer as a part list"}],"tokens":{"input":1200,"output":40,"cached":800,"thoughts":60,"tool":0,"total":1300},"model":"gemini-3.5-flash"}

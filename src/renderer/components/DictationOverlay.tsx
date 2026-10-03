@@ -20,12 +20,16 @@ import { PcmCapture } from '../lib/pcm-capture'
 import { useSession } from '../session/session'
 import { useSettings } from '../state/settings'
 import { hasSpeechModel } from '@shared/speech'
+import { deliverToComposer } from '../lib/chatComposerDictation'
 
-export interface DictationTarget {
-  kind: 'terminal'
-  nodeId: string
-  title: string
-}
+/**
+ * Where a take lands. `terminal` types it into the node's pane (`pty.sendText`, no Enter);
+ * `chat-composer` hands it to ONE mounted ⌘M composer's textarea by its per-mount id
+ * (lib/chatComposerDictation.ts) — a draft the user edits and sends, never typed into the pane.
+ */
+export type DictationTarget =
+  | { kind: 'terminal'; nodeId: string; title: string }
+  | { kind: 'chat-composer'; nodeId: string; composerId: string; title: string }
 
 export interface DictationOverlayProps {
   target: DictationTarget | null
@@ -157,11 +161,19 @@ export function DictationOverlay({ target, stopSignal, onClose, onOpenLicense }:
       // An in-flight transcription can't be aborted — dropping the result honors the user's
       // dismissal (nothing may land after a cancel).
       if (discardedRef.current) return
-      const ok = await api.pty.sendText(target.nodeId, transcribed, { enter: false })
-      if (!ok) {
-        setError('Could not insert — the terminal session is not available.')
-        setPhase('idle')
-        return
+      if (target.kind === 'chat-composer') {
+        if (!deliverToComposer(target.composerId, transcribed)) {
+          setError('Could not insert — the chat composer was closed.')
+          setPhase('idle')
+          return
+        }
+      } else {
+        const ok = await api.pty.sendText(target.nodeId, transcribed, { enter: false })
+        if (!ok) {
+          setError('Could not insert — the terminal session is not available.')
+          setPhase('idle')
+          return
+        }
       }
       // A stale (remounted-over) instance still delivers its own transcript into the
       // terminal — the target closure is per-instance and correct — but must not close the

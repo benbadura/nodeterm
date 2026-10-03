@@ -1,0 +1,5 @@
+{
+  "ok": true,
+  "content": "{\"hookSpecificOutput\":{\"hookEventName\":\"PermissionRequest\",\"decision\":{\"behavior\":\"deny\",\"message\":\"The user reviewed the plan and wants changes before you proceed: Split step 2 into two PRs.\"}}}",
+  "decision": "deny"
+}

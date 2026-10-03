@@ -1,0 +1,406 @@
+{
+  "info": {
+    "id": "ses_0a1b2c3d4ffeSynthetic000001",
+    "slug": "quiet-harbor",
+    "projectID": "prj_fixture",
+    "directory": "/srv/demo",
+    "path": "",
+    "title": "Fixture session",
+    "agent": "build",
+    "model": {
+      "id": "demo-model",
+      "providerID": "opencode"
+    },
+    "version": "1.18.25",
+    "summary": {
+      "additions": 0,
+      "deletions": 0,
+      "files": 0
+    },
+    "cost": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "time": {
+      "created": 1780000000000,
+      "updated": 1780000000000
+    }
+  },
+  "messages": [
+    {
+      "info": {
+        "role": "user",
+        "time": {
+          "created": 1780000001000
+        },
+        "agent": "build",
+        "model": {
+          "providerID": "opencode",
+          "modelID": "demo-model"
+        },
+        "summary": {
+          "diffs": []
+        },
+        "id": "msg_1",
+        "sessionID": "ses_0a1b2c3d4ffeSynthetic000001"
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "Look around the repo.",
+          "id": "prt_fixture0011",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        }
+      ]
+    },
+    {
+      "info": {
+        "parentID": "msg_parent",
+        "role": "assistant",
+        "mode": "build",
+        "agent": "build",
+        "path": {
+          "cwd": "/srv/demo",
+          "root": "/srv/demo"
+        },
+        "cost": 0,
+        "tokens": {
+          "total": 20,
+          "input": 12,
+          "output": 8,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "modelID": "demo-model",
+        "providerID": "opencode",
+        "time": {
+          "created": 1780000002000,
+          "completed": 1780000002500
+        },
+        "finish": "tool-calls",
+        "id": "msg_2",
+        "sessionID": "ses_0a1b2c3d4ffeSynthetic000001"
+      },
+      "parts": [
+        {
+          "type": "step-start",
+          "snapshot": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+          "id": "prt_fixture0012",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        },
+        {
+          "type": "tool",
+          "tool": "bash",
+          "callID": "call_fixture12",
+          "state": {
+            "status": "completed",
+            "input": {
+              "command": "ls -la",
+              "description": "List files"
+            },
+            "output": "total 8\ndrwxr-xr-x a\ndrwxr-xr-x b\n-rw-r--r-- c",
+            "title": "List files",
+            "metadata": {},
+            "time": {
+              "start": 1780000000000,
+              "end": 1780000000001
+            }
+          },
+          "id": "prt_fixture0013",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        },
+        {
+          "type": "tool",
+          "tool": "read",
+          "callID": "call_fixture13",
+          "state": {
+            "status": "completed",
+            "input": {
+              "filePath": "/srv/demo/src/app.ts"
+            },
+            "output": "lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet",
+            "title": "src/app.ts",
+            "metadata": {},
+            "time": {
+              "start": 1780000000000,
+              "end": 1780000000001
+            }
+          },
+          "id": "prt_fixture0014",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        },
+        {
+          "type": "tool",
+          "tool": "grep",
+          "callID": "call_fixture14",
+          "state": {
+            "status": "completed",
+            "input": {
+              "pattern": "TODO",
+              "path": "/srv/demo/src"
+            },
+            "output": "Found 2 matches",
+            "title": "TODO",
+            "metadata": {},
+            "time": {
+              "start": 1780000000000,
+              "end": 1780000000001
+            }
+          },
+          "id": "prt_fixture0015",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        },
+        {
+          "type": "tool",
+          "tool": "edit",
+          "callID": "call_fixture15",
+          "state": {
+            "status": "error",
+            "input": {
+              "filePath": "/srv/demo/src/app.ts",
+              "oldString": "a",
+              "newString": "b"
+            },
+            "error": "oldString not found in content\nMake the match unique.",
+            "time": {
+              "start": 1780000000000,
+              "end": 1780000000001
+            }
+          },
+          "id": "prt_fixture0016",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        },
+        {
+          "type": "tool",
+          "tool": "webfetch",
+          "callID": "call_fixture16",
+          "state": {
+            "status": "running",
+            "input": {
+              "url": "https://example.test/docs"
+            },
+            "title": "Fetching",
+            "time": {
+              "start": 1780000000000
+            }
+          },
+          "id": "prt_fixture0017",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        },
+        {
+          "type": "tool",
+          "tool": "bash",
+          "callID": "call_fixture17",
+          "state": {
+            "status": "pending",
+            "input": {},
+            "raw": "{\"comm"
+          },
+          "id": "prt_fixture0018",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        },
+        {
+          "type": "tool",
+          "tool": "todowrite",
+          "callID": "call_fixture18",
+          "state": {
+            "status": "completed",
+            "input": {
+              "todos": [
+                {
+                  "content": "x",
+                  "status": "pending",
+                  "priority": "high"
+                }
+              ]
+            },
+            "output": "[]",
+            "title": "1 todo",
+            "metadata": {},
+            "time": {
+              "start": 1780000000000,
+              "end": 1780000000001
+            }
+          },
+          "id": "prt_fixture0019",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        },
+        {
+          "type": "tool",
+          "tool": "question",
+          "callID": "call_fixture19",
+          "state": {
+            "status": "completed",
+            "input": {
+              "questions": [
+                {
+                  "question": "Which colour should the badge be?",
+                  "header": "Colour",
+                  "options": [
+                    {
+                      "label": "Red",
+                      "description": "warm"
+                    },
+                    {
+                      "label": "Blue",
+                      "description": "cool"
+                    }
+                  ]
+                }
+              ]
+            },
+            "output": "User has answered your questions: \"Which colour should the badge be?\"=\"Blue\".",
+            "title": "Asked 1 question",
+            "metadata": {},
+            "time": {
+              "start": 1780000000000,
+              "end": 1780000000001
+            }
+          },
+          "id": "prt_fixture0020",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        },
+        {
+          "type": "tool",
+          "callID": "call_fixture20",
+          "state": {
+            "status": "running",
+            "input": {},
+            "time": {
+              "start": 1780000000000
+            }
+          },
+          "id": "prt_fixture0021",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        },
+        {
+          "type": "tool",
+          "tool": "bash",
+          "callID": "call_fixture21",
+          "state": {
+            "status": "completed",
+            "input": {
+              "command": "echo zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+            },
+            "output": "",
+            "title": "Done",
+            "metadata": {},
+            "time": {
+              "start": 1780000000000,
+              "end": 1780000000001
+            }
+          },
+          "id": "prt_fixture0022",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        },
+        {
+          "type": "step-finish",
+          "reason": "tool-calls",
+          "snapshot": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+          "cost": 0,
+          "tokens": {
+            "total": 20,
+            "input": 12,
+            "output": 8,
+            "reasoning": 0,
+            "cache": {
+              "write": 0,
+              "read": 0
+            }
+          },
+          "id": "prt_fixture0023",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        }
+      ]
+    },
+    {
+      "info": {
+        "parentID": "msg_parent",
+        "role": "assistant",
+        "mode": "build",
+        "agent": "build",
+        "path": {
+          "cwd": "/srv/demo",
+          "root": "/srv/demo"
+        },
+        "cost": 0,
+        "tokens": {
+          "total": 20,
+          "input": 12,
+          "output": 8,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "modelID": "demo-model",
+        "providerID": "opencode",
+        "time": {
+          "created": 1780000003000,
+          "completed": 1780000003500
+        },
+        "finish": "stop",
+        "id": "msg_3",
+        "sessionID": "ses_0a1b2c3d4ffeSynthetic000001"
+      },
+      "parts": [
+        {
+          "type": "step-start",
+          "snapshot": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+          "id": "prt_fixture0024",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        },
+        {
+          "type": "text",
+          "text": "Done looking.",
+          "id": "prt_fixture0025",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        },
+        {
+          "type": "step-finish",
+          "reason": "stop",
+          "snapshot": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+          "cost": 0,
+          "tokens": {
+            "total": 20,
+            "input": 12,
+            "output": 8,
+            "reasoning": 0,
+            "cache": {
+              "write": 0,
+              "read": 0
+            }
+          },
+          "id": "prt_fixture0026",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        }
+      ]
+    }
+  ]
+}

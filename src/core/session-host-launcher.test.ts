@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import path from 'path'
-import { hostLauncherPath, resolveSessionHostScript, WINDOWS_HOST_EXE } from './session-host-launcher'
+import {
+  hostLaunchPlan,
+  hostLauncherPath,
+  resolveSessionHostScript,
+  stagedExitWantsFallback,
+  WINDOWS_HOST_EXE
+} from './session-host-launcher'
 import type { HostLinkFs } from './session-host-launcher'
 
 const asar = path.join('/app', 'resources', 'app.asar')
@@ -168,5 +174,47 @@ describe('hostLauncherPath', () => {
       }
     })
     expect(hostLauncherPath(exe, 'win32', fs)).toBe(exe)
+  })
+})
+
+describe('hostLaunchPlan (issue #829 step 3)', () => {
+  const exe = 'C:\\Program Files\\nodeterm\\nodeterm.exe'
+  const script = 'C:\\Program Files\\nodeterm\\resources\\session-host\\host.cjs'
+  const staged = { exe: 'C:\\L\\nodeterm\\session-host\\0.4.0-x\\nodeterm-sessionhost-v2.exe', script: 'C:\\L\\h.cjs' }
+  const noLink: HostLinkFs = {
+    statSync: () => {
+      throw new Error('ENOENT')
+    },
+    unlinkSync: () => {},
+    linkSync: () => {
+      throw new Error('EPERM')
+    }
+  }
+
+  it('tries the staged runtime first, then the installed binary', () => {
+    expect(hostLaunchPlan(script, exe, 'win32', staged, noLink)).toEqual([
+      { bin: staged.exe, script: staged.script, staged: true },
+      { bin: exe, script }
+    ])
+  })
+
+  it('without a staged runtime the plan is exactly the legacy one', () => {
+    expect(hostLaunchPlan(script, exe, 'win32', null, noLink)).toEqual([{ bin: exe, script }])
+  })
+
+  it('never uses a staged runtime off Windows', () => {
+    expect(hostLaunchPlan('/x/host.cjs', '/usr/bin/node', 'linux', staged)).toEqual([
+      { bin: '/usr/bin/node', script: '/x/host.cjs' }
+    ])
+  })
+})
+
+describe('stagedExitWantsFallback', () => {
+  it("treats the host's own controlled exits as answers, anything else as a broken copy", () => {
+    expect(stagedExitWantsFallback(0, null)).toBe(false)
+    expect(stagedExitWantsFallback(1, null)).toBe(false)
+    expect(stagedExitWantsFallback(3221225781, null)).toBe(true) // STATUS_DLL_NOT_FOUND
+    expect(stagedExitWantsFallback(null, 'SIGTERM')).toBe(true)
+    expect(stagedExitWantsFallback(null, null)).toBe(false)
   })
 })

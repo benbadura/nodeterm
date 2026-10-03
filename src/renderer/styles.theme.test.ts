@@ -106,6 +106,14 @@ describe('every CSS variable resolves', () => {
   // typo — unless the renderer sets it at runtime.
   const SET_FROM_JS = new Set([
     '--term-bg', // App.tsx, from the terminal theme
+    '--term-glass-bg', // TerminalNode, glass tint per node theme (lib/glassContrast.ts)
+    '--term-glass-header-bg',
+    '--term-glass-fg',
+    '--term-glass-chip-wash', // TerminalNode, status-chip wash per theme (glassChipWash)
+    '--glass-chrome-bg', // App.tsx, Liquid Glass chrome fill (lib/glassContrast.ts glassChromeAlpha)
+    '--glass-control-bg', // App.tsx, Liquid Glass small-control fill (glassChromeAlphas)
+    '--glass-fill', // GlassSlider, the slider value (fills the track)
+    '--glass-tick', // GlassSlider, the Readable tick position (the notch)
     '--peer-color', // presence chips, per peer
     '--group-label-boost', // GroupNode, zoom-compensated label size
     '--mascot-w',

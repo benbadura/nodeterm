@@ -70,6 +70,15 @@ export const IconMinus = () => (
   </svg>
 )
 
+/** Minimap — a map frame with the viewport rectangle inside it: the minimized minimap's restore
+ *  button. */
+export const IconMinimap = () => (
+  <svg {...S}>
+    <rect x="3" y="5" width="18" height="14" rx="2" />
+    <rect x="11" y="9" width="6" height="6" rx="1" />
+  </svg>
+)
+
 export const IconSelectAll = () => (
   <svg {...S}>
     <path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2" />
@@ -175,6 +184,16 @@ export const IconReload = () => (
   </svg>
 )
 
+/** Two chasing arrows — the title-bar "Update" button (an app update is waiting). */
+export const IconUpdate = () => (
+  <svg {...S}>
+    <path d="M20 11a8 8 0 0 0-14.3-4.9L4 8" />
+    <path d="M4 4v4h4" />
+    <path d="M4 13a8 8 0 0 0 14.3 4.9L20 16" />
+    <path d="M20 20v-4h-4" />
+  </svg>
+)
+
 /** Power symbol — restarting a PROCESS (the agent CLI), as opposed to IconReload's
  *  circular arrow, which reloads a VIEW. The two restart actions must not share a glyph. */
 export const IconPower = () => (
@@ -197,6 +216,16 @@ export const IconEye = () => (
   <svg {...S}>
     <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" />
     <circle cx="12" cy="12" r="3" />
+  </svg>
+)
+
+/** "Share live link" — a dot inside two pairs of arcs (the Settings → Live links glyph, at this
+ *  set's 24-unit scale). Deliberately NOT `IconEye`: that already means "Hide cards & connections"
+ *  in the same node header, and one glyph must not mean two things. */
+export const IconBroadcast = () => (
+  <svg {...S}>
+    <circle cx="12" cy="12" r="2.4" />
+    <path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4M4.95 4.95a9.9 9.9 0 0 0 0 14.1M19.05 4.95a9.9 9.9 0 0 1 0 14.1" />
   </svg>
 )
 
@@ -426,6 +455,14 @@ export const IconMoreVertical = () => (
   </svg>
 )
 
+/** Two overlapping sheets: copy to the clipboard (the ⌘M thread's per-turn Copy). */
+export const IconCopy = () => (
+  <svg {...S}>
+    <rect x="9" y="9" width="11" height="11" rx="2" />
+    <path d="M5 15V6a2 2 0 0 1 2-2h9" />
+  </svg>
+)
+
 /** Bare checkmark. IconCircleCheck is the badged variant and means something else: a completed
  *  thing, not a selected one. */
 export const IconCheck = () => (
@@ -480,5 +517,25 @@ export const IconRestoreSize = () => (
     <path d="M20 4l-6 6" />
     <path d="M4 14h6v6" />
     <path d="M4 20l6-6" />
+  </svg>
+)
+
+/** GitHub mark, drawn in the same 24px/2px stroke grid as the lucide glyphs it sits beside (the
+ *  project-icon picker's Avatar tab). Ours because lucide-react 1.x removed its brand icons. */
+export const IconGithub = ({ className }: { className?: string }) => (
+  <svg
+    width={24}
+    height={24}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={2}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+    aria-hidden="true"
+  >
+    <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4" />
+    <path d="M9 18c-4.51 2-5-2-7-2" />
   </svg>
 )

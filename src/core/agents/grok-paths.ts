@@ -193,3 +193,18 @@ export function isSafeRemoteGrokHome(p: string | undefined): boolean {
   // interpolated into the same kind of remote command line) — see `isSafeRemoteHome`.
   return isSafeRemoteHome(p)
 }
+
+/** The host-side probe for `$GROK_HOME`, over a plain exec channel. ONE spelling for the hook
+ *  installer and the remote chat reader, so both ask the same question. */
+export const REMOTE_GROK_HOME_PROBE = 'printf %s "${GROK_HOME:-}"'
+
+/** The grok home a host's answer to `REMOTE_GROK_HOME_PROBE` names, or null when it names none
+ *  usable — the caller then uses `$HOME/.grok`. Trimmed at this READ site (see
+ *  `isSafeRemoteGrokHome`), trailing slashes stripped (`/` stays `/`). Shared by
+ *  `RemoteHooks.installGrokRemote` and `core/remote-grok-chat.ts`, so the hook grok fires and the
+ *  reader of its history always agree on the root. */
+export function resolveReportedGrokHome(raw: string): string | null {
+  const reported = raw.trim()
+  if (!isSafeRemoteGrokHome(reported)) return null
+  return reported.replace(/\/+$/, '') || '/'
+}

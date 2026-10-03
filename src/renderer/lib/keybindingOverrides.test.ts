@@ -261,6 +261,31 @@ describe('terminalChordBubbles', () => {
     expect(terminalKeyAction(event, false, false, bubbles)).toBe('pass')
   })
 
+  it('bubbles the markdown toggle out of a focused terminal (its window listener owns it)', () => {
+    // The Server Edition's `onMarkdownToggle` is a window keydown listener; if xterm kept the
+    // chord it would write \r and cancel the event, and ⌘M would be dead in every focused
+    // terminal. On desktop main claims it above the page, so this never runs there under
+    // app-first, and under terminal-first the resolver refuses it (next case).
+    setKb({ 'node.toggleMarkdown': ['Ctrl+M'] })
+    const event = { ...bubbleEv({ ctrlKey: true, key: 'm' }), type: 'keydown', code: 'KeyM' }
+    const bubbles = terminalChordBubbles(event, false)
+    expect(bubbles).toBe(true)
+    expect(terminalKeyAction(event, false, false, bubbles)).toBe('bubble')
+    // Over the board too: the card modal's terminal is a markdown-toggle target as well.
+    expect(terminalChordBubbles(event, true)).toBe(true)
+  })
+
+  it('keeps the markdown toggle in xterm under terminal-first', () => {
+    useSettings.setState({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        keybindings: { 'node.toggleMarkdown': ['Ctrl+M'] } as never,
+        terminalShortcutPolicy: 'terminal-first'
+      }
+    })
+    expect(terminalChordBubbles(bubbleEv({ ctrlKey: true, key: 'm' }), false)).toBe(false)
+  })
+
   it('false for a chord nothing resolves', () => {
     setKb(undefined)
     expect(

@@ -1,0 +1,136 @@
+[
+  {
+    "before": null,
+    "maxBytes": 262144,
+    "grownMaxBytes": 262144,
+    "start": 0,
+    "parse": {
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Switch to the bigger model, please."
+            }
+          ],
+          "at": 1790362800000,
+          "key": 0
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool",
+              "name": "/model",
+              "arg": "",
+              "result": "Set model to Demo Model (1M context) and saved as your default for new sessions"
+            }
+          ],
+          "at": 1790362802000,
+          "key": 792
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool",
+              "name": "/effort",
+              "arg": "high",
+              "result": "Effort set to high"
+            }
+          ],
+          "at": 1790362805000,
+          "key": 2073
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool",
+              "name": "/compact",
+              "arg": "keep the demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo d"
+            }
+          ],
+          "at": 1790362807000,
+          "key": 2796
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool",
+              "name": "/exit",
+              "arg": ""
+            }
+          ],
+          "at": 1790362808000,
+          "key": 3497
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool",
+              "name": "/demo-skill",
+              "arg": ""
+            }
+          ],
+          "at": 1790362810000,
+          "key": 4170
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Using the skill."
+            }
+          ],
+          "at": 1790362812000,
+          "key": 4852
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool",
+              "name": "command output",
+              "arg": "",
+              "result": "Orphaned output second line third line"
+            }
+          ],
+          "at": 1790362813000,
+          "key": 5251
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Why does <command-name>/model</command-name> show up raw in the thread?"
+            }
+          ],
+          "at": 1790362814000,
+          "key": 5602
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Because it was a local command record."
+            }
+          ],
+          "at": 1790362815000,
+          "key": 5922
+        }
+      ],
+      "olderCursor": null,
+      "unmatchedResults": [],
+      "model": "claude-opus-5-5",
+      "effort": "high",
+      "noCompleteLine": false
+    }
+  }
+]

@@ -1,0 +1,77 @@
+[
+  {
+    "before": null,
+    "maxBytes": 262144,
+    "grownMaxBytes": 262144,
+    "start": 0,
+    "parse": {
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Why does `npm test` fail on CI?"
+            }
+          ],
+          "at": 1790240406000,
+          "key": 1889
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Let me run the suite first."
+            }
+          ],
+          "at": 1790240410000,
+          "key": 2728
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool",
+              "name": "exec_command",
+              "arg": "npm test",
+              "id": "call_legacy_1",
+              "result": "FAIL src/app.test.ts   ✕ renders the header (12 ms)   ✓ loads config"
+            }
+          ],
+          "at": 1790240411000,
+          "key": 3002
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool",
+              "name": "write_stdin",
+              "arg": "",
+              "id": "call_legacy_2",
+              "result": "Chunk ID: 3fb0 Wall time: 0.5 seconds Process exited with code 0"
+            }
+          ],
+          "at": 1790240413000,
+          "key": 3802
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "The header test fails because the fixture date is in UTC.\n\n- fix: pin the timezone\n- or: compare dates, not strings"
+            }
+          ],
+          "at": 1790240417000,
+          "key": 5149
+        }
+      ],
+      "olderCursor": null,
+      "unmatchedResults": [],
+      "model": "gpt-5.5",
+      "noCompleteLine": false
+    }
+  }
+]

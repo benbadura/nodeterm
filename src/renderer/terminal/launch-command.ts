@@ -1,6 +1,6 @@
 import type { LaunchClaim } from './launch-attempt'
 import type { PendingLaunch } from '@shared/types'
-import { deliverCommand, type DeliveryIo, type DeliveryOutcome } from './command-delivery'
+import { deliverCommand, type DeliveryIo, type DeliveryOutcome } from '@shared/command-delivery'
 
 // A writer belongs to the PTY lifetime (including a parked view), not a Canvas render.
 // A durable write-ahead claim distinguishes a never-attempted warm launch from an uncertain
@@ -14,6 +14,7 @@ function writersFor(scope: object): Map<string, Writer> {
   if (!writers) { writers = new Map(); scopedWriters.set(scope, writers) }
   return writers
 }
+
 export function registerLaunchWriter(id: string, writer: Writer, scope: object = defaultScope): () => void {
   const writers = writersFor(scope)
   writers.set(id, writer)
@@ -21,6 +22,10 @@ export function registerLaunchWriter(id: string, writer: Writer, scope: object =
 }
 export function launchCommand(id: string, command: string, manual = false, scope: object = defaultScope): Promise<LaunchOutcome> {
   return writersFor(scope).get(id)?.(command, manual) ?? Promise.resolve('cancelled')
+}
+/** Is a writer registered for `id` (its PTY is mounted, or parked with the writer alive)? */
+export function hasLaunchWriter(id: string, scope: object = defaultScope): boolean {
+  return writersFor(scope).has(id)
 }
 
 export function createLaunchWriter(opts: {

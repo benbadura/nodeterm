@@ -7,6 +7,7 @@ import { SettingsSidebar } from './SettingsSidebar'
 import { projectsSettingsGroup, type SettingsSectionId } from './nav'
 import { projectSectionId } from './project-settings-targets'
 import { useSettingsTarget } from './useSettingsTarget'
+import { SettingsSectionBoundary } from './SettingsSectionBoundary'
 import { ProjectSettingsSection } from './sections/ProjectSettingsSection'
 import { TerminalSection } from './sections/TerminalSection'
 import { ShellSection } from './sections/ShellSection'
@@ -27,6 +28,7 @@ import { LicenseSection } from './sections/LicenseSection'
 import { PresenceIdentitySection } from './sections/PresenceIdentitySection'
 import { RemoteSection } from './sections/RemoteSection'
 import { TeamAccessSection } from './sections/TeamAccessSection'
+import { LiveLinksSection } from './sections/LiveLinksSection'
 import { SshSection } from './sections/SshSection'
 import { UpdatesSection } from './sections/UpdatesSection'
 import { PrivacySection } from './sections/PrivacySection'
@@ -99,43 +101,100 @@ export function SettingsPage({
       <SettingsSearchContext.Provider value={query}>
         <main className="min-w-0 flex-1 overflow-y-auto px-12 py-10">
           <div className="mx-auto max-w-[860px] space-y-10">
-            <TerminalSection isActive={active === 'terminal'} />
-            <ShellSection isActive={active === 'shell'} />
-            <BehaviorSection isActive={active === 'behavior'} />
-            <AppearanceSection isActive={active === 'appearance'} />
-            {isMac && <NotchSection isActive={active === 'notch'} />}
-            <PhoneSection isActive={active === 'phone'} />
-            <SpeechSection isActive={active === 'speech'} onNavigate={setActive} />
-            <ShortcutsSection isActive={active === 'shortcuts'} />
-            <AgentsSection isActive={active === 'agents'} />
-            <UsageSection isActive={active === 'usage'} />
-            <AccountsSection isActive={active === 'accounts'} />
-            <CustomAgentsSection isActive={active === 'custom-agents'} />
-            <ModelGatewaySection isActive={active === 'model-gateway'} />
-            <NotificationsSection isActive={active === 'notifications'} />
-            <CommitSection isActive={active === 'commit'} />
-            <TmuxSection isActive={active === 'tmux'} />
-            <GitHubIssuesSection isActive={active === 'github-issues'} />
-            <LicenseSection
-              isActive={active === 'license'}
-              onNavigate={(id) => {
-                setQuery('')
-                setActive(id)
-              }}
-            />
-            <PresenceIdentitySection isActive={active === 'presence'} />
-            <RemoteSection isActive={active === 'remote'} onClose={onClose} />
-            <TeamAccessSection isActive={active === 'team-access'} onClose={onClose} />
-            <SshSection isActive={active === 'ssh'} />
-            <UpdatesSection isActive={active === 'updates'} />
-            <PrivacySection isActive={active === 'privacy'} />
-            <DebugSection isActive={active === 'debug'} />
-            {openProjects.map((p) => (
-              <ProjectSettingsSection
-                key={p.id}
-                projectId={p.id}
-                isActive={active === projectSectionId(p.id)}
+            <SettingsSectionBoundary title="Terminal" visible={active === 'terminal'}>
+              <TerminalSection isActive={active === 'terminal'} />
+            </SettingsSectionBoundary>
+            <SettingsSectionBoundary title="Shell" visible={active === 'shell'}>
+              <ShellSection isActive={active === 'shell'} />
+            </SettingsSectionBoundary>
+            <SettingsSectionBoundary title="Behavior" visible={active === 'behavior'}>
+              <BehaviorSection isActive={active === 'behavior'} />
+            </SettingsSectionBoundary>
+            <SettingsSectionBoundary title="Appearance" visible={active === 'appearance'}>
+              <AppearanceSection isActive={active === 'appearance'} />
+            </SettingsSectionBoundary>
+            {isMac && (
+              <SettingsSectionBoundary title="Notch" visible={active === 'notch'}>
+                <NotchSection isActive={active === 'notch'} />
+              </SettingsSectionBoundary>
+            )}
+            <SettingsSectionBoundary title="Phone" visible={active === 'phone'}>
+              <PhoneSection isActive={active === 'phone'} />
+            </SettingsSectionBoundary>
+            <SettingsSectionBoundary title="Speech" visible={active === 'speech'}>
+              <SpeechSection isActive={active === 'speech'} onNavigate={setActive} />
+            </SettingsSectionBoundary>
+            <SettingsSectionBoundary title="Keyboard Shortcuts" visible={active === 'shortcuts'}>
+              <ShortcutsSection isActive={active === 'shortcuts'} />
+            </SettingsSectionBoundary>
+            <SettingsSectionBoundary title="Agents" visible={active === 'agents'}>
+              <AgentsSection isActive={active === 'agents'} />
+            </SettingsSectionBoundary>
+            <SettingsSectionBoundary title="Usage" visible={active === 'usage'}>
+              <UsageSection isActive={active === 'usage'} />
+            </SettingsSectionBoundary>
+            <SettingsSectionBoundary title="Accounts" visible={active === 'accounts'}>
+              <AccountsSection isActive={active === 'accounts'} />
+            </SettingsSectionBoundary>
+            <SettingsSectionBoundary title="Custom agents" visible={active === 'custom-agents'}>
+              <CustomAgentsSection isActive={active === 'custom-agents'} />
+            </SettingsSectionBoundary>
+            <SettingsSectionBoundary title="Model gateway" visible={active === 'model-gateway'}>
+              <ModelGatewaySection isActive={active === 'model-gateway'} />
+            </SettingsSectionBoundary>
+            <SettingsSectionBoundary title="Notifications" visible={active === 'notifications'}>
+              <NotificationsSection isActive={active === 'notifications'} />
+            </SettingsSectionBoundary>
+            <SettingsSectionBoundary title="Commit messages" visible={active === 'commit'}>
+              <CommitSection isActive={active === 'commit'} />
+            </SettingsSectionBoundary>
+            <SettingsSectionBoundary title="Session protection" visible={active === 'tmux'}>
+              <TmuxSection isActive={active === 'tmux'} />
+            </SettingsSectionBoundary>
+            <SettingsSectionBoundary title="GitHub Issues" visible={active === 'github-issues'}>
+              <GitHubIssuesSection isActive={active === 'github-issues'} />
+            </SettingsSectionBoundary>
+            <SettingsSectionBoundary title="License" visible={active === 'license'}>
+              <LicenseSection
+                isActive={active === 'license'}
+                onNavigate={(id) => {
+                  setQuery('')
+                  setActive(id)
+                }}
               />
+            </SettingsSectionBoundary>
+            <SettingsSectionBoundary title="Your name" visible={active === 'presence'}>
+              <PresenceIdentitySection isActive={active === 'presence'} />
+            </SettingsSectionBoundary>
+            <SettingsSectionBoundary title="Remote access" visible={active === 'remote'}>
+              <RemoteSection isActive={active === 'remote'} onClose={onClose} />
+            </SettingsSectionBoundary>
+            <SettingsSectionBoundary title="Team seats" visible={active === 'team-access'}>
+              <TeamAccessSection isActive={active === 'team-access'} onClose={onClose} />
+            </SettingsSectionBoundary>
+            <SettingsSectionBoundary title="Live links" visible={active === 'live-links'}>
+              <LiveLinksSection isActive={active === 'live-links'} />
+            </SettingsSectionBoundary>
+            <SettingsSectionBoundary title="Remote (SSH)" visible={active === 'ssh'}>
+              <SshSection isActive={active === 'ssh'} />
+            </SettingsSectionBoundary>
+            <SettingsSectionBoundary title="Updates" visible={active === 'updates'}>
+              <UpdatesSection isActive={active === 'updates'} />
+            </SettingsSectionBoundary>
+            <SettingsSectionBoundary title="Privacy" visible={active === 'privacy'}>
+              <PrivacySection isActive={active === 'privacy'} />
+            </SettingsSectionBoundary>
+            <SettingsSectionBoundary title="Debug" visible={active === 'debug'}>
+              <DebugSection isActive={active === 'debug'} />
+            </SettingsSectionBoundary>
+            {openProjects.map((p) => (
+              <SettingsSectionBoundary
+                key={p.id}
+                title={p.name}
+                visible={active === projectSectionId(p.id)}
+              >
+                <ProjectSettingsSection projectId={p.id} isActive={active === projectSectionId(p.id)} />
+              </SettingsSectionBoundary>
             ))}
           </div>
         </main>

@@ -6,7 +6,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SshProjectManager, lastSshErrorLine } from './ssh-project'
 import { AskpassServer } from './ssh-askpass'
 import { AppSshAgent } from './ssh-agent'
+import { RemoteHooks } from './remote-hooks'
 import { controlPathFor } from '../../core/remote-ssh/control-master'
+import { SHARE_TIMEOUTS } from './share-team'
 import { remoteCodexSocket } from '../../core/codex-accounts-core'
 import type { SshConnection } from '@shared/ssh'
 
@@ -89,6 +91,14 @@ describe('SshProjectManager', () => {
     expect(mgr.refForProject('p1')?.conn.identityAgentSock).toBeUndefined()
   })
 
+  it('sshRun hands its timeout to the runner (Share with team: bootstrap needs 60 s, not the 15 s default)', async () => {
+    const { mgr, run } = makeMgr()
+    await mgr.sshRun(['-S', '/cp', 'h', 'true'], 'stdin', { timeoutMs: SHARE_TIMEOUTS.bootstrap })
+    expect(run).toHaveBeenLastCalledWith(['-S', '/cp', 'h', 'true'], 'stdin', 60_000)
+    await mgr.sshRun(['h', 'true'])
+    expect(run).toHaveBeenLastCalledWith(['h', 'true'], undefined, undefined) // the runner's own default
+  })
+
   it('listDir parses remote dir entries', async () => {
     const { mgr } = makeMgr()
     await mgr.connect('p1', conn)
@@ -157,6 +167,39 @@ describe('SshProjectManager', () => {
     }
   })
 
+  it('writePendingAnswer puts a structured decision on STDIN, never in the remote command', async () => {
+    const { mgr, run } = makeMgr()
+    await mgr.connect('p1', conn)
+    const json =
+      '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"it\'s $(rm -rf ~)"}}}'
+    expect(await mgr.writePendingAnswer('p1', 'node-1-2', json)).toBe(true)
+    const call = run.mock.calls.find((c) => (c[0] as string[]).join(' ').includes('.answer'))!
+    expect(call[1]).toBe(json)
+    expect((call[0] as string[]).join(' ')).not.toContain('hookSpecificOutput')
+    expect((call[0] as string[]).join(' ')).not.toContain('rm -rf')
+  })
+
+  it('readPendingRequest reads the held request over the master, bounded, and null on any failure', async () => {
+    const { mgr, run } = makeMgr()
+    expect(await mgr.readPendingRequest('p1', 'node-1-2')).toBeNull() // not connected
+    await mgr.connect('p1', conn)
+    const req = '{"hook_event_name":"PermissionRequest","tool_name":"ExitPlanMode","tool_input":{}}'
+    run.mockImplementation(async (args: string[]) =>
+      args.join(' ').includes('pending/node-1-2.json') ? { code: 0, stdout: req } : { code: 0, stdout: '' }
+    )
+    expect(await mgr.readPendingRequest('p1', 'node-1-2')).toBe(req)
+    const cmd = (run.mock.calls.at(-1)![0] as string[]).join(' ')
+    expect(cmd).toContain('head -c')
+    expect(cmd).toContain('exit 3') // a missing file is an answer, reported as null
+    run.mockImplementation(async () => ({ code: 3, stdout: '' }))
+    expect(await mgr.readPendingRequest('p1', 'node-1-2')).toBeNull()
+    run.mockImplementation(async () => { throw new Error('master down') })
+    expect(await mgr.readPendingRequest('p1', 'node-1-2')).toBeNull()
+    const before = run.mock.calls.length
+    expect(await mgr.readPendingRequest('p1', '../x')).toBeNull()
+    expect(run.mock.calls.length).toBe(before)
+  })
+
   it('writePendingAnswer refuses an invalid pendingId and a disconnected project (no run)', async () => {
     const { mgr, run } = makeMgr()
     // Not connected → false, no ssh command issued.
@@ -164,8 +207,9 @@ describe('SshProjectManager', () => {
     await mgr.connect('p1', conn)
     const before = run.mock.calls.length
     expect(await mgr.writePendingAnswer('p1', '../evil', 'allow')).toBe(false)
-    // @ts-expect-error, runtime guard against a bad decision value
+    // Content the hook script would not print is refused before any ssh (same bound as the script).
     expect(await mgr.writePendingAnswer('p1', 'ok-id', 'always')).toBe(false)
+    expect(await mgr.writePendingAnswer('p1', 'ok-id', '{"hookSpecificOutput":{"hookEventName":"PreToolUse"}}')).toBe(false)
     expect(run.mock.calls.length).toBe(before) // neither refusal touched ssh
   })
 
@@ -1482,6 +1526,41 @@ describe('SshProjectManager', () => {
       expect(onStatus).toHaveBeenCalledWith({ projectId: 'p1', status: 'connected', hookTunnelVerified: true })
     })
 
+    it('ONE failed probe never raises the banner — neither when the repair heals it nor when the next probe does', async () => {
+      // Field report (Linux desktop → Mac on the same desk, no sleep): "Agent status and canvas
+      // control lost their verified connection" kept appearing. The probe is one `curl -m 5` over
+      // the shared master, and a single slow round trip used to put the banner up by itself.
+      let dead = 0
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const mgr = makeVerifiedMgr(vi.fn(), () => (dead-- > 0 ? '000' : '204'))
+      const onStatus = (mgr as unknown as { r: { onStatus: ReturnType<typeof vi.fn> } }).r.onStatus
+      await mgr.connect('p1', conn, '/remote/cwd')
+      // (a) probe fails once, the repair's own verify succeeds → healed silently.
+      dead = 1
+      await mgr.connect('p1', conn, '/remote/cwd')
+      // (b) probe AND repair fail once, the next tick's probe answers → still silent.
+      dead = 3 // the probe + both of setup()'s verify attempts
+      await mgr.connect('p1', conn, '/remote/cwd')
+      await mgr.connect('p1', conn, '/remote/cwd')
+      expect(onStatus.mock.calls.filter(([e]) => e.hookTunnelVerified !== undefined)).toEqual([])
+      // …but every failure is logged with its cause, the only field evidence there is.
+      expect(warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('hook tunnel probe failed'))).toEqual([
+        '[ssh-project] hook tunnel probe failed for p1 (#1): unexpected HTTP answer (exit 0, http 000)',
+        '[ssh-project] hook tunnel probe failed for p1 (#1): unexpected HTTP answer (exit 0, http 000)'
+      ])
+    })
+
+    it('TWO consecutive failed probes raise the banner, even while the repair is backing off', async () => {
+      const mgr = makeVerifiedMgr(vi.fn(), () => '000')
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const onStatus = (mgr as unknown as { r: { onStatus: ReturnType<typeof vi.fn> } }).r.onStatus
+      await mgr.connect('p1', conn, '/remote/cwd') // establish fails verification → no spec
+      await mgr.connect('p1', conn, '/remote/cwd') // failure #1 → repair attempted, fails
+      expect(onStatus.mock.calls.filter(([e]) => e.hookTunnelVerified === false)).toHaveLength(0)
+      await mgr.connect('p1', conn, '/remote/cwd') // failure #2 → inside backoff, still reported
+      expect(onStatus.mock.calls.filter(([e]) => e.hookTunnelVerified === false)).toHaveLength(1)
+    })
+
     it('rebinds the forward on repair — the endpoint is re-advertised, not merely re-probed', async () => {
       // The whole failure is a master with no `-R`, so a repair that did not call `-O forward`
       // would leave every hook POST dying exactly as before while reporting success.
@@ -1539,6 +1618,95 @@ describe('SshProjectManager', () => {
       // Everything AFTER the hook still ran: the connect result is complete, not truncated.
       expect(res.hookEndpointPath).toMatch(/^\/home\/u\/\.nodeterm\/hook-endpoint-p1-[a-f0-9]{16}\.env$/)
       expect(res.remoteHome).toBe('/home/u')
+    })
+  })
+
+  // --- the host's agent tools (shims, skills, instruction blocks) --------------------------------
+  //
+  // They used to be written only by the establish path, blind, and never looked at again: a
+  // tunnel repaired later on the reuse branch never got them, a fire-and-forget install that
+  // failed was never retried, and a managed account's skill was written only when the account was
+  // added. These pin WHO asks for the check and with which trigger; the check itself (one probe,
+  // rewrite only what differs, the cadence) is pinned in agent-tools-refresh.test.ts.
+  describe('agent tools on the host', () => {
+    afterEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    function agentToolsMgr(opts: { httpCode?: () => string; leftoverSocket?: boolean; accounts?: string[] } = {}) {
+      const refresh = vi.spyOn(RemoteHooks.prototype, 'refreshAgentTools').mockResolvedValue('current')
+      const install = vi.spyOn(RemoteHooks.prototype, 'installAgentTools')
+      vi.spyOn(fs, 'mkdir').mockResolvedValue(undefined as never)
+      if (opts.leftoverSocket) vi.spyOn(fs, 'stat').mockResolvedValue({ isSocket: () => true } as never)
+      else vi.spyOn(fs, 'stat').mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
+      const spawnMaster = vi.fn(() => ({ kill: vi.fn(), on: vi.fn() }))
+      const hostKeys: string[] = []
+      const run = vi.fn(async (args: string[]) => {
+        const j = args.join(' ')
+        if (j.includes('$HOME')) return { code: 0, stdout: '/home/u' }
+        if (j.includes('%{http_code}')) return { code: 0, stdout: opts.httpCode?.() ?? '204' }
+        return { code: 0, stdout: '' }
+      })
+      const mgr = new SshProjectManager({
+        userDataDir: '/ud',
+        spawnMaster,
+        run,
+        runScp: vi.fn(async () => ({ code: 0 })),
+        getHook: () => ({ port: 1, token: 't', version: '1' }),
+        onStatus: vi.fn(),
+        claudeAccountIdsForHost: (hostKey: string) => {
+          hostKeys.push(hostKey)
+          return opts.accounts ?? []
+        }
+      })
+      return { mgr, refresh, install, spawnMaster, hostKeys }
+    }
+    const triggers = (refresh: { mock: { calls: unknown[][] } }) => refresh.mock.calls.map((c) => c[4])
+
+    it('a genuine establish CHECKS the host — with this host\'s managed accounts — instead of rewriting it blind', async () => {
+      const { mgr, refresh, install, hostKeys } = agentToolsMgr({ accounts: ['acc-1', 'acc-2'] })
+      await mgr.connect('p1', conn, '/remote/cwd')
+      expect(refresh).toHaveBeenCalledTimes(1)
+      expect(refresh).toHaveBeenCalledWith(conn, controlPathFor('p1'), '/home/u', ['acc-1', 'acc-2'], 'connect')
+      expect(hostKeys).toEqual(['u@h'])
+      expect(install).not.toHaveBeenCalled()
+    })
+
+    it('the first connect after an app restart adopts the surviving master AND checks the host', async () => {
+      // The trigger an update actually takes: `conns` is in memory, so a relaunch never lands on the
+      // reuse branch — it adopts the ControlPersist orphan on the establish path. This pins that
+      // the check runs there too, so an update's new docs reach the host on its first connect.
+      const { mgr, refresh, spawnMaster } = agentToolsMgr({ leftoverSocket: true })
+      await mgr.connect('p1', conn, '/remote/cwd')
+      expect(spawnMaster).not.toHaveBeenCalled() // adopted
+      expect(triggers(refresh)).toEqual(['connect'])
+    })
+
+    it('the reuse branch asks too (the check decides whether that costs anything)', async () => {
+      const { mgr, refresh } = agentToolsMgr()
+      await mgr.connect('p1', conn, '/remote/cwd')
+      await mgr.connect('p1', conn, '/remote/cwd')
+      expect(triggers(refresh)).toEqual(['connect', 'reuse'])
+    })
+
+    it('a tunnel repaired on the reuse branch gets its agent tools — it never did before', async () => {
+      // An establish whose tunnel failed verification installs nothing (a skill pointing at a dead
+      // socket is worse than none); the watchdog's later repair used to rebuild the tunnel and stop
+      // there, leaving the host with no shim, or another build's, for the rest of the run.
+      let dead = true
+      const { mgr, refresh } = agentToolsMgr({ httpCode: () => (dead ? '000' : '204') })
+      await mgr.connect('p1', conn, '/remote/cwd')
+      expect(refresh).not.toHaveBeenCalled()
+      dead = false
+      await mgr.connect('p1', conn, '/remote/cwd')
+      expect(triggers(refresh)).toEqual(['repair'])
+    })
+
+    it('a reuse whose tunnel is still dead asks nothing', async () => {
+      const { mgr, refresh } = agentToolsMgr({ httpCode: () => '000' })
+      await mgr.connect('p1', conn, '/remote/cwd')
+      await mgr.connect('p1', conn, '/remote/cwd')
+      expect(refresh).not.toHaveBeenCalled()
     })
   })
 
@@ -2635,6 +2803,95 @@ describe('master watchdog', () => {
   })
 })
 
+describe('wake-from-sleep round trip (revalidateAll({ roundTrip: true }))', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  // A master whose TCP died in a sleep: the PROCESS still serves `-O check` (exit 0) until it is
+  // told `-O exit`; a real round trip hangs. Measured against a black-holed sshd connection.
+  function makeHalfDeadMgr(probeVerdict: 'answered' | 'timeout' | 'throws' | 'absent') {
+    vi.spyOn(fs, 'mkdir').mockResolvedValue(undefined as never)
+    vi.spyOn(fs, 'stat').mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
+    vi.spyOn(fs, 'rm').mockResolvedValue(undefined)
+    const statuses: string[] = []
+    let exited = false
+    const spawnMaster = vi.fn(() => {
+      exited = false
+      return { kill: vi.fn(), on: vi.fn() }
+    })
+    const run = vi.fn(async (args: string[]) => {
+      if (args.includes('-O') && args.includes('exit')) {
+        exited = true
+        return { code: 0, stdout: '' }
+      }
+      if (args.includes('-O') && args.includes('check')) return { code: exited ? 255 : 0, stdout: '' }
+      return { code: 0, stdout: '' }
+    })
+    const probe = vi.fn(async (_args: string[], _timeoutMs: number) => {
+      if (probeVerdict === 'throws') throw new Error('spawn failed')
+      return probeVerdict as 'answered' | 'timeout'
+    })
+    const mgr = new SshProjectManager({
+      userDataDir: '/ud',
+      spawnMaster,
+      run,
+      ...(probeVerdict === 'absent' ? {} : { probe }),
+      runScp: vi.fn(async () => ({ code: 0 })),
+      getHook: () => ({ port: 1, token: 't', version: '1' }),
+      onStatus: (e) => statuses.push(e.status)
+    })
+    const exitCalls = () => run.mock.calls.filter(([a]) => a.includes('-O') && a.includes('exit')).length
+    return { mgr, statuses, spawnMaster, probe, exitCalls }
+  }
+
+  it('a master that times out the round trip is ended and re-established', async () => {
+    const { mgr, statuses, spawnMaster, probe, exitCalls } = makeHalfDeadMgr('timeout')
+    await mgr.connect('p1', conn)
+    await mgr.revalidateAll({ roundTrip: true })
+    const [args, timeoutMs] = probe.mock.calls[0]
+    expect(args).toEqual(expect.arrayContaining(['ControlMaster=no', 'BatchMode=yes', 'true']))
+    expect(args).toContain(`ControlPath=${controlPathFor('p1')}`)
+    expect(timeoutMs).toBeGreaterThan(0)
+    // Ours, then connect()'s own dead-branch `-O exit` (its no-op-if-already-gone belt).
+    expect(exitCalls()).toBeGreaterThanOrEqual(1)
+    expect(spawnMaster).toHaveBeenCalledTimes(2)
+    expect(statuses).toContain('reconnecting')
+    expect(statuses.at(-1)).toBe('connected')
+  })
+
+  it('a master that answers is left alone', async () => {
+    const { mgr, statuses, spawnMaster, exitCalls } = makeHalfDeadMgr('answered')
+    await mgr.connect('p1', conn)
+    await mgr.revalidateAll({ roundTrip: true })
+    expect(exitCalls()).toBe(0)
+    expect(spawnMaster).toHaveBeenCalledTimes(1)
+    expect(statuses).not.toContain('reconnecting')
+  })
+
+  it('a probe that cannot run convicts nothing', async () => {
+    const { mgr, spawnMaster, exitCalls } = makeHalfDeadMgr('throws')
+    await mgr.connect('p1', conn)
+    await mgr.revalidateAll({ roundTrip: true })
+    expect(exitCalls()).toBe(0)
+    expect(spawnMaster).toHaveBeenCalledTimes(1)
+  })
+
+  it('the watchdog pass (no roundTrip) never probes — its cost stays one `-O check`', async () => {
+    const { mgr, probe, exitCalls } = makeHalfDeadMgr('timeout')
+    await mgr.connect('p1', conn)
+    await mgr.revalidateAll()
+    expect(probe).not.toHaveBeenCalled()
+    expect(exitCalls()).toBe(0)
+  })
+
+  it('without a probe runner the wake pass is the old `-O check` revalidate', async () => {
+    const { mgr, spawnMaster, exitCalls } = makeHalfDeadMgr('absent')
+    await mgr.connect('p1', conn)
+    await mgr.revalidateAll({ roundTrip: true })
+    expect(exitCalls()).toBe(0)
+    expect(spawnMaster).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('lastSshErrorLine', () => {
   it('picks the actionable last line, skipping debug noise', () => {
     const stderr = [
@@ -3008,5 +3265,59 @@ describe('SshProjectManager — atomic remote import (Task 6.2, Property 2 + 11)
     ).rejects.toThrow(/did not discover the imported conversation/)
     // The rollback removed the freshly installed target — no half-landed state.
     expect(seen.some((c) => /rm -f '[^']*rollout-x\.jsonl'/.test(c))).toBe(true)
+  })
+})
+
+// From codex-cli 0.157.0 a plain Codex TUI joins ONE auto-started app-server per CODEX_HOME that
+// keeps the first pane's NODETERM_* env; on an SSH host that means every later remote Codex node
+// runs as the first one. The fix is `--no-daemon`, which may ride a REMOTE line only when that
+// host's own `codex --help` advertised it — the laptop's probe says nothing about the host.
+describe('SshProjectManager — remote codex --no-daemon probe', () => {
+  function mgrWithCodexHelp(answer: string) {
+    const events: { status: string; remoteCodexNoDaemon?: unknown }[] = []
+    const run = vi.fn(async (args: string[]) => {
+      const cmd = args.join(' ')
+      if (cmd.includes('__NT_CODEX_ND__')) return { code: 0, stdout: `Welcome yes\n${answer}` }
+      if (cmd.includes('printf %s')) return { code: 0, stdout: '/home/u' }
+      return { code: 0, stdout: '' }
+    })
+    const mgr = new SshProjectManager({
+      userDataDir: '/ud',
+      spawnMaster: vi.fn(() => ({ kill: vi.fn(), on: vi.fn() })),
+      run,
+      runScp: vi.fn(async () => ({ code: 0 })),
+      getHook: () => ({ port: 1, token: 't', version: '1' }),
+      onStatus: (e) => events.push({ status: e.status, remoteCodexNoDaemon: e.remoteCodexNoDaemon })
+    })
+    return { mgr, events }
+  }
+  const answered = (events: { remoteCodexNoDaemon?: unknown }[]) =>
+    events.find((e) => e.remoteCodexNoDaemon !== undefined)
+
+  it('publishes the HOST\'s answer, keyed by user@host:port, on a connected event', async () => {
+    const { mgr, events } = mgrWithCodexHelp('__NT_CODEX_ND__yes__NT_CODEX_ND_END__')
+    await mgr.connect('p1', conn)
+    await vi.waitFor(() => expect(answered(events)).toBeDefined())
+    expect(answered(events)).toEqual({
+      status: 'connected',
+      remoteCodexNoDaemon: { hostKey: 'u@h:22', supported: true }
+    })
+    // A reused connection hands the same answer back with the connect result.
+    const again = await mgr.connect('p1', conn)
+    expect(again.remoteCodexNoDaemon).toEqual({ hostKey: 'u@h:22', supported: true })
+  })
+
+  it('an older host codex answers false', async () => {
+    const { mgr, events } = mgrWithCodexHelp('__NT_CODEX_ND__no__NT_CODEX_ND_END__')
+    await mgr.connect('p1', conn)
+    await vi.waitFor(() => expect(answered(events)).toBeDefined())
+    expect(answered(events)?.remoteCodexNoDaemon).toEqual({ hostKey: 'u@h:22', supported: false })
+  })
+
+  it('no markers (no codex on the host, a failed probe) publishes nothing — the line stays as it was', async () => {
+    const { mgr, events } = mgrWithCodexHelp('')
+    await mgr.connect('p1', conn)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(answered(events)).toBeUndefined()
   })
 })

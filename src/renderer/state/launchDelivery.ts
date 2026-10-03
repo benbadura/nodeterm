@@ -13,7 +13,7 @@ import type { LaunchDelivery } from '../lib/pendingLaunch'
  * Absent = nothing to report: the node is simply waiting on its dependencies (which the QUEUED
  * badge already explains), or it has not been armed at all.
  *
- * The states, and why both exist:
+ * The states, and why each exists:
  *  - `stalled` — the gate is OPEN (every dependency is satisfied) but the node's terminal has not
  *    come up, so there is nothing to deliver INTO yet. We keep waiting — an SSH host that comes
  *    back, a slow spawn and a project the user just switched to all end here first — but we say
@@ -22,9 +22,18 @@ import type { LaunchDelivery } from '../lib/pendingLaunch'
  *  - `failed` — the terminal DID come up and refused the launch anyway, for every attempt in the
  *    backoff schedule. That is a real dead end: nothing further will retry it, so the badge must
  *    carry the warning and point at the manual ▶.
+ *  - `starting` — a headless start (#925) is in flight: core has claimed the node and is typing its
+ *    launch into the pane. NOT a warning: the badge reads STARTING and ▶ is disabled, because a
+ *    click would splice a second copy of the command into the one core is typing. Its orchestrator
+ *    owns it end to end — `clear` on a start (or a refusal before any spawn), `markFailed` on any
+ *    other failure — which is why the Canvas sweep never retires it (`deliveriesToRetire`).
+ *  - `brief-missing` — the gate opened and the session is up, but the file the launch reads its
+ *    prompt from is gone. Typing the command would start the agent with no brief, so it is held
+ *    (the node is persisted `manualOnly`) and the tooltip names the path; ▶ runs it anyway.
  *
- * Neither state is ever inferred from silence. `stalled` is raised by a timer that starts when
- * the gate opens, `failed` only after a delivery was actually attempted and refused.
+ * No state is ever inferred from silence. `stalled` is raised by a timer that starts when the gate
+ * opens, `failed` only after a delivery was actually attempted and refused, `starting` only by the
+ * orchestrator that is about to launch.
  */
 export type { LaunchDelivery }
 
@@ -34,6 +43,10 @@ interface LaunchDeliveryStore {
   markStalled: (nodeId: string) => void
   /** Every attempt in the schedule was refused. Terminal: only ▶ (or a respawn) revives it. */
   markFailed: (nodeId: string, attempts: number) => void
+  /** A headless start (#925) is about to type this node's launch: ▶ must stand aside until it settles. */
+  markStarting: (nodeId: string) => void
+  /** The launch's prompt file was gone at delivery: held for ▶, with the path, never typed. */
+  markBriefMissing: (nodeId: string, path: string) => void
   /** Delivered, disarmed, or the node is gone — nothing left to report. */
   clear: (nodeId: string) => void
 }
@@ -43,9 +56,16 @@ export const useLaunchDelivery = create<LaunchDeliveryStore>((set) => ({
   markStalled: (nodeId) =>
     set((s) =>
       // Idempotent: the sweep can re-raise this on every re-render, and a fresh `since` on each
-      // would make the badge's age tick backwards. `failed` is never downgraded to `stalled`.
+      // would make the badge's age tick backwards. ANY existing record wins, so `failed` is never
+      // downgraded to `stalled` and a `starting` start is never overwritten by one.
       s.byId[nodeId] ? s : { byId: { ...s.byId, [nodeId]: { kind: 'stalled', since: Date.now() } } }
     ),
+  markStarting: (nodeId) =>
+    // Unconditional: a start replaces whatever an earlier attempt left behind, `failed` included —
+    // that record described the attempt this one is retrying.
+    set((s) => ({ byId: { ...s.byId, [nodeId]: { kind: 'starting', since: Date.now() } } })),
+  markBriefMissing: (nodeId, path) =>
+    set((s) => ({ byId: { ...s.byId, [nodeId]: { kind: 'brief-missing', path, at: Date.now() } } })),
   markFailed: (nodeId, attempts) =>
     set((s) => {
       // Never let a later, smaller count shrink the record: the manual ▶ reports its own single

@@ -19,3 +19,33 @@ describe('Kanban column row layout', () => {
     )
   })
 })
+
+describe('Card modal ⌘M view stacking (issue #389 resize handles)', () => {
+  // Comments stripped first: the rule's own comment names the numbers it pins.
+  const bare = CSS.replace(/\/\*[\s\S]*?\*\//g, '')
+  const zOf = (re: RegExp): number => {
+    const m = bare.match(re)
+    expect(m, `rule not found: ${re}`).toBeTruthy()
+    return Number(m![1])
+  }
+
+  it('lays the ⌘M face BELOW the sheet\'s resize handles, so resize keeps working while it is open', () => {
+    const overlay = zOf(
+      /\.kanban-modal__pane > \.term-md,\s*\.kanban-modal__pane > \.term-chat\s*{[^}]*z-index:\s*(\d+)/
+    )
+    const edges = zOf(/\.kanban-modal__resize\s*{[^}]*z-index:\s*(\d+)/)
+    const corners = zOf(/\.kanban-modal__resize--sw\s*{[^}]*z-index:\s*(\d+)/)
+    expect(overlay).toBeLessThan(edges)
+    expect(overlay).toBeLessThan(corners)
+  })
+
+  it('still covers the viewer\'s copy pill and upload note (it is the later sibling, so equal z wins)', () => {
+    const overlay = zOf(
+      /\.kanban-modal__pane > \.term-md,\s*\.kanban-modal__pane > \.term-chat\s*{[^}]*z-index:\s*(\d+)/
+    )
+    const pill = zOf(/\.term-copy-pill\s*{[^}]*z-index:\s*(\d+)/)
+    const upload = zOf(/\.kanban-modal__upload\s*{[^}]*z-index:\s*(\d+)/)
+    expect(overlay).toBeGreaterThanOrEqual(pill)
+    expect(overlay).toBeGreaterThanOrEqual(upload)
+  })
+})

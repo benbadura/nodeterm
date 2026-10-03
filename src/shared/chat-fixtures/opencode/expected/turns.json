@@ -1,0 +1,85 @@
+{
+  "sessionId": "ses_0a1b2c3d4ffeSynthetic000001",
+  "parse": {
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Explain the **retry** policy.\n\n- one\n- two"
+          }
+        ],
+        "at": 1780000001000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "## Retry\n\nThree attempts, then a backoff:\n\n```ts\nconst n = 3\n```"
+          },
+          {
+            "kind": "text",
+            "text": "Second block — ğüşçöı 😀"
+          }
+        ],
+        "at": 1780000002000
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Thanks!"
+          }
+        ],
+        "at": 1780000003000
+      }
+    ],
+    "skipped": 0,
+    "model": "demo-model"
+  },
+  "page": {
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Explain the **retry** policy.\n\n- one\n- two"
+          }
+        ],
+        "at": 1780000001000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "## Retry\n\nThree attempts, then a backoff:\n\n```ts\nconst n = 3\n```"
+          },
+          {
+            "kind": "text",
+            "text": "Second block — ğüşçöı 😀"
+          }
+        ],
+        "at": 1780000002000
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Thanks!"
+          }
+        ],
+        "at": 1780000003000
+      }
+    ],
+    "found": true,
+    "olderCursor": null,
+    "unmatchedResults": [],
+    "model": "demo-model"
+  }
+}

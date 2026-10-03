@@ -1,0 +1,3 @@
+{"type":"user","content":[{"type":"text","text":"go"}],"prompt_index":0}
+{"type":"assistant","content":"older","model_id":"grok-4.6-build","model_fingerprint":"fp_0000000000synthetic","reasoning_effort":"xhigh"}
+{"type":"assistant","content":"newest states no effort","model_id":"grok-code-fast","model_fingerprint":"fp_0000000000synthetic"}

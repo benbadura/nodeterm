@@ -10,6 +10,10 @@ try {
         # Old uninstallers can use a machine-wide NAME match, or a PATH PREFIX match without a
         # directory boundary. We must cover both before handing control to that old executable.
         # This deliberately blocks another installation too; it never terminates its processes.
+        # The STAGED host (nodeterm-sessionhost-v2.exe, run from a private copy under
+        # %LOCALAPPDATA%\nodeterm\session-host, issue #829) is deliberately NOT matched by name:
+        # it maps none of this installation's files, so the install may replace them while it
+        # keeps its sessions. It is still caught by the path test below if it ever ran from here.
         if ($process.Name -ieq 'nodeterm.exe' -or $process.Name -ieq 'nodeterm-session-host.exe') {
             if ([string]::IsNullOrWhiteSpace($process.ExecutablePath)) { exit 20 }
             exit 10

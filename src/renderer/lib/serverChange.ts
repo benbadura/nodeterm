@@ -27,6 +27,8 @@ export interface EdgeRef {
   id: string
   source: string
   target: string
+  /** Bridges only: the one-way reader of a context link (issue #852). Ropes never carry it. */
+  reader?: string
 }
 
 export interface ServerChangeInput {
@@ -56,7 +58,13 @@ export interface ServerChangePlan {
   bridgesChanged: boolean
 }
 
-const edgeRef = (e: EdgeRef): EdgeRef => ({ id: e.id, source: e.source, target: e.target })
+// A bridge's one-way `reader` (issue #852) is part of the link, not display state: dropping it
+// here would turn a one-way link back into a two-way one on any server-side change.
+// A present-but-malformed reader is kept too: it grants nobody, and dropping it would widen it.
+const edgeRef = (e: EdgeRef): EdgeRef =>
+  e.reader !== undefined
+    ? { id: e.id, source: e.source, target: e.target, reader: e.reader }
+    : { id: e.id, source: e.source, target: e.target }
 
 /** One merge, applied to ropes and to bridges alike — they are the same problem with two names,
  *  and a second copy of these five rules is a second place for them to drift. */

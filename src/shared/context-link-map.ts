@@ -6,6 +6,7 @@
 // from persisted project files instead (src/server/context-link.ts). Same rules either way, so
 // they belong in one place rather than two that drift.
 import type { BridgeLink, CanvasNodeState, ContextLinkInfo, ContextLinkMap } from './types'
+import { linkReadPairs, type LinkEdge } from './canvas-link'
 
 export interface LinkNodeInfo {
   id: string
@@ -20,11 +21,13 @@ export interface LinkNodeInfo {
 
 /**
  * Build the node → linked-nodes map pushed to main (which writes the per-node link files).
- * Context edges map both directions; note edges map one direction only — the terminal side
- * gets a { id, title, note } entry, the sticky side gets nothing (a sticky cannot read).
+ * Context edges map both directions unless the edge names a one-way `reader` (issue #852), in
+ * which case only the reader gets an entry — and since main serves a node nothing outside its own
+ * entry list, that is what stops the other side reading. Note edges map one direction only — the
+ * terminal side gets a { id, title, note } entry, the sticky side gets nothing (a sticky cannot read).
  */
 export function buildLinkMap(
-  edges: Array<{ source: string; target: string }>,
+  edges: LinkEdge[],
   infoOf: (id: string) => LinkNodeInfo
 ): ContextLinkMap {
   const map: ContextLinkMap = {}
@@ -45,8 +48,9 @@ export function buildLinkMap(
     } else if (t.sticky) {
       ;(map[s.id] ??= []).push(entryOf(t))
     } else {
-      ;(map[s.id] ??= []).push(entryOf(t))
-      ;(map[t.id] ??= []).push(entryOf(s))
+      for (const { reader } of linkReadPairs(e)) {
+        ;(map[reader] ??= []).push(entryOf(reader === s.id ? t : s))
+      }
     }
   }
   return map

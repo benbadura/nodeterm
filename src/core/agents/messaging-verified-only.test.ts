@@ -16,7 +16,13 @@ import os from 'os'
 import path from 'path'
 import { initPlatform, resetPlatformForTests } from '../platform'
 import { fakePlatform } from '../platform-fake'
-import { hookServer, MESSAGING_CONTROL_REFUSAL, requiresVerified, verifiedRefusalFor } from './hook-server'
+import {
+  hookServer,
+  MESSAGING_CONTROL_REFUSAL,
+  RUN_CONTROL_REFUSAL,
+  requiresVerified,
+  verifiedRefusalFor
+} from './hook-server'
 import { nodeAuthToken } from './node-auth-token'
 import { TOLERANT_CONTROL_VERBS } from './node-identity-policy'
 import { DESTRUCTIVE_VERBS } from '../../shared/control-verbs'
@@ -96,13 +102,20 @@ describe('send/reply require `verified` — and controlPolicy is NOT the decider
 
   it('tells a text/plain caller the same refusal, without token or restart advice', async () => {
     hookServer.setIdentityStrictOverride(() => undefined)
-    const res = await post('send', 'n-src', undefined, 'text/plain')
-    expect(res.status).toBe(403)
-    const text = (await res.text()).trim()
-    expect(text).toBe(MESSAGING_CONTROL_REFUSAL)
-    // No diagnosis and no hint: advice here is advice to an attacker and a lie to nobody else.
-    for (const hint of ['token', 'Restart', 'restart', 'identity']) {
-      expect(text).not.toContain(hint)
+    // `run` (#925) is held to the same posture: its refusal names what was refused and nothing
+    // else, even though it has its own sentence.
+    for (const [verb, refusal] of [
+      ['send', MESSAGING_CONTROL_REFUSAL],
+      ['run', RUN_CONTROL_REFUSAL]
+    ] as const) {
+      const res = await post(verb, 'n-src', undefined, 'text/plain')
+      expect(res.status, verb).toBe(403)
+      const text = (await res.text()).trim()
+      expect(text, verb).toBe(refusal)
+      // No diagnosis and no hint: advice here is advice to an attacker and a lie to nobody else.
+      for (const hint of ['token', 'Restart', 'restart', 'identity']) {
+        expect(text, verb).not.toContain(hint)
+      }
     }
     expect(handled).toEqual([])
   })
@@ -123,6 +136,33 @@ describe('send/reply require `verified` — and controlPolicy is NOT the decider
   })
 })
 
+describe('issue #1088: a refusal caused by the INSTANCE says so', () => {
+  it('names the unavailable node identity and the shell-reported cause, still refusing', async () => {
+    // A keyring-less Linux desktop could not arm a secret at all, so EVERY session was legacy and
+    // `send`/`settings` were refused forever with only the flat sentence — no visible cause.
+    hookServer.clearNodeAuthSecretForTests()
+    hookServer.setNodeIdentityUnavailable(new Error('Encryption is not available.'))
+    try {
+      for (const verb of ['send', 'settings'] as const) {
+        const res = await post(verb, 'n-src', undefined, 'text/plain')
+        expect(res.status, verb).toBe(403)
+        const text = (await res.text()).trim()
+        expect(text.startsWith(verifiedRefusalFor(verb)), verb).toBe(true)
+        expect(text, verb).toContain('Node identity is unavailable in this NodeTerm instance')
+        expect(text, verb).toContain('Encryption is not available.')
+        const json = (await (await post(verb, 'n-src')).json()) as { error: string }
+        expect(json.error, verb).toContain('Node identity is unavailable')
+      }
+      expect(handled).toEqual([])
+    } finally {
+      hookServer.setNodeAuthSecret(SECRET)
+    }
+    // Arming a secret supersedes the recorded failure: back to the flat, diagnosis-free sentence.
+    const res = await post('send', 'n-src', undefined, 'text/plain')
+    expect((await res.text()).trim()).toBe(MESSAGING_CONTROL_REFUSAL)
+  })
+})
+
 describe('where the verbs sit in the routing tables', () => {
   // `needsLiveCanvas('send'/'reply') === false` is pinned where the function lives —
   // `src/renderer/lib/controlRouting.test.ts` — because this core project cannot import the
@@ -137,7 +177,7 @@ describe('where the verbs sit in the routing tables', () => {
     }
   })
 
-  it('the verified-only set is exactly the messaging verbs plus sticky, open-project, settings and report-issue', () => {
+  it('the verified-only set is exactly the messaging verbs plus sticky, open-project, settings, report-issue and run', () => {
     // Pins that nothing ELSE ever drifts in: adding a SHIPPED verb here would strand its legacy
     // population with no hatch, which is the one thing this set must never be casually grown by.
     // `notify` (folded in from #98, Task 5.2) is a messaging verb like the other two — it writes
@@ -153,15 +193,40 @@ describe('where the verbs sit in the routing tables', () => {
     // this machine to a repository, with no dialog anywhere on the path — `legacy` means "we
     // cannot judge this caller", and an unjudgeable caller must never be the one that publishes.
     // New verb, so fail-closed from day one strands no legacy population either.
+    // `run` (#925) is here because it STARTS a process in a session the user is not watching —
+    // possibly in another project; new verb, so fail-closed from day one strands nobody.
+    // `report-outcome` is here because a reported success RELEASES every dependent armed with
+    // `--after-success`: only a verified caller is provably the station the report is about.
+    // `issues` / `prs` resolve the project to read from the CALLER's node, so a forgeable caller
+    // could read any project's GitHub lane (bound sessions, dispatch state); new verbs.
     expect([...requiresVerified].sort()).toEqual([
+      'issues',
       'notify',
       'open-project',
+      'prs',
       'reply',
       'report-issue',
+      'report-outcome',
+      'run',
       'send',
       'settings',
       'sticky'
     ])
+  })
+
+  it('the issues / prs refusal is its own flat sentence, not the messaging one', () => {
+    expect(verifiedRefusalFor('issues')).toBe('GitHub lane read refused.')
+    expect(verifiedRefusalFor('prs')).toBe('GitHub lane read refused.')
+  })
+
+  it('the report-outcome refusal is its own flat sentence, not the messaging one', () => {
+    expect(verifiedRefusalFor('report-outcome')).toBe('Outcome report refused.')
+    expect(verifiedRefusalFor('report-outcome')).not.toBe(MESSAGING_CONTROL_REFUSAL)
+  })
+
+  it('the run refusal is its own flat sentence, not the messaging one (#925)', () => {
+    expect(verifiedRefusalFor('run')).toBe(RUN_CONTROL_REFUSAL)
+    expect(verifiedRefusalFor('run')).not.toBe(MESSAGING_CONTROL_REFUSAL)
   })
 
   it('the report-issue refusal is its own flat sentence, not the messaging one', () => {

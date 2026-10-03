@@ -28,6 +28,26 @@ describe('isHostOnlyChannel', () => {
     expect(isHostOnlyChannel(IPC.projectSetupRequestTrust)).toBe(true)
   })
 
+  it('covers pty:launch-headless — the desktop-only headless start is refused to relay peers (#925)', () => {
+    // A relay tab's own bridge already rejects it E_UNSUPPORTED, but that only stops a well-behaved
+    // guest. The host must refuse a peer that sends the raw request too (spec §6: Relay tab refuses).
+    expect(isHostOnlyChannel(IPC.ptyLaunchHeadless)).toBe(true)
+  })
+
+  it('covers the board-comment delivery — a peer must never type a comment into a host pane', () => {
+    // A board comment typed by a relay guest or a team-presence peer is cross-user prompt
+    // injection. The channel is registered with a raw `ipcMain.handle` (invisible to peers), and
+    // listed here as the belt: moving it onto the platform table later must not open it.
+    expect(isHostOnlyChannel(IPC.agentBoardCommentDeliver)).toBe(true)
+  })
+
+  it('covers both station-notice request channels', () => {
+    // A guest may not report a pane verdict about the host's nodes…
+    expect(isHostOnlyChannel(IPC.stationNoticeDropped)).toBe(true)
+    // …nor list every project's failed stations: a guest scoped to one project must not read the rest.
+    expect(isHostOnlyChannel(IPC.stationNoticeList)).toBe(true)
+  })
+
   it('leaves the read-only/lifecycle channels alone — the gate is on ACTION, not on the namespace', () => {
     // Subscribing and receiving events costs a guest nothing the canvas does not already show;
     // running host code, and answering the host's own trust prompt, are the two acts being gated.
@@ -38,6 +58,23 @@ describe('isHostOnlyChannel', () => {
     // Near-misses must not be swallowed by a sloppy prefix.
     expect(isHostOnlyChannel('project-setup:run-something-else')).toBe(false)
     expect(isHostOnlyChannel('notgithubControl:approve')).toBe(false)
+  })
+
+  it('every owner live-link channel is host-only, and the viewer protocol is not in that namespace', () => {
+    // A live link publishes a host terminal to anyone with its URL, paid for with the host's Pro, and
+    // the list answer carries every link's secret. A hosted editor passes every access check, so this
+    // prefix is the only thing between a teammate and a link.
+    const owner = (Object.values(IPC) as unknown[]).filter(
+      (v): v is string => typeof v === 'string' && v.startsWith('watchLink:')
+    )
+    expect(owner).toHaveLength(10)
+    for (const ch of owner) expect(isHostOnlyChannel(ch), ch).toBe(true)
+    // A namespace, not a list: a verb added later is refused the day it is added.
+    expect(isHostOnlyChannel('watchLink:something-new')).toBe(true)
+    // The viewer's own tunnel messages are `watch:*` — never refused as host-only, or a Commenter
+    // could not chat (relay-host refuses host-only methods before any policy runs).
+    expect(isHostOnlyChannel('watch:chat')).toBe(false)
+    expect(isHostOnlyChannel('watch:meta')).toBe(false)
   })
 
   it('carries the refusal wording the peer sees, so both shells answer identically', () => {

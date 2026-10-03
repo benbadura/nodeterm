@@ -152,3 +152,19 @@ describe('priority events', () => {
     ])
   })
 })
+
+// The UI's board-change funnel runs on every commit; a card's assignees come from a hand-editable
+// file and may not be a list at all.
+describe('boardLogEvents — hostile meta.assignees', () => {
+  it('never throws, and reads a non-list as nobody', () => {
+    const cols = [col('a', 'A')]
+    for (const bad of [5, {}, true, 'enes']) {
+      const prev = { ...board(cols, []), meta: [{ nodeId: 'n', assignees: bad }] } as unknown as ProjectKanban
+      const next = {
+        ...board(cols, []),
+        meta: [{ nodeId: 'n', assignees: [{ name: 'sam', color: '#fff' }] }]
+      } as ProjectKanban
+      expect(boardLogEvents(prev, next, title)).toEqual([{ nodeId: 'n', event: { type: 'member-assigned', to: 'sam' } }])
+    }
+  })
+})

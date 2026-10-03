@@ -17,6 +17,22 @@ parsing output.
 > `~/.gemini/tmp/nodeterm/chats/session-2026-08-09T10-48-fd01438b.jsonl` on this host). The few
 > genuinely open items are marked *unverified* and collected in §7–§8.
 
+> **Personal Google accounts can no longer use Gemini CLI (since 2026-06-18).** Google moved the
+> terminal experience to **Antigravity CLI** (`agy`, closed source; nodeterm's `antigravity` agent —
+> `docs/antigravity-agent.md`) and Gemini CLI now refuses the free tier, Google AI Pro and Google AI
+> Ultra (announcement: google-gemini/gemini-cli discussion #27274). Gemini Code Assist
+> Standard/Enterprise licences, Vertex AI and paid Gemini API keys are unaffected, so the `gemini`
+> agent stays — existing nodes must still load, and those users still run it. What a refused user
+> sees is the browser saying "Authentication succeeded" and then the CLI's sign-in screen again,
+> with `This client is no longer supported for Gemini Code Assist for individuals. To continue using
+> Gemini, please migrate to the Antigravity suite of products` (captured from a user's screen,
+> 2026-09-28). Reinstalling or deleting `~/.gemini` does not help. nodeterm names it in two places:
+> `AgentConfig.notice` (the tooltip wherever gemini is offered) and a slim node banner raised when a
+> gemini-harness pane prints that sentence (`renderer/terminal/gemini-retired.ts`) — the one place
+> this agent reads its output, because the refusal comes before any session and so before any hook.
+> The banner types nothing; it offers an Antigravity node beside this one and Google's migration
+> guide.
+
 ---
 
 ## 1. What gemini is, capability by capability
@@ -36,7 +52,7 @@ is the price of adding the next agent to the same list.
 | `CONTEXT_LINK_CAPABLE` | **joined** (pre-branch) | A parser for gemini's event-sourced chat format plus a locator by sessionId (`handoff/locate.ts`'s `locateGemini`), and a discovery route — the marker block merged into `~/.gemini/GEMINI.md`. |
 | `TRANSFER_SOURCE_CAPABLE` | **joined** (pre-branch) | The same native-transcript reader cross-agent transfer needs. |
 | `CANVAS_CONTROL_CAPABLE` | **joined** (pre-branch) | The marker block in `~/.gemini/GEMINI.md` (gemini gets no skill — that is claude's discovery mechanism, which grok borrows). Membership is what sets `NODETERM_CANVAS_CONTROL` in the session env. |
-| `CHAT_CAPABLE` | not joined | The ⌘M `ChatPanel` renders **claude's** transcript `.jsonl`. Gemini's transcript is a different, event-sourced shape; the panel would need its own renderer. This list doubles as the "we can read and render this agent's transcript ourselves" fact — see the warning below. |
+| `CHAT_CAPABLE` | **joined 2026-09** | Its own reader, `core/gemini-chat.ts` (§3, "The ⌘M chat view's fold"), routed in `readChatTranscript` BEFORE anything claude-shaped (through `capabilityAgentId`, so a custom agent built on gemini reads it too) and located strictly by the session id in the file's header — never claude's `resolveTranscript`, whose cwd fallback would answer with a stranger's claude session. `CLAUDE_TRANSCRIPT_READABLE` stays claude-only, so the find bar and `context.ensure` are untouched. Local-only (`CHAT_LOCAL_ONLY`): a remote node answers "not supported yet". |
 | `SUBAGENT_CAPABLE` | not joined | Subagent cards are driven by claude's `Agent`/`Task` tool correlation; gemini's equivalent vocabulary is not mapped. |
 | `BRANCH_CAPABLE` | not joined | Branch sends claude's `/branch` and resumes by claude's session id; gemini has no counterpart. |
 | `RECURRING_CAPABLE` | not joined | `/loop`, `/schedule`, `/cron` are detected from claude's `Skill` / `CronCreate` / `ScheduleWakeup` tool names. |
@@ -49,8 +65,9 @@ is the price of adding the next agent to the same list.
 > rehydrated a codex/gemini node's meter from a **stranger's claude session** (wrong numerator, wrong
 > denominator, then flapping against the correct tail), and the find bar indexed that session's
 > messages as this node's hits. Fixed by a pure predicate, `readsClaudeTranscript`
-> (`src/renderer/lib/transcriptGates.ts`), which reuses `CHAT_CAPABLE` rather than adding a fourth
-> list that would mean the same thing. The **meter** stays on `hasUsage`; what a non-claude agent
+> (`src/renderer/lib/transcriptGates.ts`), which now reads `CLAUDE_TRANSCRIPT_READABLE` (claude only) —
+> it first reused `CHAT_CAPABLE`, and was split off when grok, then gemini, joined that list with
+> readers of their own. The **meter** stays on `hasUsage`; what a non-claude agent
 > gives up is only the mount-time head start — its meter fills on the first hook event after mount
 > instead of instantly. Correct-but-later beats instant-but-borrowed.
 
@@ -183,6 +200,36 @@ The one branch that does re-write history is the legacy `.json` → `.jsonl` **m
 `$set.messages` array. This matters because an earlier version of this document — and of
 `pickGeminiTitle`'s docblock — described the `$set.messages` walk as *the resume mechanism*; it is
 not. See §6.
+
+### The ⌘M chat view's fold (`core/gemini-chat.ts`)
+
+The paragraph above calls the file event-sourced; for the CHAT view the precise shape matters, and
+it was measured against 0.61.0's `ChatRecordingService` (`chunk-JDPZ4CE3.js`, `appendRecord`,
+`pushMessage`, `rewindTo`, `updateMessagesFromHistory`, and its own reader `loadConversationRecord`):
+
+- A **message record** (`{id, timestamp, type, content, displayContent?, thoughts?, tokens?, model?,
+  toolCalls?}`, `type` ∈ `user | gemini | info | warning | error`) is an **upsert**: the same id is
+  written again, in full, whenever the message changes — its tool calls added, their results landed
+  (`toolCalls[].result` = `functionResponse` parts), its tokens arrived. A tool's output is ALSO
+  recorded as its own `type:"user"` record of `functionResponse` parts.
+- `{$rewindTo: id}` deletes that message and everything after it.
+- `{$set: {messages}}` REPLACES the model's history: at session start (the `<session_context>`
+  preamble), at every compression (all turns re-minted under NEW ids, a `<state_snapshot>` summary
+  inserted as a user turn, older turns dropped) and when an aborted turn is rolled back.
+
+The chat thread is therefore the message records alone, upserted by id, with rewinds honoured and
+**`$set.messages` ignored** — it is what gemini will send next, not what was said, and honouring it
+would erase the thread at every compression and present the snapshot as the human's words. A rewind
+to an id the thread never held (a post-compression copy, or one before the 5 MB read cap) is ignored
+rather than wiping everything as gemini's own loader does. User bubbles prefer `displayContent` (the
+typed text, when an `@file` expanded `content`) and drop `<session_context>` / `<hook_context>` text
+PER PART (a BeforeAgent hook's context is appended beside the prompt). Thoughts are dropped; `info` /
+`warning` / `error` render as `[info] …` assistant notes. Because a record depends on earlier ones,
+the view does not page: one whole read under the 5 MB cap, `olderCursor: null`, like grok. The exact
+rules, and golden fixtures a port locks to, are in `src/shared/chat-fixtures/gemini/README.md`.
+
+`locateGemini` reads only each candidate's header line now (the view re-locates on every live
+reload) and honours `GEMINI_CLI_HOME`, the CLI's own home relocation.
 
 ---
 
@@ -403,7 +450,7 @@ one stray keystroke.
 | Rename write | **N/A** — gemini has no rename command (§6) | idem | idem |
 | Permission mode | yes | yes (pure renderer + the flag) | **follow-up owed** — see §8 |
 | In-place restart + cold-restore resume | yes | yes | N/A |
-| ⌘M transcript view (`ChatPanel`) | **not implemented for gemini** — `CHAT_CAPABLE` is claude-only; the panel parses claude's JSONL | idem | idem |
+| ⌘M transcript view (`ChatPanel`) | yes, local nodes (`core/gemini-chat.ts`); a remote (SSH) node says "not supported yet"; no plan/question answer cards and no composer model label (gemini's `/model` is an unmeasured dialog) | yes — `registerTranscriptIpc` is core, and the server runs on the host whose sessions it reads | yes over the relay (`chat.page` serves the desktop's parse; a remote node is "Could not read the transcript."); golden fixtures in `src/shared/chat-fixtures/gemini/` for a direct-SSH Swift port |
 | Find bar's transcript index | **claude only** (`readsClaudeTranscript`); the terminal-buffer search works normally | idem | N/A |
 | Context links | yes (`CONTEXT_LINK_CAPABLE`), marker block in `~/.gemini/GEMINI.md` | wired, **local-only** — `src/server/context-link.ts` calls `initContextLink(pty, {})` with no remote deps | N/A |
 | Canvas control | yes, marker block + the sh+curl shim | **not wired** — `agent:control` has no server handler; pre-existing | N/A — no canvas |
@@ -545,4 +592,21 @@ SSH + surfaces
     gradient, so the `currentColor` bloom is the LABEL colour, not its own ink — the light theme is
     where that will look worst if it looks bad anywhere.
 22. Kanban card + card modal: badges, the meter row and the 💬 comments panel on a gemini card.
+
+⌘M chat view
+23. ⌘M on a gemini node after a few turns with tool calls: prompts, answers and ONE chip per call
+    with its output; no thoughts, no `<session_context>` preamble. A turn in progress fills in live.
+24. `/compress` (or let it auto-compress), then ⌘M: the earlier turns are STILL there, followed by
+    "[info] Chat history compressed…", and no `<state_snapshot>` bubble appears as your words.
+25. Esc a turn mid-stream: the cancelled prompt stays, followed by the cancel note.
+26. `/rewind` to an earlier prompt: the rewound turns disappear from ⌘M. Then compress and rewind
+    again (the known limit: a rewind to a post-compression copy is ignored, so those turns stay).
+27. `@file` a file in a prompt: the bubble shows what you typed, not the file's body.
+28. Send from the ⌘M composer while gemini is idle: the text lands in gemini's prompt and submits
+    (bracketed paste into gemini's TUI); refused while RUNNING or NEEDS YOU.
+29. An SSH project's gemini node: ⌘M says "Reading a remote Gemini session's transcript isn't
+    supported yet." with no Retry; the phone says "Could not read the transcript."
+30. Phone Chat screen on a LOCAL gemini node over the relay: the same thread as ⌘M, the model
+    label under it.
+31. Close a gemini node, reopen its transcript from "Recently closed": it reads.
 ```

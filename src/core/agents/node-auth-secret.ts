@@ -91,28 +91,61 @@ async function adoptLegacy(dir: string): Promise<Buffer | null> {
   }
 }
 
+/**
+ * Issue #1088. A desktop shell that CAN seal in principle may still be unable to seal on this
+ * machine: Electron 42 on a Linux session with no Secret Service / kwallet (a bare window manager —
+ * Arch + sway/i3 is the reported case) selects the `basic_text` backend, answers
+ * `isEncryptionAvailable() === false`, and `encryptString` THROWS ("Encryption is not available").
+ * Measured on this repo's Electron under xvfb with no session bus.
+ *
+ * Before this, that throw rejected the load on EVERY boot, the shell's catch put the whole instance
+ * in legacy mode, no token file was ever written, and every verified-only verb (`send`, `settings`,
+ * …) was refused forever — while hook-endpoint.env still advertised a token dir that would never
+ * fill. So when sealing is impossible AND no sealed key exists, the desktop stores the secret
+ * exactly as the Server Edition does: raw 32 bytes, 0600, `node-auth-key.bin`. On that backend
+ * "sealed" would only ever have been obfuscation under a hard-coded key (docs/node-identity.md);
+ * the 0600 mode is the protection that holds either way.
+ *
+ * What this deliberately does NOT do: replace a sealed key it merely cannot UNSEAL right now
+ * (keyring locked at boot). That key signs the codex thread→node records, so rotating it would
+ * orphan every bound thread — the load still rejects there, and the shell reports why.
+ */
 async function loadSealed(dir: string): Promise<Buffer> {
   try {
     return decodeSealed(await fs.readFile(sealedFile(dir), 'utf8'))
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
+  // A raw key from an earlier keyring-less boot wins over minting: it is this machine's identity.
+  const raw = await readRaw(dir)
+  if (raw) return raw
   const secret = (await adoptLegacy(dir)) ?? randomBytes(32)
-  await persistSealed(dir, secret)
+  try {
+    await persistSealed(dir, secret)
+  } catch (error) {
+    console.warn('[node-identity] cannot seal the node-auth key (no usable OS keyring) — storing it 0600 instead', error)
+    await persistFile(rawFile(dir), secret)
+  }
   return secret
 }
 
-async function loadRaw(dir: string): Promise<Buffer> {
-  const file = rawFile(dir)
+/** The raw key file, or null when there is none. Any other read failure / wrong length throws. */
+async function readRaw(dir: string): Promise<Buffer | null> {
   try {
-    const buf = await fs.readFile(file)
+    const buf = await fs.readFile(rawFile(dir))
     if (buf.byteLength !== 32) throw new Error('node-auth key is invalid')
     return buf
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    return null
   }
+}
+
+async function loadRaw(dir: string): Promise<Buffer> {
+  const existing = await readRaw(dir)
+  if (existing) return existing
   const secret = randomBytes(32)
-  await persistFile(file, secret)
+  await persistFile(rawFile(dir), secret)
   return secret
 }
 

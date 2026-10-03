@@ -1,0 +1,105 @@
+[
+  {
+    "before": null,
+    "maxBytes": 262144,
+    "grownMaxBytes": 262144,
+    "start": 0,
+    "parse": {
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "one"
+            }
+          ],
+          "at": 1790362800000,
+          "key": 0
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "a"
+            }
+          ],
+          "at": 1790362801000,
+          "key": 252
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "two"
+            }
+          ],
+          "at": 1790362802000,
+          "key": 638
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "b"
+            }
+          ],
+          "at": 1790362803000,
+          "key": 890
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "three"
+            }
+          ],
+          "at": 1790362804000,
+          "key": 1275
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "c"
+            }
+          ],
+          "at": 1790362805000,
+          "key": 1529
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "four"
+            }
+          ],
+          "at": 1790362806000,
+          "key": 1914
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "d"
+            }
+          ],
+          "at": 1790362807000,
+          "key": 2167
+        }
+      ],
+      "olderCursor": null,
+      "unmatchedResults": [],
+      "model": "claude-fable-5-1",
+      "effort": "xhigh",
+      "noCompleteLine": false
+    }
+  }
+]

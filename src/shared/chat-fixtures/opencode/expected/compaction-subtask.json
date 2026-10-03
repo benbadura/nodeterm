@@ -1,0 +1,123 @@
+{
+  "sessionId": "ses_0a1b2c3d4ffeSynthetic000001",
+  "parse": {
+    "messages": [
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "tool",
+            "name": "compaction",
+            "arg": "auto"
+          }
+        ],
+        "at": 1780000001000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "## Summary\n\nWe fixed the retry policy."
+          }
+        ],
+        "at": 1780000002000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "tool",
+            "name": "compaction",
+            "arg": ""
+          }
+        ],
+        "at": 1780000003000
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "/review"
+          }
+        ],
+        "at": 1780000004000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "tool",
+            "name": "task",
+            "arg": "Review staged changes"
+          }
+        ],
+        "at": 1780000004000
+      }
+    ],
+    "skipped": 0,
+    "model": "demo-model"
+  },
+  "page": {
+    "messages": [
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "tool",
+            "name": "compaction",
+            "arg": "auto"
+          }
+        ],
+        "at": 1780000001000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "## Summary\n\nWe fixed the retry policy."
+          }
+        ],
+        "at": 1780000002000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "tool",
+            "name": "compaction",
+            "arg": ""
+          }
+        ],
+        "at": 1780000003000
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "/review"
+          }
+        ],
+        "at": 1780000004000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "tool",
+            "name": "task",
+            "arg": "Review staged changes"
+          }
+        ],
+        "at": 1780000004000
+      }
+    ],
+    "found": true,
+    "olderCursor": null,
+    "unmatchedResults": [],
+    "model": "demo-model"
+  }
+}

@@ -1,0 +1,181 @@
+{
+  "sessionId": "ses_0a1b2c3d4ffeSynthetic000001",
+  "parse": {
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Look around the repo."
+          }
+        ],
+        "at": 1780000001000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "tool",
+            "name": "bash",
+            "arg": "ls -la",
+            "result": "total 8 drwxr-xr-x a drwxr-xr-x b"
+          },
+          {
+            "kind": "tool",
+            "name": "read",
+            "arg": "/srv/demo/src/app.ts",
+            "result": "lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum do"
+          },
+          {
+            "kind": "tool",
+            "name": "grep",
+            "arg": "TODO",
+            "result": "Found 2 matches"
+          },
+          {
+            "kind": "tool",
+            "name": "edit",
+            "arg": "/srv/demo/src/app.ts",
+            "result": "Error: oldString not found in content Make the match unique."
+          },
+          {
+            "kind": "tool",
+            "name": "webfetch",
+            "arg": "https://example.test/docs"
+          },
+          {
+            "kind": "tool",
+            "name": "bash",
+            "arg": ""
+          },
+          {
+            "kind": "tool",
+            "name": "todowrite",
+            "arg": "1 todo",
+            "result": "[]"
+          },
+          {
+            "kind": "tool",
+            "name": "question",
+            "arg": "Which colour should the badge be?",
+            "result": "User has answered your questions: \"Which colour should the badge be?\"=\"Blue\"."
+          },
+          {
+            "kind": "tool",
+            "name": "tool",
+            "arg": ""
+          },
+          {
+            "kind": "tool",
+            "name": "bash",
+            "arg": "echo zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+          }
+        ],
+        "at": 1780000002000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Done looking."
+          }
+        ],
+        "at": 1780000003000
+      }
+    ],
+    "skipped": 0,
+    "model": "demo-model"
+  },
+  "page": {
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Look around the repo."
+          }
+        ],
+        "at": 1780000001000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "tool",
+            "name": "bash",
+            "arg": "ls -la",
+            "result": "total 8 drwxr-xr-x a drwxr-xr-x b"
+          },
+          {
+            "kind": "tool",
+            "name": "read",
+            "arg": "/srv/demo/src/app.ts",
+            "result": "lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum do"
+          },
+          {
+            "kind": "tool",
+            "name": "grep",
+            "arg": "TODO",
+            "result": "Found 2 matches"
+          },
+          {
+            "kind": "tool",
+            "name": "edit",
+            "arg": "/srv/demo/src/app.ts",
+            "result": "Error: oldString not found in content Make the match unique."
+          },
+          {
+            "kind": "tool",
+            "name": "webfetch",
+            "arg": "https://example.test/docs"
+          },
+          {
+            "kind": "tool",
+            "name": "bash",
+            "arg": ""
+          },
+          {
+            "kind": "tool",
+            "name": "todowrite",
+            "arg": "1 todo",
+            "result": "[]"
+          },
+          {
+            "kind": "tool",
+            "name": "question",
+            "arg": "Which colour should the badge be?",
+            "result": "User has answered your questions: \"Which colour should the badge be?\"=\"Blue\"."
+          },
+          {
+            "kind": "tool",
+            "name": "tool",
+            "arg": ""
+          },
+          {
+            "kind": "tool",
+            "name": "bash",
+            "arg": "echo zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+          }
+        ],
+        "at": 1780000002000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Done looking."
+          }
+        ],
+        "at": 1780000003000
+      }
+    ],
+    "found": true,
+    "olderCursor": null,
+    "unmatchedResults": [],
+    "model": "demo-model"
+  }
+}

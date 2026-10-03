@@ -37,7 +37,7 @@ import {
   resolveCommandForKeyEvent, COMMANDS_BY_ID,
   type CommandId, type KeybindingOverrides
 } from '@shared/keybindings'
-import { keyDispatchContextFor, type ContextElement } from './keyContext'
+import { isChatComposerTarget, keyDispatchContextFor, type ContextElement } from './keyContext'
 
 /** Structural key event so node-env tests need no DOM (a real KeyboardEvent satisfies it). */
 export interface GlobalKeyEvent {
@@ -82,10 +82,13 @@ export interface GlobalKeydownDeps {
 export function dispatchGlobalKeydown(e: GlobalKeyEvent, deps: GlobalKeydownDeps): boolean {
   // A child handler (find bar, dialogs, terminal) that already claimed the key wins outright.
   if (e.defaultPrevented) return false
-  const ctx = keyDispatchContextFor(deps.activeElement(), deps.kanbanOpen(), deps.terminalFirst())
+  const active = deps.activeElement()
+  const ctx = keyDispatchContextFor(active, deps.kanbanOpen(), deps.terminalFirst())
   // Keyed dictation predates the registry and may deliberately collide with a default; it
-  // keeps first claim, but only in plain app focus (its old guard blocked inputs AND xterm).
-  if (!ctx.typing && !ctx.terminal && !ctx.kanbanOpen && deps.gestures.keyedDictation(e)) return true
+  // keeps first claim, but only in plain app focus (its old guard blocked inputs AND xterm) —
+  // or in the ⌘M chat composer, the one text field dictation fills (the take goes into it).
+  const dictationFocus = !ctx.typing || isChatComposerTarget(active)
+  if (dictationFocus && !ctx.terminal && !ctx.kanbanOpen && deps.gestures.keyedDictation(e)) return true
   const id = resolveCommandForKeyEvent(e, ctx, deps.overrides(), deps.isMac)
   if (id) {
     const handler = deps.handlers[id]

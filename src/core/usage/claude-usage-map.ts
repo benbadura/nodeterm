@@ -136,3 +136,39 @@ export function emptyUsage(
 ): ClaudeUsage {
   return { limits: [], session: null, weekly: null, email, updatedAt: now, status }
 }
+
+/**
+ * How long a failed read may keep showing the last good numbers. Past this the snapshot has
+ * outlived its usefulness: the pill itself carries no age stamp, and an hour-old percentage in
+ * a 5-hour window is a different number from the one the account is at now.
+ */
+export const HOLD_LAST_GOOD_MAX_MS = 60 * 60 * 1000
+
+/**
+ * Fold a new read into the previous snapshot of the SAME identity. A failed read must not erase
+ * numbers an earlier read produced: the endpoint rate-limits (HTTP 429) on a budget every Claude
+ * CLI using the same login also spends, so on a busy host reads fail intermittently, and replacing good bars with "Could not read usage" made the
+ * row flicker between numbers and an error for no change in the account at all.
+ *
+ * The held snapshot keeps the old limits AND the old `updatedAt` (so "Updated N ago" describes
+ * the numbers, not the failed read) under `status: 'error'` — the UI's existing contract for
+ * "last-known data, latest read failed". `rateLimited` reflects the LATEST failure only.
+ *
+ * Refuses to hold when doing so would show wrong numbers rather than old ones: a different
+ * account answered, the last good read is older than `HOLD_LAST_GOOD_MAX_MS`, or one of its
+ * windows has reset since.
+ */
+export function holdLastGood(
+  prev: ClaudeUsage | undefined,
+  next: ClaudeUsage,
+  now: number
+): ClaudeUsage {
+  if (next.status !== 'error' || next.limits.length > 0) return next
+  if (!prev || prev.limits.length === 0) return next
+  if (prev.status !== 'ok' && prev.status !== 'error') return next
+  if (next.email && prev.email && next.email !== prev.email) return next
+  if (now - prev.updatedAt > HOLD_LAST_GOOD_MAX_MS) return next
+  if (prev.limits.some((l) => l.resetsAt !== null && l.resetsAt <= now)) return next
+  const { rateLimited: _previousFailure, ...numbers } = prev
+  return { ...numbers, status: 'error', ...(next.rateLimited ? { rateLimited: true } : {}) }
+}

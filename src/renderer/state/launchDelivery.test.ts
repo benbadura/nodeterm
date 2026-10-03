@@ -49,3 +49,31 @@ describe('useLaunchDelivery', () => {
     expect(useLaunchDelivery.getState().byId['term-1']).toBeUndefined()
   })
 })
+
+/**
+ * #925 — a headless start is in flight: core owns the pane and is typing the launch into it, so
+ * the node's ▶ must not type too. The orchestrator raises `starting` before it launches and
+ * settles it with `clear` (started / not persistent) or `markFailed` (any other failure).
+ */
+describe('launchDelivery starting (#925)', () => {
+  beforeEach(() => useLaunchDelivery.setState({ byId: {} }))
+  it('markStarting records a starting state that markFailed / clear then replace', () => {
+    useLaunchDelivery.getState().markStarting('n1')
+    expect(useLaunchDelivery.getState().byId.n1?.kind).toBe('starting')
+    useLaunchDelivery.getState().markFailed('n1', 1)
+    expect(useLaunchDelivery.getState().byId.n1?.kind).toBe('failed')
+    useLaunchDelivery.getState().markStarting('n1')
+    useLaunchDelivery.getState().clear('n1')
+    expect(useLaunchDelivery.getState().byId.n1).toBeUndefined()
+  })
+  it('markStalled never downgrades a start in flight', () => {
+    useLaunchDelivery.getState().markStarting('n1')
+    useLaunchDelivery.getState().markStalled('n1')
+    expect(useLaunchDelivery.getState().byId.n1?.kind).toBe('starting')
+  })
+  it('a failure that follows a start reports the attempts it was given, not a stale count', () => {
+    useLaunchDelivery.getState().markStarting('n1')
+    useLaunchDelivery.getState().markFailed('n1', 1)
+    expect(useLaunchDelivery.getState().byId.n1).toMatchObject({ kind: 'failed', attempts: 1 })
+  })
+})

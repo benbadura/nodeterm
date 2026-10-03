@@ -113,6 +113,9 @@ describe('editProjectCardLabels — the first label seeds the board', () => {
       editProjectCardLabels(file(), 'term-a', edit({ create: [{ name: 'bug', color: 'red' }] }), NOW, () => 'kcol-x')
     )
     expect(out.kanban.columns.map((c: { title: string }) => c.title)).toEqual(DEFAULT_BOARD_COLUMNS.map((c) => c.title))
+    expect(out.kanban.columns.map((c: { category?: string }) => c.category)).toEqual(
+      DEFAULT_BOARD_COLUMNS.map((c) => c.category)
+    )
     expect(out.kanban.assignments).toEqual([])
     expect(labelsForCard(out.kanban, 'term-a').map((l) => l.name)).toEqual(['bug'])
   })

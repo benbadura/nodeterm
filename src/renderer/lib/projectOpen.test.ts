@@ -11,6 +11,7 @@ import {
   nextFreePosition,
   armForColdOpen,
   projectTargetFlagRefusal,
+  resolveProjectTarget,
   clearAttachConsent,
   type PlacedNode
 } from './projectOpen'
@@ -221,7 +222,7 @@ describe('armForColdOpen — the launch moves (never copies) into pendingLaunch 
 
 describe('projectTargetFlagRefusal — the v1 flag exclusion fires (review I-2)', () => {
   const REFUSAL =
-    'project-target-flag-unsupported: --group/--after cannot be combined with --project'
+    'project-target-flag-unsupported: --group/--after/--after-success cannot be combined with --project'
 
   it('refuses --group, --after, and both — with the exact named reply', () => {
     expect(projectTargetFlagRefusal({ group: 'g1' })).toBe(REFUSAL)
@@ -235,6 +236,102 @@ describe('projectTargetFlagRefusal — the v1 flag exclusion fires (review I-2)'
     // An empty-string flag value is "not passed" (the shim always sends a value; an empty one
     // means the flag was not on the line in any meaningful form).
     expect(projectTargetFlagRefusal({ group: '', after: '' })).toBeNull()
+  })
+})
+
+describe('resolveProjectTarget — the ONE --project belt (open-* and run, #925)', () => {
+  // `claude` is control-capable; a node with no agent id (a plain terminal) is not.
+  const tgProjects = [
+    { id: 'own', nodes: [{ id: 'src-stored', agentId: 'claude' }, { id: 'plain', agentId: undefined }] },
+    { id: 'other', nodes: [] },
+    { id: 'ssh', ssh: { remoteCwd: '~' }, nodes: [] },
+    { id: 'relay', remote: true, nodes: [] }
+  ]
+  const base = {
+    sourceNodeId: 'src-stored',
+    liveNodes: [] as { id: string; data: { agentId?: unknown } }[],
+    projects: tgProjects,
+    activeProjectId: 'other',
+    sshVerbWord: 'opening' as const
+  }
+
+  it("the caller's OWN project is `own` — nothing below applies to it (B3a)", () => {
+    // Off canvas: the source's project is the one whose serialized nodes hold it.
+    expect(resolveProjectTarget({ ...base, targetId: 'own' })).toEqual({ kind: 'own' })
+    // On canvas: a source on the live canvas belongs to the ACTIVE project.
+    expect(
+      resolveProjectTarget({
+        ...base,
+        sourceNodeId: 'src-live',
+        liveNodes: [{ id: 'src-live', data: { agentId: 'claude' } }],
+        targetId: 'other'
+      })
+    ).toEqual({ kind: 'own' })
+  })
+
+  it('refuses a source found nowhere', () => {
+    expect(resolveProjectTarget({ ...base, sourceNodeId: 'ghost', targetId: 'other' })).toEqual({
+      kind: 'refused',
+      error: 'source node is not in any open project'
+    })
+  })
+
+  it('refuses a source that is not a control-capable agent (live or stored)', () => {
+    const refused = { kind: 'refused', error: 'source node is not a control-capable agent' }
+    expect(resolveProjectTarget({ ...base, sourceNodeId: 'plain', targetId: 'other' })).toEqual(refused)
+    expect(
+      resolveProjectTarget({
+        ...base,
+        sourceNodeId: 'live-plain',
+        liveNodes: [{ id: 'live-plain', data: {} }],
+        activeProjectId: 'own',
+        targetId: 'other'
+      })
+    ).toEqual(refused)
+  })
+
+  it('refuses a target this store cannot see, worded transient', () => {
+    expect(resolveProjectTarget({ ...base, targetId: 'missing' })).toEqual({
+      kind: 'refused',
+      error: 'project-target-refused: the target project is not available here — try again'
+    })
+  })
+
+  it('refuses an SSH target and a relay target — byte-identical to core for the open verbs', () => {
+    // The `opening` sentence is core's PROJECT_TARGET_SSH_UNSUPPORTED verbatim
+    // (src/core/project-grants.ts); only the verb word differs for `run`.
+    const opening = {
+      kind: 'refused',
+      error: 'project-target-ssh-unsupported: opening sessions into an SSH project is not supported — do not retry'
+    }
+    expect(resolveProjectTarget({ ...base, targetId: 'ssh' })).toEqual(opening)
+    expect(resolveProjectTarget({ ...base, targetId: 'relay' })).toEqual(opening)
+  })
+
+  it("run's wording: `starting sessions`, same refusal otherwise", () => {
+    const starting = {
+      kind: 'refused',
+      error: 'project-target-ssh-unsupported: starting sessions into an SSH project is not supported — do not retry'
+    }
+    expect(resolveProjectTarget({ ...base, targetId: 'ssh', sshVerbWord: 'starting' })).toEqual(starting)
+    expect(resolveProjectTarget({ ...base, targetId: 'relay', sshVerbWord: 'starting' })).toEqual(starting)
+  })
+
+  it('a valid local target resolves to that project object', () => {
+    const r = resolveProjectTarget({ ...base, targetId: 'other' })
+    expect(r).toEqual({ kind: 'target', project: tgProjects[1] })
+    if (r.kind === 'target') expect(r.project).toBe(tgProjects[1])
+  })
+
+  it('checks the source before the target: an unknown source never learns the target exists', () => {
+    expect(resolveProjectTarget({ ...base, sourceNodeId: 'ghost', targetId: 'ssh' })).toEqual({
+      kind: 'refused',
+      error: 'source node is not in any open project'
+    })
+    expect(resolveProjectTarget({ ...base, sourceNodeId: 'plain', targetId: 'missing' })).toEqual({
+      kind: 'refused',
+      error: 'source node is not a control-capable agent'
+    })
   })
 })
 

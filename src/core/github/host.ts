@@ -3,10 +3,13 @@ import type {
   GitHubAuthProvider,
   GitHubAuthStatus,
   GitHubControlState,
-  GitHubControlView
+  GitHubControlView,
+  GitHubRateStatus,
+  GitHubThrottle
 } from '../../shared/github-issues'
-import { normaliseProjectKanbanGitHub, parseGitHubRepository } from './config'
-import type { GitHubSecretStore, ResolvedGitHubCredential } from './credentials'
+import { githubMappingDigest, normaliseProjectKanbanGitHub, parseGitHubRepository } from './config'
+import type { GitHubSecretStore, ResolvedGitHubCredential, TokenValidation } from './credentials'
+import { GitHubReachabilityError } from './failure'
 import type {
   GitHubIssueProjectContext,
   GitHubIssueServiceContext,
@@ -22,7 +25,8 @@ export class GitHubHostError extends Error {
     | 'not-approved'
     | 'not-authenticated'
     | 'invalid-token'
-    | 'configuration-changed') {
+    | 'configuration-changed'
+    | 'revoked-cache-kept') {
     super(code)
   }
 }
@@ -36,6 +40,7 @@ type ControlStoreLike = {
     localApprovalId: string
     projectId: string
     repository: string
+    mappingDigest?: string
   }): Promise<GitHubControlState>
   revoke(input: { expectedRevision: number; localApprovalId: string }): Promise<GitHubControlState>
   selectProvider(input: {
@@ -47,11 +52,19 @@ type ControlStoreLike = {
     projectId: string
     repository: string
   }): boolean
+  isMappingApproved(state: GitHubControlState, input: {
+    localApprovalId: string
+    projectId: string
+    repository: string
+    mappingDigest: string
+  }): boolean
 }
 
 type CredentialResolverLike = {
   resolve(provider: GitHubAuthProvider): Promise<ResolvedGitHubCredential | null>
-  status(provider: GitHubAuthProvider): Promise<GitHubAuthStatus>
+  /** `userId` is the active credential's GitHub id — used here to find its rate budget, and
+   *  stripped before the status leaves the host. */
+  status(provider: GitHubAuthProvider): Promise<GitHubAuthStatus & { userId?: string }>
 }
 
 type HostDependencies = {
@@ -60,9 +73,18 @@ type HostDependencies = {
   controls: ControlStoreLike
   resolver: CredentialResolverLike
   secret: GitHubSecretStore
-  validateToken(token: string): Promise<{ userId: string; login: string } | null>
-  client(token: string): GitHubIssuesClientLike
+  validateToken(token: string): Promise<TokenValidation>
+  /** Builds the API client for a resolved credential. The identity comes with the token so the
+   *  client can report every response's rate budget against the right account. */
+  client(credential: { token: string; userId: string }): GitHubIssuesClientLike
+  /** The request budget last seen for an identity, and why sync is held (if it is). */
+  rate?(userId: string): { status?: GitHubRateStatus; throttle?: GitHubThrottle }
   onCredentialBoundaryChange?(): void
+  /** Runs after a revoke is recorded: deletes this project's private issue cache from disk. */
+  onRevoked?(projectId: string): Promise<void>
+  /** An approval was given or withdrawn: the project's open boards must re-read (read only, the
+   *  mapping approval) now, not at the next poll. */
+  onApprovalChanged?(projectId: string): void
 }
 
 type ResolvedProject = ProjectRecord & {
@@ -81,7 +103,7 @@ export class GitHubHostController {
     if (!projectId) {
       return {
         control: { revision: state.revision, authProvider: state.authProvider },
-        auth: await this.dependencies.resolver.status(state.authProvider)
+        ...this.authView(await this.dependencies.resolver.status(state.authProvider))
       }
     }
 
@@ -97,23 +119,36 @@ export class GitHubHostController {
       projectId,
       repository
     })
-    const auth = approved
-      ? await this.dependencies.resolver.status(state.authProvider)
+    // Only a VALID configuration has a mapping to approve; an invalid one keeps writes off anyway.
+    const board = record.project.kanban
+    const config = board?.github ? normaliseProjectKanbanGitHub(board.github, board.columns) : null
+    const mappingApproved = approved && !!repository && !!config?.ok &&
+      this.dependencies.controls.isMappingApproved(state, {
+        localApprovalId: record.localApprovalId,
+        projectId,
+        repository,
+        mappingDigest: githubMappingDigest(repository, config.value)
+      })
+    const authed = approved
+      ? this.authView(await this.dependencies.resolver.status(state.authProvider))
       : {
-          selectedProvider: state.authProvider,
-          activeProvider: null,
-          ghAuthenticated: false,
-          tokenPresent: false,
-          storage: this.dependencies.secret.availability
+          auth: {
+            selectedProvider: state.authProvider,
+            activeProvider: null,
+            ghAuthenticated: false,
+            tokenPresent: false,
+            storage: this.dependencies.secret.availability
+          }
         }
     return {
       control: { revision: state.revision, authProvider: state.authProvider },
-      auth,
+      ...authed,
       project: {
         projectId,
         ...(repository ? { repository } : {}),
         ...(detected ? { detectedRepository: detected } : {}),
-        approved
+        approved,
+        ...(approved ? { mappingApproved } : {})
       }
     }
   }
@@ -127,11 +162,15 @@ export class GitHubHostController {
     if (parseGitHubRepository(input.repository) !== project.repository) {
       throw new GitHubHostError('repository-mismatch')
     }
+    // The approval covers the column mapping as it is on disk NOW — what the user is looking at
+    // when they click Approve. A later change to it (a pull, a teammate's commit) re-asks.
     await this.dependencies.controls.approve({
       ...input,
       localApprovalId: project.localApprovalId,
-      repository: project.repository
+      repository: project.repository,
+      mappingDigest: githubMappingDigest(project.repository, project.config)
     })
+    this.dependencies.onApprovalChanged?.(input.projectId)
     return this.status(input.projectId)
   }
 
@@ -143,6 +182,17 @@ export class GitHubHostController {
       localApprovalId: record.localApprovalId
     })
     this.dependencies.onCredentialBoundaryChange?.()
+    // "Stop this computer from reading issues" must not leave what it already read behind: the
+    // cache is plaintext JSON (issue bodies included) under userData. The revoke is recorded FIRST,
+    // so a failed delete never leaves the machine approved — it is reported instead, and "Clear
+    // cached data" (which needs no approval) remains the way to finish the job.
+    try {
+      await this.dependencies.onRevoked?.(input.projectId)
+    } catch {
+      throw new GitHubHostError('revoked-cache-kept')
+    } finally {
+      this.dependencies.onApprovalChanged?.(input.projectId)
+    }
     return this.status(input.projectId)
   }
 
@@ -156,8 +206,17 @@ export class GitHubHostController {
   }
 
   async saveToken(token: string): Promise<GitHubControlView> {
-    const identity = await this.dependencies.validateToken(token)
-    if (!identity) throw new GitHubHostError('invalid-token')
+    const validation = await this.dependencies.validateToken(token)
+    // Only GitHub refusing the token makes it invalid. When GitHub could not be asked, nothing is
+    // saved either — an unchecked token is not stored — but the user is told why, not that the
+    // token they pasted is wrong.
+    if (validation.status === 'unauthorized') throw new GitHubHostError('invalid-token')
+    if (validation.status === 'unknown') {
+      throw new GitHubReachabilityError(
+        validation.reason === 'rate-limited' ? 'rate-limited' : 'github-unreachable',
+        validation.retryAt
+      )
+    }
     await this.dependencies.secret.save(token)
     this.credentialGeneration += 1
     this.dependencies.onCredentialBoundaryChange?.()
@@ -183,7 +242,21 @@ export class GitHubHostController {
       ...project,
       credentialGeneration: this.credentialGeneration,
       userId: credential.userId,
-      client: this.dependencies.client(credential.token)
+      client: this.dependencies.client({ token: credential.token, userId: credential.userId })
+    }
+  }
+
+  /** Splits the resolver's answer into the wire auth block (identity stripped) and the active
+   *  identity's rate budget. */
+  private authView(resolved: GitHubAuthStatus & { userId?: string }): Pick<
+    GitHubControlView, 'auth' | 'rate' | 'throttle'
+  > {
+    const { userId, ...auth } = resolved
+    const rate = userId ? this.dependencies.rate?.(userId) : undefined
+    return {
+      auth,
+      ...(rate?.status ? { rate: rate.status } : {}),
+      ...(rate?.throttle ? { throttle: rate.throttle } : {})
     }
   }
 
@@ -195,18 +268,25 @@ export class GitHubHostController {
       projectId,
       repository: project.repository
     })) throw new GitHubHostError('not-approved')
-    return this.cacheProjectContext(project, state.revision)
+    return this.cacheProjectContext(project, state.revision, this.dependencies.controls.isMappingApproved(state, {
+      localApprovalId: project.localApprovalId,
+      projectId,
+      repository: project.repository,
+      mappingDigest: githubMappingDigest(project.repository, project.config)
+    }))
   }
 
   async projectContextForCacheDeletion(projectId: string): Promise<GitHubIssueProjectContext> {
     const project = await this.resolveProject(projectId)
     const state = await this.dependencies.controls.load()
-    return this.cacheProjectContext(project, state.revision)
+    // Deletion needs no approval at all, and certainly never writes to GitHub.
+    return this.cacheProjectContext(project, state.revision, false)
   }
 
   private cacheProjectContext(
     project: ResolvedProject,
-    controlRevision: number
+    controlRevision: number,
+    mappingApproved: boolean
   ): GitHubIssueProjectContext {
     return {
       localApprovalId: project.localApprovalId,
@@ -214,6 +294,8 @@ export class GitHubHostController {
       repository: project.repository,
       config: project.config,
       controlRevision,
+      mappingApproved,
+      project: project.project,
       columnColors: Object.fromEntries(
         (project.project.kanban?.columns ?? []).map((column) => [column.id, column.color])
       )

@@ -9,7 +9,8 @@ export interface LiveContextLinks {
   // Capture the epoch DURING render, before the project-load effect changes its ref.
   projectId: string | null
   nodes: Array<{ id: string; type?: string; data: Record<string, unknown> }>
-  edges: Array<{ source: string; target: string }>
+  /** Persisted-shape bridges (`edgeToBridge`), so a one-way link's `reader` reaches the map. */
+  edges: Array<{ source: string; target: string; reader?: string }>
 }
 
 /** Publish semantic changes, independent of drag/status render frequency. Subscriptions also

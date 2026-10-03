@@ -1,18 +1,27 @@
 import { memo, useState } from 'react'
-import type { KanbanCardMeta, KanbanLabel, KanbanPriority } from '@shared/types'
+import type { KanbanCardMeta, KanbanColumnCategory, KanbanLabel, KanbanPriority } from '@shared/types'
 import { useAgentStatus } from '../../state/agentStatus'
 import { AccountChip, useAccountChip } from '../AccountChip'
+import { LiveLinkChip, showsLiveLinks } from '../LiveLinkChip'
+import type { SessionSource } from '../../session/session'
+import { useWatchLinks } from '../../state/watchLinks'
 import { ContextMeter } from '../ContextMeter'
+import { isRemoteSessionNode } from '@shared/worktree'
 import { NodeIconView } from '../NodeIcon'
 import { LabelChips } from './LabelChips'
+import { PRIORITIES } from './CardMetaBar'
 import type { KanbanSession } from './KanbanView'
+import type { GitHubPullStatus, PullStatusFreshness } from '@shared/github-pull-status'
+import { PullRefChip } from './PullStatusBadges'
+import type { IssueRef } from '@shared/github-issue-ref'
+import { IssueRefChip } from '../IssueRefChip'
+import { cardBadge } from '../../lib/kanbanStatusChips'
+import { cardAssignees } from '@shared/kanban-labels'
+import { TeamProgressChip } from '../TeamProgressChip'
+import type { TeamStation } from '../../lib/teamProgress'
+import { cardShowsOverdue, sessionNameRepeatsTitle } from '../../lib/cardRedundancy'
 
-const PRIO_COLOR: Record<KanbanPriority, string> = {
-  low: '#8e8e93',
-  medium: '#ffd60a',
-  high: '#ff9f0a',
-  urgent: '#ff453a'
-}
+const PRIO_COLOR = Object.fromEntries(PRIORITIES.map((p) => [p.id, p.color])) as Record<KanbanPriority, string>
 
 interface SessionCardProps {
   session: KanbanSession
@@ -29,10 +38,26 @@ interface SessionCardProps {
   onDropAt: (nodeId: string, side: 'before' | 'after') => void
   /** Right-click on the card — opens the actions menu at the cursor. */
   onContext: (nodeId: string, x: number, y: number) => void
+  /** Pull requests linked to this card through its worktree branch (stable array per card). */
+  pulls?: GitHubPullStatus[]
+  pullFreshness?: PullStatusFreshness
+  /** The session's `#N` chip (it was started on a GitHub issue): open that issue. */
+  onOpenIssue?: (ref: IssueRef) => void
+  /** The stations this session opened (lib/teamProgress) — a stable array per card. */
+  team?: readonly TeamStation[]
+  /** A station row in the team list was picked: go to that node on the canvas. */
+  onTravel?: (nodeId: string) => void
+  /** The lifecycle category of the column the card sits in (lib/cardRedundancy reads it). */
+  columnCategory?: KanbanColumnCategory
+  /** The session the board's PROJECT belongs to (`projectSessionSource`). Only a local one shows
+   *  this machine's LIVE chip, or counts a link as card detail — a relay tab's node with the same
+   *  id is another machine's terminal (R57). */
+  liveLinkSource: SessionSource | null
 }
 
 export const SessionCard = memo(function SessionCard({
-  session, meta, labels = [], onOpen, onDragStart, onDragEnd, onDropAt, onContext
+  session, meta, labels = [], onOpen, onDragStart, onDragEnd, onDropAt, onContext, pulls,
+  pullFreshness = 'fresh', onOpenIssue, team, onTravel, columnCategory, liveLinkSource
 }: SessionCardProps) {
   // THIS card's agent status, subscribed per card rather than threaded down from the board.
   // KanbanView used to hold `useAgentStatus((s) => s.byId)` and pass the map through the column:
@@ -53,41 +78,42 @@ export const SessionCard = memo(function SessionCard({
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
     return e.clientY < r.top + r.height / 2 ? 'before' : 'after'
   }
-  // The board is the canvas's other view of the same sessions, and it reads the same store — so
-  // SLEEPING (Eco: the agent CLI was exited to reclaim its RAM) is one more branch here, not a
-  // follow-up. Ranked last: a hibernated node is idle by definition, so `working`/`waiting` can
-  // only mean the wake already landed and the hooks are ahead of the flag.
-  // DROPPED (the CLI died unannounced — see terminal/agent-liveness.ts) is ranked FIRST: it is the
-  // strongest claim on the card, and it cannot actually collide with the others, since the verdict
-  // is only ever raised on a `done` node that is neither paused nor hibernated. Ordering it here is
-  // about which sentence a reader of this chain meets first, not about resolving a conflict.
-  const badge =
-    session.kind !== 'sticky' && status?.dropped
-      ? 'dropped'
-      : session.kind !== 'sticky' && status?.state === 'working'
-        ? 'running'
-        : session.kind !== 'sticky' && (status?.state === 'waiting' || status?.state === 'blocked')
-          ? 'needs'
-          : session.kind !== 'sticky' && status?.paused
-            ? 'paused'
-            : session.kind !== 'sticky' && status?.hibernated
-              ? 'sleeping'
-              : null
+  // The board is the canvas's other view of the same sessions and reads the same store, so the
+  // node's pause/liveness chips (DROPPED, PAUSED, SLEEPING) are badges here too.
+  // The ONE badge rule, shared with the board's status chips (lib/kanbanStatusChips), so a chip
+  // can never select cards whose badge says something else. The ranking and its reasons live there.
+  const badge = cardBadge(session.kind, status)
   const stickyPreview = session.kind === 'sticky' ? (session.text ?? '').trim() : ''
-  const assignees = meta?.assignees ?? []
+  const assignees = cardAssignees(meta)
   const due = meta?.dueAt
-  const overdue = due !== undefined && due < Date.now()
+  // Not in a done/closed column: the column already settled it (lib/cardRedundancy). The card
+  // modal's Due strip still says "Overdue".
+  const overdue = cardShowsOverdue(due, Date.now(), columnCategory)
+  // The session name is usually the title (agent titles auto-track it) — then the chip repeats it.
+  const sessionName = status?.session && !sessionNameRepeatsTitle(status.session, session.title)
+    ? status.session
+    : undefined
   const priority = meta?.priority
+  // A live link counts as detail: "this terminal is being broadcast" must show on the card whatever
+  // else it has to say (a primitive selector — see LiveLinkChip).
+  const showLive = showsLiveLinks(liveLinkSource)
+  const hasLiveLink = useWatchLinks(
+    (s) => showLive && session.kind === 'terminal' && (s.byNode[session.id]?.length ?? 0) > 0
+  )
   // The account chip counts as detail in its own right: a card whose only thing to say is "this
   // one is on the other Claude login" is exactly the card that must say it.
   const hasDetail =
-    !!status?.sessionId || !!status?.session || !!accountChip || stickyPreview.includes('\n')
+    !!status?.sessionId || !!sessionName || !!accountChip || hasLiveLink || stickyPreview.includes('\n')
   return (
     <div
       className={`kanban-card kanban-card--session${dragging ? ' kanban-card--dragging' : ''}${
         dropSide ? ` kanban-card--drop-${dropSide}` : ''
       }`}
       draggable
+      // Focusable, and named for the board's keyboard (J/K/arrows walk these, Space opens one —
+      // KanbanView's board-key handler finds the current card through this attribute).
+      tabIndex={0}
+      data-kanban-card={session.id}
       onDragStart={(e) => {
         e.dataTransfer.effectAllowed = 'move'
         setDragging(true)
@@ -122,6 +148,12 @@ export const SessionCard = memo(function SessionCard({
         <span className="kanban-card__nodedot" style={{ background: session.color }} />
         <NodeIconView icon={session.icon} size={14} className="kanban-card__icon" />
         <span className="kanban-card__title">{session.title}</span>
+        {session.kind === 'terminal' && onOpenIssue && (
+          <IssueRefChip issueRef={session.issueRef} onOpen={onOpenIssue} />
+        )}
+        {session.kind === 'terminal' && team && team.length > 0 && onTravel && (
+          <TeamProgressChip stations={team} onTravel={onTravel} />
+        )}
         {session.kind === 'sticky' && <span className="kanban-card__kind">note</span>}
         {session.kind === 'browser' && <span className="kanban-card__kind">web</span>}
         {badge === 'dropped' && (
@@ -152,6 +184,13 @@ export const SessionCard = memo(function SessionCard({
         )}
         {status?.unread && <span className="kanban-card__unread" />}
       </div>
+      {pulls && pulls.length > 0 && (
+        <div className="pull-refs pull-refs--session">
+          {pulls.slice(0, 3).map((pull) => (
+            <PullRefChip key={pull.number} status={pull} freshness={pullFreshness} />
+          ))}
+        </div>
+      )}
       {(labels.length > 0 || assignees.length > 0 || due !== undefined || priority !== undefined) && (
         <div className="kanban-card__metarow">
           {/* Labels share the priority/due/avatars row (left); the meta chips hug the right. */}
@@ -160,7 +199,7 @@ export const SessionCard = memo(function SessionCard({
             {priority !== undefined && PRIO_COLOR[priority] && (
               <span
                 className="kanban-due kanban-prio-chip"
-                style={{ background: `${PRIO_COLOR[priority]}26`, color: PRIO_COLOR[priority] }}
+                style={{ background: `color-mix(in srgb, ${PRIO_COLOR[priority]} 15%, transparent)`, color: PRIO_COLOR[priority] }}
               >
                 {priority.toUpperCase()}
               </span>
@@ -191,11 +230,12 @@ export const SessionCard = memo(function SessionCard({
             <span className="kanban-card__stickytext">{stickyPreview}</span>
           ) : (
             <>
-              <ContextMeter sessionId={status?.sessionId ?? null} />
+              <ContextMeter sessionId={status?.sessionId ?? null} nodeId={session.id} remote={isRemoteSessionNode(session.spawn)} agentId={session.agentId ?? session.spawn.agentId ?? status?.agentId} />
               <AccountChip chip={accountChip} />
-              {status?.session && (
-                <span className="kanban-card__session" title={status.session}>
-                  {status.session}
+              <LiveLinkChip nodeId={session.id} source={liveLinkSource} className="kanban-card__live" />
+              {sessionName && (
+                <span className="kanban-card__session" title={sessionName}>
+                  {sessionName}
                 </span>
               )}
             </>

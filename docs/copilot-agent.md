@@ -68,6 +68,29 @@ script to `~/.nodeterm/agent-hooks/copilot.sh`. It observes:
 authorization. `ErrorOccurred` is omitted because recoverable errors can occur before a turn
 continues. Unknown notifications are no-ops, preventing sticky NEEDS YOU badges.
 
+## Chat view (⌘M) and the phone's Chat screen
+
+`src/core/copilot-chat.ts` reads the session journal,
+`<COPILOT_HOME>/session-state/<sessionId>/events.jsonl`. Measured on copilot 1.0.88 by running the
+real CLI in BYOK mode against a local fake OpenAI-compatible server (so all content was synthetic):
+the `Stop` hook's `transcript_path` names that file, nodeterm's minted `--session-id=<uuid>` names
+its directory, and the journal is append-only JSONL (compaction appends `session.compaction_*`
+events rather than rewriting). It pages like claude's transcript, and the relay serves the phone
+the same pages. The record rules and golden fixtures are in `src/shared/chat-fixtures/README.md`
+("Copilot").
+
+Not supported: remote (SSH) copilot nodes (the journal is on the host and there is no remote reader
+yet, so the panel says so instead of reading this machine), reasoning (never shown), `effort` (not
+recorded per response), plan/question answer cards, and the composer's model/effort labels.
+
+**The snap package does not read `~/.copilot`.** `snap/copilot-cli` sets `HOME=$SNAP_USER_COMMON`
+(`~/snap/copilot-cli/common`), so a snap-installed copilot reads its hooks, instructions and session
+state under `~/snap/copilot-cli/common/.copilot`. The chat reader checks that root too, but the
+status hooks nodeterm installs into `~/.copilot/hooks` are never seen there: a snap copilot node
+reports no status and no hook-fed session id (so the desktop ⌘M falls back to the markdown output
+view; the phone still reads it through the minted id). Same class as codex's snap `CODEX_HOME`
+remap. An npm / install-script copilot is unaffected.
+
 ## Device checklist
 
 These require an authenticated or real gateway-backed session and were not exercised by the unit
@@ -84,3 +107,8 @@ suite:
    file and `copilot-instructions.md` land under the host-reported directory.
 6. Create a custom agent based on Copilot and verify its base icon, launch/resume behavior, hook
    status, canvas control, and model switch all match the builtin.
+7. ⌘M on a logged-in copilot node after a tool-using turn: the prompt, answer, tool chips with
+   results, and a denied tool's `Error:` result render; scrolling up pages older history; a turn in
+   progress refreshes live. Repeat from the phone's Chat screen over the relay.
+8. ⌘M on a copilot node in an SSH project shows "Reading a remote GitHub Copilot session's
+   transcript isn't supported yet." with no Retry, and never a local conversation.

@@ -1,0 +1,92 @@
+[
+  {
+    "before": null,
+    "maxBytes": 262144,
+    "grownMaxBytes": 262144,
+    "start": 0,
+    "parse": {
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "typed by the human"
+            }
+          ],
+          "at": 1790627717000,
+          "key": 446
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "typed, source user"
+            }
+          ],
+          "at": 1790627718000,
+          "key": 883
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "ran a slash command"
+            }
+          ],
+          "at": 1790627721000,
+          "key": 2291
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "a scheduled prompt fired"
+            }
+          ],
+          "at": 1790627722000,
+          "key": 2756
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "autopilot objective"
+            }
+          ],
+          "at": 1790627723000,
+          "key": 3235
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "steered while busy"
+            }
+          ],
+          "at": 1790627726000,
+          "key": 4576
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "with an attachment"
+            }
+          ],
+          "at": 1790627727000,
+          "key": 5017
+        }
+      ],
+      "olderCursor": null,
+      "unmatchedResults": [],
+      "noCompleteLine": false
+    }
+  }
+]

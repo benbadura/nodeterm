@@ -191,6 +191,28 @@ export function sshConnectionIdForProject(
 }
 
 /**
+ * Whether a terminal node's `SSH user@host` header chip would only repeat its project: inside an
+ * SSH project every terminal on that host carries one, so the chip said the same thing on every
+ * node and told the user nothing the tab did not. It stays wherever it is information — a node on
+ * a different host (a host attachment), any SSH node in a LOCAL project, and a plain `ssh` node
+ * dialing another user on the project's host.
+ *
+ * The host test is `sshConnectionIdForProject`'s, so the chip disappears exactly for the nodes the
+ * project's own master serves. A remote-tmux node naming another user is one of them: it runs as
+ * the PROJECT's user, so its chip was not just redundant but wrong. A plain `ssh` node
+ * (`sshRemoteTmux` false) runs its own `ssh user@host` and does log in as its own user — for it
+ * the user must match too.
+ */
+export function sshChipRepeatsProject(
+  conn: Pick<SshConnection, 'host' | 'user'>,
+  sshRemoteTmux: boolean,
+  projectServer?: Pick<SshConnection, 'host' | 'user'>
+): boolean {
+  if (!conn.host || projectServer?.host !== conn.host) return false
+  return sshRemoteTmux || conn.user === projectServer.user
+}
+
+/**
  * Split a raw extra-args string into argv tokens, honoring single and double quotes.
  * Unquoted whitespace separates tokens; quotes group; quote chars are stripped.
  */

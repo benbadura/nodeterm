@@ -17,13 +17,14 @@ import type {
   RemoteAccountUsage,
   RemoteUsageQuery
 } from '../../shared/types'
-import { emptyUsage, usageFromPayload } from './claude-usage-map'
+import { emptyUsage, holdLastGood, usageFromPayload } from './claude-usage-map'
 import {
   fetchRemoteUsage,
   type RemoteUsageRunner,
   type RemoteUsageTarget
 } from './remote-claude-usage'
 import { fetchCodexUsage } from './codex-usage'
+import { fetchRemoteCodexUsage } from './remote-codex-usage'
 import { fetchGeminiUsage } from './gemini-usage'
 import { fetchGrokUsage } from './grok-usage'
 import { fetchKimiUsage } from './kimi-usage'
@@ -191,7 +192,10 @@ export async function fetchUsage(accountId?: string): Promise<ClaudeUsage> {
     if (!res.ok) {
       // 401/403 → token is an API key or expired: no subscription windows to show.
       const status = res.status === 401 || res.status === 403 ? 'unavailable' : 'error'
-      return identify(emptyUsage(email, now, status))
+      const failed = emptyUsage(email, now, status)
+      // 429 is named, not folded into "could not read": the endpoint answered, and its budget is
+      // shared with every Claude CLI using the same login — not a network or credentials fault.
+      return identify(res.status === 429 ? { ...failed, rateLimited: true } : failed)
     }
     const data = (await res.json()) as Record<string, any>
     return identify(usageFromPayload(data, email, now))
@@ -284,9 +288,15 @@ export function startUsageService(opts: UsageServiceOptions = {}): UsageService 
   const lastFetchAt = new Map<string, number>()
   const inFlight = new Map<string, Promise<ClaudeUsage>>()
 
-  const push = (key: string, u: ClaudeUsage): void => {
+  const push = (key: string, fresh: ClaudeUsage): ClaudeUsage => {
+    const now = Date.now()
+    // A failed read keeps the last good numbers (see holdLastGood) instead of blanking the row.
+    const u = holdLastGood(last.get(key), fresh, now)
     last.set(key, u)
-    lastFetchAt.set(key, u.updatedAt)
+    // The READ's time, not `u.updatedAt`: a held snapshot is older than the read that produced
+    // it, and debouncing on its age would re-read on every call — hammering the very endpoint
+    // that just answered 429.
+    lastFetchAt.set(key, now)
     // Only the system account feeds the push channel — the collapsed chip tracks it.
     // Best-effort: a fetch launched before shutdown (or a test's platform reset) can land after
     // the shell is gone, and this runs inside an un-awaited promise chain — throwing here is an
@@ -304,18 +314,18 @@ export function startUsageService(opts: UsageServiceOptions = {}): UsageService 
     } catch {
       // a mirror flush must never break the usage cache update
     }
+    return u
   }
 
   const run = async (accountId?: string): Promise<ClaudeUsage> => {
     const key = accountId ?? ''
     const pending = inFlight.get(key)
     if (pending) return pending
-    const p = fetchUsage(accountId)
+    // push() is inside the shared promise so a coalesced caller gets the HELD snapshot too.
+    const p = fetchUsage(accountId).then((u) => push(key, u))
     inFlight.set(key, p)
     try {
-      const u = await p
-      push(key, u)
-      return u
+      return await p
     } finally {
       inFlight.delete(key)
     }
@@ -440,23 +450,37 @@ export function startUsageService(opts: UsageServiceOptions = {}): UsageService 
   // providers above, fetched ON DEMAND rather than polled: each row costs an ssh exec plus an
   // HTTPS request made on someone else's machine, and the pill is informational. The renderer
   // asks on mount, when the popover opens, and whenever the set of connected projects changes.
-  const remoteCache = new Map<string, { at: number; usage: ClaudeUsage }>()
-  const remoteInFlight = new Map<string, Promise<ClaudeUsage>>()
+  const remoteCache = new Map<string, { at: number; usage: ClaudeUsage | ProviderUsage }>()
+  const remoteInFlight = new Map<string, Promise<ClaudeUsage | ProviderUsage>>()
+  const remoteKey = (t: RemoteUsageTarget): string => JSON.stringify([
+    t.provider ?? 'claude', t.hostKey, t.accountId, t.projectId, t.remoteHome, t.connectionKey, t.key
+  ])
 
   const runRemote = async (
     deps: RemoteUsageDeps,
     target: RemoteUsageTarget
-  ): Promise<ClaudeUsage> => {
-    const pending = remoteInFlight.get(target.key)
+  ): Promise<ClaudeUsage | ProviderUsage> => {
+    const key = remoteKey(target)
+    const pending = remoteInFlight.get(key)
     if (pending) return pending
-    const p = fetchRemoteUsage(target, deps.run, Date.now())
-    remoteInFlight.set(target.key, p)
+    const p = target.provider === 'codex'
+      ? fetchRemoteCodexUsage(target, deps.run, Date.now())
+      : fetchRemoteUsage(target, deps.run, Date.now()).then((fresh) => {
+          // Same rule as the local cache: a failed read keeps this host's last good numbers.
+          // Folded in here, inside the shared promise, so a coalesced reader sees them too.
+          const prev = remoteCache.get(key)?.usage
+          return prev && !('provider' in prev) ? holdLastGood(prev, fresh, Date.now()) : fresh
+        })
+    remoteInFlight.set(key, p)
     try {
       const u = await p
-      remoteCache.set(target.key, { at: Date.now(), usage: u })
+      // A replaced connection/account cannot repopulate the cache with a late old reply.
+      if (remoteInFlight.get(key) === p && deps.targets().some(t => remoteKey(t) === key)) {
+        remoteCache.set(key, { at: Date.now(), usage: u })
+      }
       return u
     } finally {
-      remoteInFlight.delete(target.key)
+      if (remoteInFlight.get(key) === p) remoteInFlight.delete(key)
     }
   }
 
@@ -473,8 +497,9 @@ export function startUsageService(opts: UsageServiceOptions = {}): UsageService 
     // reporting numbers from a connection that no longer exists. Evicted against the FULL target
     // list rather than the caller's filtered one: switching between two SSH projects would
     // otherwise throw away each host's cache on the way to the other.
-    const live = new Set(all.map((t) => t.key))
+    const live = new Set(all.map(remoteKey))
     for (const key of [...remoteCache.keys()]) if (!live.has(key)) remoteCache.delete(key)
+    for (const key of [...remoteInFlight.keys()]) if (!live.has(key)) remoteInFlight.delete(key)
     // The scoped indicator asks for ONE host — the machine the active project runs on — so the
     // other connections cost nothing while you are not looking at them.
     const targets = query?.hostKey ? all.filter((t) => t.hostKey === query.hostKey) : all
@@ -482,13 +507,19 @@ export function startUsageService(opts: UsageServiceOptions = {}): UsageService 
     // One slow / unreachable host must not withhold the others.
     const rows = await Promise.all(
       targets.map(async (t): Promise<RemoteAccountUsage> => {
-        const cached = remoteCache.get(t.key)
+        const cached = remoteCache.get(remoteKey(t))
         const fresh = cached && Date.now() - cached.at < REFETCH_DEBOUNCE_MS
         const usage =
           !force && fresh
             ? cached.usage
-            : await runRemote(deps, t).catch(() => emptyUsage(null, Date.now(), 'error'))
-        return { hostKey: t.hostKey, accountId: t.accountId, label: t.label, usage }
+            : await runRemote(deps, t).catch((): ClaudeUsage | ProviderUsage => t.provider === 'codex'
+              ? { provider: 'codex', accountId: t.accountId ?? undefined, account: t.accountId ? t.label : null,
+                  status: 'error', limits: [], updatedAt: Date.now() }
+              : emptyUsage(null, Date.now(), 'error'))
+        const identity = { hostKey: t.hostKey, accountId: t.accountId, label: t.label }
+        return 'provider' in usage
+          ? { ...identity, provider: 'codex', usage }
+          : { ...identity, usage }
       })
     )
     return rows

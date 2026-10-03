@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import type { CanvasNodeState, Project, Workspace } from '../shared/types'
+import type { CanvasNodeState, Project, ProjectKanban, Workspace } from '../shared/types'
 import {
   toPortableNodes, resolveNodes, projectToFile, fileToProject, framingViewport,
-  sameProjectContent, splitWorkspace, serializeProjectFile
+  sameProjectContent, splitWorkspace, serializeProjectFile, sanitizeKanban, sanitizeHandedOffTo
 } from './workspace-files'
 import { legacyFileId } from '../shared/project-id'
 import { CANVAS_LAYOUTS_CAP, type CanvasLayout } from '../shared/canvas-layout'
@@ -433,6 +433,53 @@ describe('splitWorkspace', () => {
   })
 })
 
+describe('handedOffTo', () => {
+  const sshConn = { server: { host: 'h', user: 'u' } as any, remoteCwd: '~/app' }
+  const handed = { hostId: 'h1', projectId: 'project-9', at: 1 }
+
+  it('sanitizes: keeps a well-formed record, drops junk', () => {
+    expect(sanitizeHandedOffTo({ hostId: 'h1', projectId: 'project-1', at: 5 })).toEqual({ hostId: 'h1', projectId: 'project-1', at: 5 })
+    expect(sanitizeHandedOffTo({ at: 5 })).toEqual({ at: 5 }) // a handover in progress
+    expect(sanitizeHandedOffTo('x')).toBeUndefined()
+    expect(sanitizeHandedOffTo(null)).toBeUndefined()
+    expect(sanitizeHandedOffTo({ hostId: 7, at: 5 })).toEqual({ at: 5 })
+    expect(sanitizeHandedOffTo({ hostId: 'h'.repeat(200), at: 5 })).toEqual({ at: 5 })
+    expect(sanitizeHandedOffTo({ hostId: '', projectId: 'p'.repeat(129), at: 5 })).toEqual({ at: 5 })
+    expect(sanitizeHandedOffTo({ hostId: 'h1' })).toBeUndefined() // no timestamp
+    expect(sanitizeHandedOffTo({ hostId: 'h1', at: Number.NaN })).toBeUndefined()
+    expect(sanitizeHandedOffTo({ hostId: 'h1', at: '5' })).toBeUndefined()
+  })
+
+  it('rides the SSH index entry and never the shared file or the ssh cache', () => {
+    const p = project({ id: 'p3', ssh: sshConn, handedOffTo: handed })
+    const { index, files, dataFiles } = splitWorkspace(
+      { version: 2, activeProjectId: 'p3', projects: [p] }, () => 1, '2026-07-11T00:00:00.000Z')
+    expect(index.entries[0].handedOffTo).toEqual(handed)
+    // The cache is the copy that gets mirrored to the host's project.json.
+    expect(index.entries[0].cache).toBeDefined()
+    expect(JSON.stringify(index.entries[0].cache)).not.toContain('handedOffTo')
+    for (const f of [...files.values(), ...dataFiles.values()]) expect(JSON.stringify(f)).not.toContain('handedOffTo')
+    expect(JSON.stringify(projectToFile(p, 1, '2026-07-11T00:00:00.000Z'))).not.toContain('handedOffTo')
+  })
+
+  it('an unavailable placeholder keeps it on its header-only entry', () => {
+    const { index } = splitWorkspace(
+      { version: 2, activeProjectId: 'p3', projects: [project({ id: 'p3', ssh: sshConn, handedOffTo: handed, unavailable: true })] },
+      () => 1, '2026-07-11T00:00:00.000Z')
+    expect(index.entries[0].handedOffTo).toEqual(handed)
+    expect(index.entries[0].cache).toBeUndefined()
+  })
+
+  it('fileToProject restores it from the entry, and only from the entry', () => {
+    const f = projectToFile(project({ ssh: sshConn }), 1, '2026-07-11T00:00:00.000Z')
+    expect(fileToProject(f, { id: 'p1', ssh: sshConn, handedOffTo: handed }).handedOffTo).toEqual(handed)
+    expect('handedOffTo' in fileToProject(f, { id: 'p1', ssh: sshConn })).toBe(false)
+    // A field of this name in the shared file is not this machine's record and is never read.
+    const forged = { ...f, handedOffTo: handed } as ProjectFileV1
+    expect('handedOffTo' in fileToProject(forged, { id: 'p1', ssh: sshConn })).toBe(false)
+  })
+})
+
 describe('serializeProjectFile', () => {
   it('is pretty-printed with version first (stable git diffs)', () => {
     const s = serializeProjectFile(projectToFile(project(), 1, '2026-07-11T00:00:00.000Z'))
@@ -575,6 +622,138 @@ describe('kanban board persistence', () => {
     expect('kanban' in fileToProject(evil1, { id: 'p1' })).toBe(false)
     expect('kanban' in fileToProject(evil2, { id: 'p1' })).toBe(false)
     expect('kanban' in fileToProject(v1shape, { id: 'p1' })).toBe(false)
+  })
+})
+
+describe('sanitizeKanban — the board is hostile, git-shared input', () => {
+  const clean_ = (): ProjectKanban => clean()
+  const clean = (): ProjectKanban => ({
+    columns: [
+      { id: 'kcol-a', title: 'To Do', color: '#0a84ff', category: 'unstarted' },
+      { id: 'kcol-b', title: 'Done', color: '#32d74b', category: 'done' }
+    ],
+    assignments: [{ nodeId: 'term-abc', columnId: 'kcol-b' }]
+  })
+
+  it('returns a clean board BY IDENTITY (no churn on a well-formed file)', () => {
+    const k = clean()
+    expect(sanitizeKanban(k)).toBe(k)
+  })
+
+  it('rejects what validKanban rejects', () => {
+    expect(sanitizeKanban(undefined)).toBeUndefined()
+    expect(sanitizeKanban({ columns: [], cards: [] })).toBeUndefined()
+    expect(sanitizeKanban('nope')).toBeUndefined()
+  })
+
+  it('keeps an UNKNOWN category string (a newer build\'s value must survive our save)', () => {
+    const k = { ...clean(), columns: [{ id: 'kcol-a', title: 'To Do', color: '#fff', category: 'blocked' }] }
+    expect(sanitizeKanban(k)?.columns[0]).toEqual({ id: 'kcol-a', title: 'To Do', color: '#fff', category: 'blocked' })
+  })
+
+  it('drops a NON-string category without throwing, keeping the column', () => {
+    const k = { ...clean(), columns: [{ id: 'kcol-a', title: 'To Do', color: '#fff', category: { evil: 1 } }] }
+    expect(sanitizeKanban(k)?.columns).toEqual([{ id: 'kcol-a', title: 'To Do', color: '#fff' }])
+  })
+
+  it('drops column entries a renderer would crash on (non-object, missing id/title)', () => {
+    const k = {
+      columns: [null, 42, { id: 'x' }, { title: 'no id' }, { id: 'ok', title: { oops: 1 } }, clean().columns[0]],
+      assignments: []
+    }
+    expect(sanitizeKanban(k)?.columns).toEqual([clean().columns[0]])
+  })
+
+  it('drops malformed assignments and keeps the rest', () => {
+    const k = { ...clean(), assignments: [null, { nodeId: 1, columnId: 'kcol-a' }, { nodeId: 'n' }, { nodeId: 'n', columnId: 'kcol-a' }] }
+    expect(sanitizeKanban(k)?.assignments).toEqual([{ nodeId: 'n', columnId: 'kcol-a' }])
+  })
+
+  // Same rule as `category`: a STRING the readers cannot use is kept (they already treat it as
+  // absent, and the next write into that column re-keys it), a non-string is dropped.
+  it('keeps any rank STRING (readers ignore an invalid one), drops a non-string rank', () => {
+    const k = {
+      ...clean(),
+      assignments: [
+        { nodeId: 'ok', columnId: 'kcol-a', rank: 'a0' },
+        { nodeId: 'num', columnId: 'kcol-a', rank: 5 },
+        { nodeId: 'junk', columnId: 'kcol-a', rank: 'not a rank!' },
+        { nodeId: 'obj', columnId: 'kcol-a', rank: { a: 1 } }
+      ]
+    }
+    expect(sanitizeKanban(k)?.assignments).toEqual([
+      { nodeId: 'ok', columnId: 'kcol-a', rank: 'a0' },
+      { nodeId: 'num', columnId: 'kcol-a' },
+      { nodeId: 'junk', columnId: 'kcol-a', rank: 'not a rank!' },
+      { nodeId: 'obj', columnId: 'kcol-a' }
+    ])
+  })
+
+  // A clean git merge of two machines' boards can leave one card assigned twice. The first entry is
+  // the one `columnForNode` has always answered with, so it is the one kept.
+  it('keeps only the FIRST assignment of a card assigned twice', () => {
+    const k = {
+      ...clean(),
+      assignments: [
+        { nodeId: 'x', columnId: 'kcol-a', rank: 'a0' },
+        { nodeId: 'y', columnId: 'kcol-b', rank: 'a0' },
+        { nodeId: 'x', columnId: 'kcol-b', rank: 'a1' }
+      ]
+    }
+    expect(sanitizeKanban(k)?.assignments).toEqual([
+      { nodeId: 'x', columnId: 'kcol-a', rank: 'a0' },
+      { nodeId: 'y', columnId: 'kcol-b', rank: 'a0' }
+    ])
+  })
+
+  it('normalizes a card\'s assignees: a non-list is dropped, bad entries filtered, the rest kept', () => {
+    const k = {
+      ...clean(),
+      meta: [
+        { nodeId: 'a', assignees: 5, priority: 'high' },
+        { nodeId: 'b', assignees: [{ name: 'enes', color: '#0a84ff' }, 3, { name: 1 }] },
+        { nodeId: 'c', assignees: [{ name: 'sam', color: '#ff453a' }] }
+      ]
+    }
+    expect(sanitizeKanban(k)?.meta).toEqual([
+      { nodeId: 'a', priority: 'high' },
+      { nodeId: 'b', assignees: [{ name: 'enes', color: '#0a84ff' }] },
+      { nodeId: 'c', assignees: [{ name: 'sam', color: '#ff453a' }] }
+    ])
+    const cleanMeta = { ...clean(), meta: [{ nodeId: 'c', assignees: [{ name: 'sam', color: '#ff453a' }] }] }
+    expect(sanitizeKanban(cleanMeta)).toBe(cleanMeta)
+  })
+
+  it('admits saved views through sanitizeViews (a garbage list is dropped, a clean one kept)', () => {
+    const views = [{ id: 'kview-1', name: 'Mine', query: { assignees: ['enes'] } }]
+    const clean = { ...clean_(), views }
+    expect(sanitizeKanban(clean)).toBe(clean)
+    const bad = { ...clean_(), views: [{ id: 3 }, 'x', { id: 'v', name: 'Bugs', query: { source: 'nope', labels: ['local:l'] } }] }
+    expect(sanitizeKanban(bad)?.views).toEqual([{ id: 'v', name: 'Bugs', query: { labels: ['local:l'] } }])
+    const junk = { ...clean_(), views: 'nope' }
+    expect('views' in (sanitizeKanban(junk) as object)).toBe(false)
+  })
+
+  it('keeps fields it does not know (a newer build\'s board data round-trips)', () => {
+    const k = { ...clean(), futureThing: [1, 2], columns: [{ ...clean().columns[0], wip: 3 }] }
+    const out = sanitizeKanban(k) as unknown as Record<string, unknown>
+    expect(out.futureThing).toEqual([1, 2])
+    expect((out.columns as Array<Record<string, unknown>>)[0].wip).toBe(3)
+  })
+
+  it('runs on the READ seam (fileToProject)', () => {
+    const f = projectToFile(project(), 1, '2026-07-18T00:00:00.000Z')
+    const evil = { ...f, kanban: { columns: [null, { id: 'a', title: 'A', color: '#fff', category: 7 }], assignments: [] } }
+    expect(fileToProject(evil as unknown as ProjectFileV1, { id: 'p1' }).kanban).toEqual({
+      columns: [{ id: 'a', title: 'A', color: '#fff' }],
+      assignments: []
+    })
+  })
+
+  it('runs on the WRITE seam (projectToFile) — live data reached by a peer is not trusted either', () => {
+    const live = { columns: [{ id: 'a', title: 'A', color: '#fff', category: [] }], assignments: [7] }
+    const f = projectToFile(project({ kanban: live as unknown as ProjectKanban }), 1, 'now')
+    expect(f.kanban).toEqual({ columns: [{ id: 'a', title: 'A', color: '#fff' }], assignments: [] })
   })
 })
 

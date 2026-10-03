@@ -8,8 +8,17 @@ import {
   writePendingAnswerLocal,
   sweepPendingDir,
   syntheticAnsweredEvent,
-  PENDING_MAX_AGE_MS
+  PENDING_MAX_AGE_MS,
+  readPendingRequestLocal,
+  localHeldPermissionIo
 } from './pending-approvals'
+import {
+  answerHeldPermission,
+  labelHeldForRevision,
+  MIN_STRUCTURED_ANSWER_REVISION,
+  PENDING_REQUEST_MAX_BYTES,
+  PERMISSION_DECISION_PREFIX
+} from './permission-decision'
 
 let home: string
 
@@ -60,9 +69,66 @@ describe('writePendingAnswerLocal', () => {
     expect(fs.existsSync(pendingDir(home))).toBe(false)
   })
 
-  it('refuses an out-of-contract decision', async () => {
-    // @ts-expect-error — exercising the runtime guard against a bad value
+  it('refuses content the hook script would not print (the same bound)', async () => {
     expect(await writePendingAnswerLocal('n', 'always', home)).toBe(false)
+    expect(await writePendingAnswerLocal('n', '{"hookSpecificOutput":{"hookEventName":"PreToolUse"}}', home)).toBe(false)
+    expect(await writePendingAnswerLocal('n', `${PERMISSION_DECISION_PREFIX}"allow"}}}\nX`, home)).toBe(false)
+    expect(fs.existsSync(path.join(pendingDir(home), 'n.answer'))).toBe(false)
+  })
+
+  it('writes a core-built JSON decision verbatim, 0600', async () => {
+    const json = `${PERMISSION_DECISION_PREFIX}"allow","updatedInput":{}}}}`
+    expect(await writePendingAnswerLocal('n', json, home)).toBe(true)
+    const f = path.join(pendingDir(home), 'n.answer')
+    expect(fs.readFileSync(f, 'utf8')).toBe(json)
+    if (process.platform !== 'win32') expect(fs.statSync(f).mode & 0o777).toBe(0o600)
+  })
+})
+
+describe('readPendingRequestLocal + localHeldPermissionIo', () => {
+  it('reads the held request, and answers null once it is gone or for a bad id', async () => {
+    fs.mkdirSync(pendingDir(home), { recursive: true })
+    const req = JSON.stringify({ hook_event_name: 'PermissionRequest', tool_name: 'ExitPlanMode', tool_input: { plan: 'p' } })
+    fs.writeFileSync(path.join(pendingDir(home), 'n.json'), req)
+    expect(await readPendingRequestLocal('n', home)).toBe(req)
+    expect(await readPendingRequestLocal('gone', home)).toBeNull()
+    expect(await readPendingRequestLocal('../n', home)).toBeNull()
+  })
+  it('refuses an over-long request file rather than reading it', async () => {
+    fs.mkdirSync(pendingDir(home), { recursive: true })
+    fs.writeFileSync(path.join(pendingDir(home), 'big.json'), 'x'.repeat(PENDING_REQUEST_MAX_BYTES + 1))
+    expect(await readPendingRequestLocal('big', home)).toBeNull()
+  })
+  it('reads a file exactly at the cap, and refuses a directory at the name', async () => {
+    fs.mkdirSync(pendingDir(home), { recursive: true })
+    const atCap = 'y'.repeat(PENDING_REQUEST_MAX_BYTES)
+    fs.writeFileSync(path.join(pendingDir(home), 'cap.json'), atCap)
+    expect(await readPendingRequestLocal('cap', home)).toBe(atCap)
+    fs.mkdirSync(path.join(pendingDir(home), 'dir.json'))
+    expect(await readPendingRequestLocal('dir', home)).toBeNull()
+  })
+  it.skipIf(process.platform === 'win32')('refuses a symlink planted at the name (O_NOFOLLOW; POSIX only)', async () => {
+    fs.mkdirSync(pendingDir(home), { recursive: true })
+    const target = path.join(home, 'secret.json')
+    fs.writeFileSync(target, JSON.stringify({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: {} }))
+    fs.symlinkSync(target, path.join(pendingDir(home), 'link.json'))
+    expect(await readPendingRequestLocal('link', home)).toBeNull()
+  })
+  it('end to end: a plan answer is built from the file on disk and written beside it', async () => {
+    fs.mkdirSync(pendingDir(home), { recursive: true })
+    fs.writeFileSync(
+      path.join(pendingDir(home), 'n.json'),
+      JSON.stringify({ hook_event_name: 'PermissionRequest', tool_name: 'ExitPlanMode', tool_input: { plan: 'p' } })
+    )
+    labelHeldForRevision(
+      { nodeId: 'x', agentId: 'claude', kind: 'state', state: 'blocked', held: { pendingId: 'n', toolName: 'ExitPlanMode' } },
+      MIN_STRUCTURED_ANSWER_REVISION
+    )
+    const res = await answerHeldPermission('n', { answer: { kind: 'plan', mode: 'restore' } }, localHeldPermissionIo('n', home))
+    expect(res).toEqual({ ok: true, decision: 'allow' })
+    expect(fs.readFileSync(path.join(pendingDir(home), 'n.answer'), 'utf8')).toBe(
+      `${PERMISSION_DECISION_PREFIX}"allow","updatedInput":{}}}}`
+    )
   })
 })
 

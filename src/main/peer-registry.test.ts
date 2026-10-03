@@ -1,6 +1,4 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync } from 'fs'
-import os from 'os'
 import path from 'path'
 import {
   registerPeerSink,
@@ -13,6 +11,7 @@ import { presenceHub, allocateRelayClientId } from '../core/presence/hub'
 import { initPlatform, resetPlatformForTests, type CorePlatform } from '../core/platform'
 import { IPC } from '../shared/ipc'
 import { decodePtyData } from '../shared/rpc'
+import { testTmpDir } from '../core/test-tmp'
 
 /** A fake peer sink that records everything the core pushed at it. */
 function fakeSink(buffered = () => 0) {
@@ -37,7 +36,7 @@ function fakePlatformWithPeers(wc: { sent: Array<{ id: number; channel: string; 
   const p: CorePlatform = {
     // mkdtemp, not a '/tmp/ud' literal: registered via initPlatform below, so a fixed temp path
     // taints every platform().userDataDir write as js/insecure-temporary-file (see platform-fake.ts).
-    userDataDir: mkdtempSync(path.join(os.tmpdir(), 'nodeterm-peer-registry-')),
+    userDataDir: testTmpDir('nodeterm-peer-registry-'),
     appVersion: '0.0.0',
     isPackaged: false,
     handle: () => {},
@@ -53,9 +52,10 @@ function fakePlatformWithPeers(wc: { sent: Array<{ id: number; channel: string; 
     },
     broadcast: (ch, ...args) => {
       for (const id of wcIds) wc.sent.push({ id, channel: ch, args })
-      for (const id of peerRegistry().ids()) peerRegistry().sendTo(id, ch, ...args)
+      for (const id of peerRegistry().broadcastIds()) peerRegistry().sendTo(id, ch, ...args)
     },
-    clientIds: () => [...wcIds, ...peerRegistry().ids()],
+    clientIds: () => [...wcIds, ...peerRegistry().broadcastIds()],
+    quietClientIds: () => peerRegistry().quietIds(),
     openExternal: async () => {}
   }
   initPlatform(p)
@@ -189,5 +189,12 @@ describe('peer sink registry', () => {
     expect(vi.getTimerCount()).toBe(0)
     vi.advanceTimersByTime(5_000)
     expect(flow).toEqual([[id, 'nt-a', false, 'socket']])
+  })
+
+  it('passes sink options through to the registry', () => {
+    registerPeerSink(4242, { sendText: () => {}, sendBinary: () => {} }, { quiet: true })
+    expect(peerRegistry().quietIds()).toContain(4242)
+    expect(peerRegistry().broadcastIds()).not.toContain(4242)
+    peerRegistry().unregister(4242)
   })
 })

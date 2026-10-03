@@ -1,0 +1,148 @@
+{
+  "info": {
+    "id": "ses_0a1b2c3d4ffeSynthetic000001",
+    "slug": "quiet-harbor",
+    "projectID": "prj_fixture",
+    "directory": "/srv/demo",
+    "path": "",
+    "title": "Fixture session",
+    "agent": "build",
+    "model": {
+      "id": "demo-model",
+      "providerID": "opencode"
+    },
+    "version": "1.18.25",
+    "summary": {
+      "additions": 0,
+      "deletions": 0,
+      "files": 0
+    },
+    "cost": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "time": {
+      "created": 1780000000000,
+      "updated": 1780000000000
+    }
+  },
+  "messages": [
+    {
+      "info": {
+        "parentID": "msg_parent",
+        "role": "assistant",
+        "mode": "build",
+        "agent": "build",
+        "path": {
+          "cwd": "/srv/demo",
+          "root": "/srv/demo"
+        },
+        "cost": 0,
+        "tokens": {
+          "total": 20,
+          "input": 12,
+          "output": 8,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "modelID": "older-model",
+        "providerID": "opencode",
+        "time": {
+          "created": 1780000001000,
+          "completed": 1780000001500
+        },
+        "finish": "stop",
+        "id": "msg_1",
+        "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+        "variant": "max"
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "older",
+          "id": "prt_fixture0058",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        }
+      ]
+    },
+    {
+      "info": {
+        "role": "user",
+        "time": {
+          "created": 1780000002000
+        },
+        "agent": "build",
+        "model": {
+          "providerID": "opencode",
+          "modelID": "user-picked",
+          "variant": "low"
+        },
+        "summary": {
+          "diffs": []
+        },
+        "id": "msg_2",
+        "sessionID": "ses_0a1b2c3d4ffeSynthetic000001"
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "next",
+          "id": "prt_fixture0059",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        }
+      ]
+    },
+    {
+      "info": {
+        "parentID": "msg_parent",
+        "role": "assistant",
+        "mode": "build",
+        "agent": "build",
+        "path": {
+          "cwd": "/srv/demo",
+          "root": "/srv/demo"
+        },
+        "cost": 0,
+        "tokens": {
+          "total": 20,
+          "input": 12,
+          "output": 8,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "modelID": "newest-model",
+        "providerID": "opencode",
+        "time": {
+          "created": 1780000003000,
+          "completed": 1780000003500
+        },
+        "finish": "stop",
+        "id": "msg_3",
+        "sessionID": "ses_0a1b2c3d4ffeSynthetic000001"
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "newest",
+          "id": "prt_fixture0060",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        }
+      ]
+    }
+  ]
+}

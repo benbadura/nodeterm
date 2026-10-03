@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { IconClose } from '../icons'
 import type { BoardLogAuthor, KanbanPriority, ProjectKanban } from '@shared/types'
-import { cardMeta, labelsForCard, setCardDue, setCardPriority, toggleAssignee } from '../../lib/kanban'
+import { cardAssignees, cardMeta, labelsForCard, setCardDue, setCardPriority, toggleAssignee } from '../../lib/kanban'
 import { LabelChips } from './LabelChips'
 import { LabelPicker } from './LabelPicker'
 import { useShallow } from 'zustand/react/shallow'
@@ -12,10 +12,10 @@ import { useProjects } from '../../state/projects'
 const initialOf = (name: string): string => (name.trim()[0] ?? '?').toUpperCase()
 
 export const PRIORITIES: Array<{ id: KanbanPriority; label: string; color: string }> = [
-  { id: 'low', label: 'Low', color: '#8e8e93' },
-  { id: 'medium', label: 'Medium', color: '#ffd60a' },
-  { id: 'high', label: 'High', color: '#ff9f0a' },
-  { id: 'urgent', label: 'Urgent', color: '#ff453a' }
+  { id: 'low', label: 'Low', color: 'var(--state-queued)' },
+  { id: 'medium', label: 'Medium', color: 'var(--caution)' },
+  { id: 'high', label: 'High', color: 'var(--priority-high)' },
+  { id: 'urgent', label: 'Urgent', color: 'var(--danger)' }
 ]
 
 /** Local-wallclock value for a datetime-local input (its value is timezone-less). */
@@ -57,7 +57,7 @@ export function CardMetaBar({ nodeId, board, onChange }: CardMetaBarProps) {
     return [...seen.values()]
   }, [peers, logEntries])
 
-  const assignees = meta?.assignees ?? []
+  const assignees = cardAssignees(meta)
   const due = meta?.dueAt
   const overdue = due !== undefined && due < Date.now()
   const priority = meta?.priority
@@ -156,7 +156,7 @@ export function CardMetaBar({ nodeId, board, onChange }: CardMetaBarProps) {
             <button
               key={pr.id}
               className={`kanban-prio${priority === pr.id ? ' kanban-prio--on' : ''}`}
-              style={priority === pr.id ? { background: `${pr.color}2e`, borderColor: pr.color, color: pr.color } : undefined}
+              style={priority === pr.id ? { background: `color-mix(in srgb, ${pr.color} 18%, transparent)`, borderColor: pr.color, color: pr.color } : undefined}
               title={priority === pr.id ? `${pr.label} — click to clear` : pr.label}
               onClick={() => onChange(setCardPriority(board, nodeId, priority === pr.id ? null : pr.id))}
             >

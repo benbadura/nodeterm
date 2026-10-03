@@ -714,7 +714,12 @@ function executeWindowsPlan(
   return JSON.parse(result.stdout) as string[];
 }
 
-describe.runIf(WINDOWS)("real Windows shell argv behavior", () => {
+// Each case spawns a real shell (and Git Bash a node child) once per prompt; on a loaded
+// windows-latest runner that sat right at the 5 s default and timed out at random. Same
+// Windows-sized budget as remote-atomic-write's real-shell cases.
+const REAL_SHELL_TIMEOUT_MS = 30_000
+
+describe.runIf(WINDOWS)("real Windows shell argv behavior", { timeout: REAL_SHELL_TIMEOUT_MS }, () => {
   const windowsCases: Array<[AgentLaunchDialect, string | null]> = [
     ["pwsh", PWSH],
     ["windows-powershell", WINDOWS_POWERSHELL],
@@ -821,6 +826,7 @@ describe.runIf(WINDOWS)("real Windows shell argv behavior", () => {
 
 describe.runIf(WINDOWS && WSL_DISTROS.length > 0)(
   "real WSL POSIX argv behavior",
+  { timeout: REAL_SHELL_TIMEOUT_MS },
   () => {
     it.each(WSL_DISTROS)(
       "%s delivers the metacharacter and Unicode matrix exactly",
@@ -876,4 +882,24 @@ describe.runIf(!WINDOWS)("real POSIX shell argv behavior", () => {
       }
     },
   );
+});
+
+describe("--no-daemon (codex >= 0.157 auto-starts a shared app-server that keeps the first pane's env)", () => {
+  it("rides a codex argv only when the host's codex was seen to accept it", async () => {
+    await expect(
+      prepareAgentLaunch(
+        resume("codex", "thread-1", { permissionMode: "auto" }),
+        "posix",
+        builtinContext("codex", { codexNoDaemon: true }),
+      ),
+    ).resolves.toEqual({
+      command: "'codex' 'resume' 'thread-1' '--ask-for-approval' 'on-request' '--no-daemon'",
+    });
+    await expect(
+      prepareAgentLaunch(start("codex"), "posix", builtinContext("codex", { codexNoDaemon: null })),
+    ).resolves.toEqual({ command: "'codex'" });
+    await expect(
+      prepareAgentLaunch(start("claude"), "posix", builtinContext("claude", { codexNoDaemon: true })),
+    ).resolves.toEqual({ command: "'claude'" });
+  });
 });

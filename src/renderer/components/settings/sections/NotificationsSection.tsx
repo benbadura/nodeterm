@@ -1,11 +1,21 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useSettings } from '../../../state/settings'
 import { SettingsSection } from '../SettingsSection'
 import { SearchableRow } from '../SearchableRow'
 import { FieldRow } from '../FieldRow'
 import { Switch } from '@renderer/ui/Switch'
 import { Button } from '@renderer/ui/Button'
-import { playSfx } from '@renderer/lib/sfx'
+import { checkCustomSfx, playSfx } from '@renderer/lib/sfx'
+import { readAsBase64 } from '@renderer/terminal/file-drop'
+import {
+  ALERT_SOUND_ACCEPT,
+  ALERT_SOUND_KINDS,
+  ALERT_SOUND_MAX_BYTES,
+  customAlertSoundFor,
+  type AlertSoundKind,
+  type CustomAlertSound,
+  type CustomAlertSounds
+} from '@shared/alert-sound'
 
 const ROWS = {
   notify: {
@@ -14,7 +24,7 @@ const ROWS = {
   },
   sound: {
     title: 'Play a sound when a turn finishes or needs you',
-    keywords: ['sound', 'audio', 'sfx', 'effect', 'chime', 'beep', 'retro', '8-bit', 'chiptune', 'volume', 'mute', 'finished', 'needs you']
+    keywords: ['sound', 'audio', 'sfx', 'effect', 'chime', 'beep', 'retro', '8-bit', 'chiptune', 'volume', 'mute', 'finished', 'needs you', 'custom', 'file', 'mp3', 'wav', 'own sound']
   },
   mobilePush: {
     title: 'Send push notifications to your paired phone',
@@ -23,10 +33,125 @@ const ROWS = {
 }
 const ENTRIES = Object.values(ROWS)
 
+const SOUND_LABELS: Record<AlertSoundKind, string> = { done: 'Finished sound', needsYou: 'Needs-you sound' }
+
+/**
+ * One alert kind's sound (issue #289): the built-in chime or the user's own file. The picked file's
+ * BYTES go to the core, which validates them and stores a fixed per-kind copy in its data dir —
+ * the original path is never sent or kept, so this works the same in the Server Edition, where
+ * the file is on the browser's machine. Settings keep only the display name + a stamp.
+ */
+function CustomSoundRow({ kind, volume }: { kind: AlertSoundKind; volume: number }): React.JSX.Element {
+  const customAlertSounds = useSettings((s) => s.settings.customAlertSounds)
+  const update = useSettings((s) => s.update)
+  const current = customAlertSoundFor(customAlertSounds, kind)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState<string | undefined>()
+
+  // Rebuilt from the validated entries (never spread from the raw, hand-editable value), so a
+  // malformed entry for the other kind is dropped rather than carried forward.
+  const withEntry = (entry: CustomAlertSound | undefined): CustomAlertSounds => {
+    const base = useSettings.getState().settings.customAlertSounds
+    const next: CustomAlertSounds = {}
+    for (const k of ALERT_SOUND_KINDS) {
+      const e = k === kind ? entry : customAlertSoundFor(base, k)
+      if (e) next[k] = e
+    }
+    return next
+  }
+
+  const onPick = async (file: File | undefined): Promise<void> => {
+    if (!file) return
+    setNote(undefined)
+    // A fast answer for the obvious case; the core re-checks everything (size, type, magic bytes).
+    if (file.size > ALERT_SOUND_MAX_BYTES) {
+      setNote(`That file is too large — the limit is ${ALERT_SOUND_MAX_BYTES / (1024 * 1024)} MB.`)
+      return
+    }
+    setBusy(true)
+    try {
+      const b64 = await readAsBase64(file)
+      if (!b64) {
+        setNote('That file could not be read.')
+        return
+      }
+      const res = await window.nodeTerminal.files.saveAlertSound(kind, file.name, b64)
+      if (!res.ok) {
+        setNote(res.error)
+        return
+      }
+      const stamp = Date.now()
+      update({ customAlertSounds: withEntry({ name: res.name, stamp }) })
+      if (await checkCustomSfx(kind, stamp)) {
+        playSfx(kind, volume, useSettings.getState().settings.customAlertSounds)
+      } else {
+        setNote('Saved, but this file could not be decoded — the built-in chime will play instead.')
+      }
+    } catch {
+      setNote('Could not save the sound.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const onReset = async (): Promise<void> => {
+    setNote(undefined)
+    setBusy(true)
+    try {
+      await window.nodeTerminal.files.clearAlertSound(kind)
+    } catch {
+      // The entry is dropped below regardless: a stale file on disk is never played without it.
+    } finally {
+      update({ customAlertSounds: withEntry(undefined) })
+      setBusy(false)
+    }
+  }
+
+  return (
+    <FieldRow
+      label={SOUND_LABELS[kind]}
+      description={current ? current.name : 'Built-in chime'}
+      note={note}
+      control={
+        <div className="flex items-center gap-2">
+          <Button
+            onClick={() => playSfx(kind, volume, useSettings.getState().settings.customAlertSounds)}
+            aria-label={`Preview ${SOUND_LABELS[kind].toLowerCase()}`}
+          >
+            Preview
+          </Button>
+          <Button disabled={busy} onClick={() => inputRef.current?.click()}>
+            {busy ? 'Saving…' : 'Choose file…'}
+          </Button>
+          <Button variant="ghost" disabled={busy || !current} onClick={() => void onReset()}>
+            Reset
+          </Button>
+          <input
+            ref={inputRef}
+            type="file"
+            accept={ALERT_SOUND_ACCEPT}
+            hidden
+            tabIndex={-1}
+            aria-hidden="true"
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              // Reset so picking the same file again still fires `change`.
+              e.target.value = ''
+              void onPick(f)
+            }}
+          />
+        </div>
+      }
+    />
+  )
+}
+
 export function NotificationsSection({ isActive }: { isActive: boolean }): React.JSX.Element {
   const notifyOnClaudeDone = useSettings((s) => s.settings.notifyOnClaudeDone)
   const soundEffects = useSettings((s) => s.settings.soundEffects)
   const soundVolume = useSettings((s) => s.settings.soundVolume)
+  const customAlertSounds = useSettings((s) => s.settings.customAlertSounds)
   const mobilePushEnabled = useSettings((s) => s.settings.mobilePushEnabled)
   const mobilePushNeedsYou = useSettings((s) => s.settings.mobilePushNeedsYou)
   const mobilePushDone = useSettings((s) => s.settings.mobilePushDone)
@@ -82,7 +207,7 @@ export function NotificationsSection({ isActive }: { isActive: boolean }): React
       <SearchableRow {...ROWS.sound}>
         <FieldRow
           label="Play a sound when a turn finishes or needs you"
-          description="A short retro chirp for a finished turn and a crackly one when a session needs you. Plays whether or not the window is focused, so you catch a finish while looking at another node."
+          description="A short retro chirp for a finished turn and a crackly one when a session needs you — or your own sound file for either. Plays whether or not the window is focused, so you catch a finish while looking at another node."
           control={
             <Switch
               checked={soundEffects}
@@ -91,7 +216,7 @@ export function NotificationsSection({ isActive }: { isActive: boolean }): React
                 update({ soundEffects: on })
                 // Enabling plays the finish chirp — it doubles as the volume preview AND as the
                 // user gesture a browser needs before it will let us make noise at all.
-                if (on) playSfx('done', soundVolume)
+                if (on) playSfx('done', soundVolume, customAlertSounds)
               }}
             />
           }
@@ -115,7 +240,7 @@ export function NotificationsSection({ isActive }: { isActive: boolean }): React
                   value={Math.round(soundVolume * 100)}
                   aria-label="Sound effect volume"
                   onChange={(e) => update({ soundVolume: Number(e.target.value) / 100 })}
-                  onMouseUp={() => playSfx('done', soundVolume)}
+                  onMouseUp={() => playSfx('done', soundVolume, customAlertSounds)}
                   className="w-40 accent-[var(--accent)]"
                 />
                 <span className="w-9 text-right text-[12px] text-muted tabular-nums">
@@ -124,15 +249,8 @@ export function NotificationsSection({ isActive }: { isActive: boolean }): React
               </div>
             }
           />
-          <FieldRow
-            label="Preview"
-            control={
-              <div className="flex items-center gap-2">
-                <Button onClick={() => playSfx('done', soundVolume)}>Finished</Button>
-                <Button onClick={() => playSfx('needsYou', soundVolume)}>Needs you</Button>
-              </div>
-            }
-          />
+          <CustomSoundRow kind="done" volume={soundVolume} />
+          <CustomSoundRow kind="needsYou" volume={soundVolume} />
         </div>
       </SearchableRow>
       <SearchableRow {...ROWS.mobilePush}>

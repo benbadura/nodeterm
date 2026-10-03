@@ -24,7 +24,11 @@ import {
   RENAME_CAPABLE,
   hasSharedIdentity,
   agentLaunchProgram,
-  resumeCommand
+  resumeCommand,
+  hasHooksOverSsh,
+  readsScreenDialogs,
+  LOCAL_ONLY_HOOK_AGENTS,
+  reportsSessionEnd
 } from './config'
 
 describe('CONTEXT_LINK_CAPABLE', () => {
@@ -76,7 +80,6 @@ describe('copilot capabilities', () => {
       canRecur,
       canBranch,
       hasUsage,
-      canChat,
       canTransferFrom,
       canRename,
       canReadTitle,
@@ -84,6 +87,15 @@ describe('copilot capabilities', () => {
     ]) {
       expect(can('copilot')).toBe(false)
     }
+  })
+
+  it('shows its conversation in the chat panel from its OWN journal, never through claude\'s resolver', () => {
+    // The ⌘M leaf is `core/copilot-chat.ts` (`<COPILOT_HOME>/session-state/<id>/events.jsonl`, keyed
+    // strictly by session id). Joining CHAT_CAPABLE must not join CLAUDE_TRANSCRIPT_READABLE: that
+    // list gates the find bar's index and the meter's rehydration, both of which resolve through
+    // claude's cwd fallback and would hand a copilot node someone else's claude session.
+    expect(canChat('copilot')).toBe(true)
+    expect(readsClaudeShapedTranscript('copilot')).toBe(false)
   })
 })
 
@@ -103,9 +115,16 @@ describe('opencode capabilities', () => {
     expect(canControlCanvas('opencode')).toBe(true)
   })
   it('stays out of the claude-only capability lists', () => {
-    for (const can of [canSubagent, canRecur, canBranch, hasUsage, canChat, canTransferFrom, canRename, canReadTitle, hasPermissionMode]) {
+    for (const can of [canSubagent, canRecur, canBranch, hasUsage, canTransferFrom, canRename, canReadTitle, hasPermissionMode]) {
       expect(can('opencode')).toBe(false)
     }
+  })
+  it('shows its conversation in the ⌘M chat panel — read through `opencode export`, never claude\'s resolver', () => {
+    // Same pair grok pins below: opencode's sessions live in a database read by `opencode export`
+    // (core/opencode-chat.ts), so claude's resolver — whose cwd fallback returns a stranger's newest
+    // transcript — must never be asked for one.
+    expect(canChat('opencode')).toBe(true)
+    expect(readsClaudeShapedTranscript('opencode')).toBe(false)
   })
 })
 
@@ -272,6 +291,93 @@ describe('grok capabilities', () => {
   })
 })
 
+/**
+ * Antigravity (`agy`) joins with exactly ONE capability list: AGENT_HOOK_TARGETS. Its leaves are a
+ * normalizer (normalizeAntigravity) and an installer for `~/.gemini/config/hooks.json`. Every other
+ * list is a separate leaf it does not have yet, and joining one early lights a badge that never
+ * updates or offers an action that silently does the wrong thing (rule 2 in CLAUDE.md). Each
+ * exclusion below says which leaf is missing — measured facts (`agy` 1.2.3, Windows 11).
+ */
+describe('antigravity capabilities', () => {
+  it('is offered ABOVE gemini wherever agents are listed (BUILTIN_AGENT_IDS is display order)', () => {
+    // Google moved personal accounts from Gemini CLI to Antigravity on 2026-06-18.
+    expect(BUILTIN_AGENT_IDS.indexOf('antigravity')).toBeLessThan(BUILTIN_AGENT_IDS.indexOf('gemini'))
+  })
+
+  it('reports status on THIS machine only — an SSH host has no agy hook installer yet', () => {
+    // `--after` asks this before accepting a dependency in an SSH project: a node that can never
+    // report "done" there would hold its dependant QUEUED forever.
+    expect(hasHooksOverSsh('antigravity')).toBe(false)
+    expect(LOCAL_ONLY_HOOK_AGENTS as readonly string[]).toEqual(['antigravity'])
+    for (const id of BUILTIN_AGENT_IDS.filter((a) => a !== 'antigravity')) {
+      expect(hasHooksOverSsh(id), id).toBe(hasHooks(id))
+    }
+  })
+
+  it('is a builtin that launches `agy`, prompt through --prompt-interactive', () => {
+    expect(BUILTIN_AGENT_IDS).toContain('antigravity')
+    expect(AGENT_CONFIG.antigravity.launchCmd).toBe('agy')
+    expect(AGENT_CONFIG.antigravity.expectedProcess).toBe('agy')
+    expect(AGENT_CONFIG.antigravity.label).toBe('Antigravity')
+    expect(AGENT_CONFIG.antigravity.promptInjectionMode).toBe('flag-interactive')
+    expect(AGENT_CONFIG.antigravity.promptFlag).toBe('--prompt-interactive')
+  })
+
+  it('is the only agent that overrides the interactive prompt flag', () => {
+    // copilot's `--interactive` must stay the default, byte-identical.
+    for (const id of BUILTIN_AGENT_IDS.filter((a) => a !== 'antigravity')) {
+      expect(AGENT_CONFIG[id].promptFlag, id).toBeUndefined()
+    }
+  })
+
+  it('reports status through its own hooks', () => {
+    // Badge, unread, completion notification, `--after` dependency and trigger target all follow.
+    expect(hasHooks('antigravity')).toBe(true)
+  })
+
+  it('does not claim the capabilities whose per-agent leaf is unwritten', () => {
+    // No SessionEnd-shaped event exists among agy's five, so a DROPPED chip would be a coin flip.
+    expect(reportsSessionEnd('antigravity')).toBe(false)
+    // No token count and no stated window anywhere measured (the TUI's "1.1k tokens" is per
+    // thought block, not context use) — rule 6: no trustworthy denominator, no meter. Joining would
+    // also switch on context.ensure and the find-bar index.
+    expect(hasUsage('antigravity')).toBe(false)
+    // No transcript parser or locator yet. The location is measured (the payload's transcriptPath,
+    // `brain/<conversationId>/…/transcript_full.jsonl`); the record shapes are only vendor prose,
+    // never captured. Joining CHAT_CAPABLE before that capture would render a guess on ⌘M and on
+    // the phone's Chat screen: docs/antigravity-agent.md §7.1 and §8.1.
+    expect(canChat('antigravity')).toBe(false)
+    expect(readsClaudeShapedTranscript('antigravity')).toBe(false)
+    expect(canTransferFrom('antigravity')).toBe(false)
+    expect(canContextLink('antigravity')).toBe(false)
+    // `agy --conversation=<id>` resumes; the id is validated at the interpolation site
+    // (SAFE_SESSION_ID) and a dead one is ignored by agy itself (it starts fresh). Not minted.
+    expect(canResume('antigravity')).toBe(true)
+    expect(resumeCommand('antigravity', '5f0c2f8e-9a51-4c41-9d2e-2b6f0f3e7a11')).toBe(
+      'agy --conversation=5f0c2f8e-9a51-4c41-9d2e-2b6f0f3e7a11'
+    )
+    expect(resumeCommand('antigravity', "x'; rm -rf ~")).toBeNull()
+    expect(mintsSessionId('antigravity')).toBe(false)
+    // No subagent/recurring/branch events are wired (invoke_subagent exists in the enum, unmeasured).
+    expect(canSubagent('antigravity')).toBe(false)
+    expect(canRecur('antigravity')).toBe(false)
+    expect(canBranch('antigravity')).toBe(false)
+    // Canvas control needs a shim + a discovery file; none is installed for agy.
+    expect(canControlCanvas('antigravity')).toBe(false)
+    // Permission flags exist (--mode, --dangerously-skip-permissions) but the approval-mode table
+    // has no antigravity row yet; model switching has no gateway mapping.
+    expect(hasPermissionMode('antigravity')).toBe(false)
+    expect(canSwitchModel('antigravity')).toBe(false)
+    // Title lives in SQLite (unmeasured) and there is no rename command; read ⊇ write holds.
+    expect(canReadTitle('antigravity')).toBe(false)
+    expect(canRename('antigravity')).toBe(false)
+    expect(RENAME_CAPABLE as readonly string[]).not.toContain('antigravity')
+    // No shared app-server mode, and agy does not announce its own copies.
+    expect(hasSharedIdentity('antigravity')).toBe(false)
+    expect(reportsOwnCopy('antigravity')).toBe(false)
+  })
+})
+
 describe('copy feedback', () => {
   it('stays quiet for claude, whose CLI announces its own copies', () => {
     // Claude Code captures the mouse and prints "copied N chars to tmux buffer · paste with
@@ -348,5 +454,12 @@ describe('title read vs rename write', () => {
   it('a custom agent claims neither', () => {
     expect(canReadTitle('custom:abc')).toBe(false)
     expect(canRename('custom:abc')).toBe(false)
+  })
+})
+
+describe('readsScreenDialogs — whose own dialogs the chat view can see on screen', () => {
+  it('is claude only: its reader would read every other CLI\'s screen as a permanent dialog', () => {
+    expect(readsScreenDialogs('claude')).toBe(true)
+    for (const id of BUILTIN_AGENT_IDS.filter((a) => a !== 'claude')) expect(readsScreenDialogs(id)).toBe(false)
   })
 })

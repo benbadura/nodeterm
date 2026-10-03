@@ -337,3 +337,88 @@ describe('TabBar options button', () => {
   })
 })
 
+
+describe('TabBar Share with team', () => {
+  let root: Root
+  let host: HTMLElement
+  let onShareWithTeam: ReturnType<typeof vi.fn<(id: string) => void>>
+
+  const SSH = { server: { host: 'box', user: 'alice' }, remoteCwd: '~/proj' }
+  const shareRow = (): HTMLButtonElement | undefined =>
+    Array.from(document.querySelectorAll<HTMLButtonElement>('.tab-menu button')).find(
+      (b) => b.textContent?.trim() === 'Share with team…'
+    )
+
+  async function open(
+    over: Partial<Project>,
+    props: { share?: boolean; blocked?: (id: string) => string | null } = {}
+  ): Promise<void> {
+    const { TabBar, useProjects } = await load()
+    useProjects.setState({ projects: [project(over)], activeProjectId: 'p1' })
+    await act(async () => {
+      root.render(
+        <TabBar
+          onSwitch={vi.fn()}
+          onReconnect={vi.fn()}
+          onReorder={vi.fn()}
+          onOpenWelcome={vi.fn()}
+          onRename={vi.fn()}
+          onSetFolder={vi.fn()}
+          onCloseProject={vi.fn()}
+          onRemoteAccess={vi.fn()}
+          onSetDefaultAccount={vi.fn()}
+          onSetDefaultPermissionMode={vi.fn()}
+          onOpenProjectSettings={vi.fn()}
+          {...(props.share === false ? {} : { onShareWithTeam })}
+          shareBlockedReason={props.blocked}
+        />
+      )
+    })
+    await click(host.querySelector<HTMLButtonElement>('.tab__caret')!)
+  }
+
+  beforeEach(() => {
+    host = document.createElement('div')
+    document.body.appendChild(host)
+    root = createRoot(host)
+    onShareWithTeam = vi.fn<(id: string) => void>()
+  })
+
+  afterEach(() => {
+    act(() => root.unmount())
+    host.remove()
+  })
+
+  it('shows for an SSH project, and opens the share for it', async () => {
+    await open({ ssh: SSH })
+    const row = shareRow()
+    expect(row).toBeDefined()
+    expect(row!.disabled).toBe(false)
+    await click(row!)
+    expect(onShareWithTeam).toHaveBeenCalledWith('p1')
+    expect(document.querySelector('.tab-menu')).toBeNull()
+  })
+
+  it('is absent for a local project, a relay tab and when the canvas offers no share', async () => {
+    await open({})
+    expect(shareRow()).toBeUndefined()
+    act(() => root.unmount())
+    root = createRoot(host)
+    await open({ ssh: SSH, remote: true })
+    expect(shareRow()).toBeUndefined()
+    act(() => root.unmount())
+    root = createRoot(host)
+    await open({ ssh: SSH }, { share: false })
+    expect(shareRow()).toBeUndefined()
+  })
+
+  it('is disabled with the reason while the share is blocked', async () => {
+    const reason = 'Connect this project first (its SSH connection is down).'
+    await open({ ssh: SSH }, { blocked: () => reason })
+    const row = shareRow()!
+    expect(row.disabled).toBe(true)
+    expect(row.title).toBe(reason)
+    await click(row)
+    expect(onShareWithTeam).not.toHaveBeenCalled()
+  })
+})

@@ -4,8 +4,12 @@ import path from 'node:path'
 import type { GitHubIssue } from '../../shared/github-issues'
 import { renameAtomic, tempNameFor } from '../fs-atomic'
 import { parseGitHubRepository } from './config'
+import { emptyPullMemory, validPullMemory, type PullMemory } from './pull-memory'
 
 const DIRECTORY = 'github-issues-cache'
+/** What this machine observed about the repository's pull requests (pull-memory.ts). Beside the
+ *  issue cache, same key, and deleted with it. */
+const PULL_MEMORY_DIRECTORY = 'github-pull-memory'
 const BINDING_DIRECTORY = 'github-issues-bindings'
 const DEFAULT_MAXIMUM = 64 * 1024 * 1024
 
@@ -165,6 +169,25 @@ export class GitHubIssueCache {
 
   async clear(userId: string, repository: string): Promise<void> {
     await fs.rm(this.file(userId, repository), { force: true })
+    await fs.rm(this.file(userId, repository, PULL_MEMORY_DIRECTORY), { force: true })
+  }
+
+  /** Never throws: an unreadable or malformed file is an empty memory (nothing observed yet), which
+   *  can only make the merge-driven move WAIT, never fire. */
+  async loadPullMemory(userId: string, repository: string): Promise<PullMemory> {
+    try {
+      const raw = await fs.readFile(this.file(userId, repository, PULL_MEMORY_DIRECTORY), 'utf-8')
+      if (Buffer.byteLength(raw, 'utf-8') > 4 * 1024 * 1024) return emptyPullMemory()
+      const parsed: unknown = JSON.parse(raw)
+      return validPullMemory(parsed) ? structuredClone(parsed) : emptyPullMemory()
+    } catch {
+      return emptyPullMemory()
+    }
+  }
+
+  async savePullMemory(userId: string, repository: string, memory: PullMemory): Promise<void> {
+    if (!validPullMemory(memory)) throw new GitHubCacheError('cache-too-large')
+    await this.writePrivate(this.file(userId, repository, PULL_MEMORY_DIRECTORY), JSON.stringify(memory))
   }
 
   async bind(
@@ -200,12 +223,12 @@ export class GitHubIssueCache {
     await fs.rm(binding, { force: true })
   }
 
-  private file(userId: string, repository: string): string {
+  private file(userId: string, repository: string, directory = DIRECTORY): string {
     if (!userId || userId.length > 256 || parseGitHubRepository(repository) !== repository) {
       throw new GitHubCacheError('invalid-cache-key')
     }
     const digest = createHash('sha256').update(`${userId}\0${repository}`).digest('hex')
-    return path.join(this.userDataDir, DIRECTORY, `${digest}.json`)
+    return path.join(this.userDataDir, directory, `${digest}.json`)
   }
 
   private bindingFile(localApprovalId: string, projectId: string, repository: string): string {

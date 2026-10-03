@@ -1,3 +1,5 @@
+import { hasEditContext } from './keyContext'
+
 /**
  * Should a click on the EMPTY canvas take the keyboard away from `active`?
  *
@@ -12,7 +14,8 @@
  *
  * True only for a real EDITING surface. A button or a node div that happens to be focused is
  * harmless and blurring it would fight the browser's own focus handling; a `textarea`, an `input`
- * or a `contenteditable` is the one that swallows typing.
+ * or a `contenteditable` is the one that swallows typing — and so is an element with an EditContext
+ * attached, which is what a focused Monaco editor is since 0.56 (issue #930, see `hasEditContext`).
  *
  * `null`/`body` is the already-correct state and answers false, so the common click costs nothing.
  */
@@ -20,5 +23,5 @@ export function shouldReleasePaneFocus(active: Element | null): boolean {
   if (!active) return false
   const tag = active.tagName
   if (tag === 'TEXTAREA' || tag === 'INPUT') return true
-  return (active as HTMLElement).isContentEditable === true
+  return (active as HTMLElement).isContentEditable === true || hasEditContext(active)
 }

@@ -3,7 +3,6 @@ import {
   coldGroupChildCount,
   coldGroupCwd,
   coldOpenMessage,
-  coldPlaceBelow,
   coldResolveAfter,
   coldResolveGroup,
   groupSizeFor,
@@ -155,31 +154,6 @@ describe('coldResolveAfter', () => {
   })
 })
 
-describe('coldPlaceBelow — the live path’s placeBelow, off persisted geometry', () => {
-  it('centers below the source and fans siblings right', () => {
-    const src = N('src', { position: { x: 100, y: 200 }, size: { width: 600, height: 400 } })
-    expect(coldPlaceBelow([src], src, 0)).toEqual({ x: 400, y: 890 })
-    expect(coldPlaceBelow([src], src, 1)).toEqual({ x: 860, y: 890 })
-  })
-
-  it('resolves a grouped source to ROOT space', () => {
-    // A stored child's position is frame-relative; placing off it directly would land the new
-    // node by the frame's own offset away from the agent it hangs from.
-    const frame = N('g', { kind: 'group', position: { x: 1000, y: 1000 } })
-    const src = N('src', {
-      parentId: 'g',
-      position: { x: 10, y: 20 },
-      size: { width: 600, height: 400 }
-    })
-    expect(coldPlaceBelow([frame, src], src, 0)).toEqual({ x: 1310, y: 1710 })
-  })
-
-  it('falls back to the default node size when none is persisted', () => {
-    const src = N('src', { position: { x: 0, y: 0 } })
-    expect(coldPlaceBelow([src], src, 0)).toEqual({ x: 300, y: 690 })
-  })
-})
-
 describe('group grid geometry (shared with the live addGrouped path)', () => {
   it('lays children out in two columns under the frame header', () => {
     expect(groupSlot(0, 600, 400)).toEqual({ x: 24, y: 56 })
@@ -207,7 +181,8 @@ describe('group grid geometry (shared with the live addGrouped path)', () => {
 describe('coldOpenMessage — ONE sentence for both cold-open sites', () => {
   it('names the count, the agent, the project and the ids, and says when it starts', () => {
     expect(coldOpenMessage(2, 'claude', 'Backend', ['t1', 't2'])).toBe(
-      'opened 2 claude session(s) in "Backend" (t1, t2) — queued; starts when that project is next viewed'
+      'opened 2 claude session(s) in "Backend" (t1, t2) — queued; starts when that project is next viewed' +
+        ', or at once with the `run` verb (or pass --run-now when opening)'
     )
   })
 

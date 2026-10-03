@@ -1,0 +1,97 @@
+{
+  "request": {
+    "maxBytes": 262144
+  },
+  "parse": {
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "search the web"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "tool",
+            "name": "web_search",
+            "arg": "nodeterm canvas terminal manager"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "tool",
+            "name": "web_search",
+            "arg": ""
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Found two sources."
+          }
+        ]
+      }
+    ],
+    "skipped": 0,
+    "model": "grok-4.6-build",
+    "effort": "xhigh"
+  },
+  "page": {
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "search the web"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "tool",
+            "name": "web_search",
+            "arg": "nodeterm canvas terminal manager"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "tool",
+            "name": "web_search",
+            "arg": ""
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Found two sources."
+          }
+        ]
+      }
+    ],
+    "found": true,
+    "olderCursor": null,
+    "unmatchedResults": [],
+    "model": "grok-4.6-build",
+    "effort": "xhigh"
+  }
+}

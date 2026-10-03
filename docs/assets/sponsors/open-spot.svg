@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="280" height="140" viewBox="0 0 280 140" role="img" aria-label="Open Founding Sponsor spot">
+  <!-- An open Founding Sponsor spot in the README grid. Mid-grey on a transparent ground so it reads on GitHub's
+       light and dark themes alike. Replace the cell with the sponsor's own logo when the spot is taken. -->
+  <rect x="3" y="3" width="274" height="134" rx="18" fill="#8b949e" fill-opacity="0.06" stroke="#8b949e" stroke-width="2.5" stroke-dasharray="9 7"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" text-anchor="middle" fill="#8b949e">
+    <text x="140" y="72" font-size="27" font-weight="600">Your logo here</text>
+    <text x="140" y="104" font-size="19" fill-opacity="0.8">Founding Sponsor</text>
+  </g>
+</svg>

@@ -1,0 +1,4 @@
+{"type":"user","content":[{"type":"text","text":"go"}],"prompt_index":0}
+{"type":"assistant","content":"first","model_id":"grok-4.6-build","model_fingerprint":"fp_0000000000synthetic","reasoning_effort":"medium"}
+{"type":"user","content":[{"type":"text","text":"again"}],"prompt_index":1}
+{"type":"assistant","content":"second","model_id":"grok-4.6","model_fingerprint":"fp_0000000000synthetic","reasoning_effort":"high"}
