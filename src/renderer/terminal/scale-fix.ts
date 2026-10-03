@@ -15,16 +15,42 @@ import type { Terminal } from '@xterm/xterm'
  * which makes `fakeClientX - rect.left = (clientX - rect.left) / scale` — the correct
  * unscaled offset. No-ops at scale 1.
  */
-export function patchTerminalScale(term: Terminal, getScale: () => number): void {
+export function patchTerminalScale(
+  term: Terminal,
+  getScale: () => number,
+  raf: (cb: () => void) => unknown = (cb) => requestAnimationFrame(cb)
+): void {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ms: any = (term as unknown as { _core?: { _mouseService?: unknown } })._core?._mouseService
   if (!ms || ms.__scalePatched) return
   ms.__scalePatched = true
 
+  // One rect read per animation frame: a mouse move runs getCoords AND getMouseReportCoords (and
+  // the link providers call getCoords again), and each fresh getBoundingClientRect() forced a
+  // style/layout read. The rect only changes when the canvas moves, which happens on a frame
+  // boundary, so a frame-scoped cache is exact.
+  let rectCache = new WeakMap<HTMLElement, DOMRect>()
+  let clearQueued = false
+  const rectOf = (el: HTMLElement): DOMRect => {
+    let r = rectCache.get(el)
+    if (!r) {
+      r = el.getBoundingClientRect()
+      rectCache.set(el, r)
+      if (!clearQueued) {
+        clearQueued = true
+        raf(() => {
+          clearQueued = false
+          rectCache = new WeakMap()
+        })
+      }
+    }
+    return r
+  }
+
   const adjust = (event: MouseEvent, element: HTMLElement): MouseEvent => {
     const s = getScale() || 1
     if (Math.abs(s - 1) < 0.001) return event
-    const rect = element.getBoundingClientRect()
+    const rect = rectOf(element)
     return new Proxy(event, {
       get(target, prop) {
         if (prop === 'clientX') return rect.left + (event.clientX - rect.left) / s

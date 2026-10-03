@@ -45,7 +45,8 @@ const EXPECTED_PROCESS = {
   gemini: 'gemini',
   opencode: 'opencode',
   grok: 'grok',
-  copilot: 'copilot'
+  copilot: 'copilot',
+  antigravity: 'agy'
 }
 
 const SHELL_NAMES = new Set([

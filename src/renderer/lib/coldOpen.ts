@@ -19,8 +19,6 @@
 // controlRouting.ts / projectOpen.ts / pendingLaunch.ts — vitest runs in the node environment, so
 // the React component is not testable and these are.
 
-import { rootPositionIn, type PlacedNode } from './projectOpen'
-
 /** A serialized node, as the projects store keeps them for non-active projects. Structural subset
  *  of `CanvasNodeState` — deliberately not the type itself, so tests can build one in a line. */
 export interface ColdNode {
@@ -36,16 +34,6 @@ export interface ColdNode {
   tags?: string[]
   worktree?: { path?: string }
 }
-
-const asPlaced = (n: ColdNode): PlacedNode => ({
-  id: n.id,
-  parentId: n.parentId,
-  position: n.position,
-  size: n.size
-})
-
-const widthOf = (n: ColdNode): number => n.size?.width ?? 600
-const heightOf = (n: ColdNode): number => n.size?.height ?? 400
 
 /**
  * Which agent (if any) runs in a stored node — the serialized counterpart of Canvas's `agentIdOf`,
@@ -146,24 +134,6 @@ export function coldResolveAfter(
   return { ok: true, after: ids }
 }
 
-/**
- * Where the i-th opened node lands when the source IS in this project: the same geometry the live
- * path's `placeBelow` uses (below the source, fanned right), computed from the source's PERSISTED
- * size and resolved to ROOT space so a source sitting inside a frame still places correctly.
- * Returns a CENTER point — the factories' `center` parameter.
- */
-export function coldPlaceBelow(
-  nodes: readonly ColdNode[],
-  source: ColdNode,
-  i: number
-): { x: number; y: number } {
-  const abs = rootPositionIn(nodes.map(asPlaced), asPlaced(source))
-  return {
-    x: abs.x + widthOf(source) / 2 + i * 460,
-    y: abs.y + heightOf(source) + 80 + 210
-  }
-}
-
 // Grid geometry for nodes opened INTO a group frame. Exported so Canvas's LIVE path uses these
 // exact numbers too — the cold and live placements are the same layout, and two copies of a
 // magic-number grid drift into two layouts.
@@ -205,6 +175,11 @@ export function coldGroupChildCount(nodes: readonly ColdNode[], groupId: string)
  * "next viewed", it just has to be reopened first, and an agent that is told nothing would report a
  * session as started that has no process behind it.
  */
+/** Where a held node's other way to start is named, so an orchestrator that must coordinate with
+ *  it now (a `send` waits for the session to exist) is not left waiting for a human to look. Part of
+ *  the "queued" clause: `mergeRunNow` drops them together. */
+export const COLD_OPEN_RUN_HINT = ', or at once with the `run` verb (or pass --run-now when opening)'
+
 export function coldOpenMessage(
   count: number,
   what: string,
@@ -214,7 +189,7 @@ export function coldOpenMessage(
 ): string {
   return (
     `opened ${count} ${what} session(s) in "${projectName}" (${ids.join(', ')}) — ` +
-    'queued; starts when that project is next viewed' +
+    `queued; starts when that project is next viewed${COLD_OPEN_RUN_HINT}` +
     (opts.closed ? ' (that project is closed — reopen it from the welcome screen)' : '')
   )
 }

@@ -1,0 +1,110 @@
+[
+  {
+    "before": null,
+    "maxBytes": 262144,
+    "grownMaxBytes": 262144,
+    "start": 0,
+    "parse": {
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Inspect the repo"
+            }
+          ],
+          "at": 1790627717000,
+          "key": 446
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Let me look."
+            },
+            {
+              "kind": "tool",
+              "name": "bash",
+              "arg": "git status --short",
+              "id": "call_bash",
+              "result": " M src/a.ts ?? new.txt ?? other.txt"
+            },
+            {
+              "kind": "tool",
+              "name": "view",
+              "arg": "/srv/demo/missing.txt",
+              "id": "call_view",
+              "result": "Error: Permission denied and could not request permission from user"
+            },
+            {
+              "kind": "tool",
+              "name": "create",
+              "arg": "/srv/demo/new.txt",
+              "id": "call_create",
+              "result": "Created file /srv/demo/new.txt with 5 characters"
+            },
+            {
+              "kind": "tool",
+              "name": "edit",
+              "arg": "/srv/demo/a.ts",
+              "id": "call_edit"
+            },
+            {
+              "kind": "tool",
+              "name": "grep",
+              "arg": "TODO",
+              "id": "call_grep",
+              "result": "src/a.ts:1: // TODO xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            },
+            {
+              "kind": "tool",
+              "name": "sql",
+              "arg": "select count(*) from todos",
+              "id": "call_sql",
+              "result": "no such table: todos"
+            },
+            {
+              "kind": "tool",
+              "name": "apply_patch",
+              "arg": "*** Begin Patch\n*** Update File: a.ts\n*** End Patch",
+              "id": "call_patch",
+              "result": "Patch applied"
+            },
+            {
+              "kind": "tool",
+              "name": "read_bash",
+              "arg": "",
+              "id": "call_read_bash",
+              "result": "still running"
+            },
+            {
+              "kind": "tool",
+              "name": "web_fetch",
+              "arg": "https://example.test/ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp",
+              "id": "call_long"
+            }
+          ],
+          "at": 1790627719000,
+          "key": 1096
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Done inspecting."
+            }
+          ],
+          "at": 1790627733000,
+          "key": 7811
+        }
+      ],
+      "olderCursor": null,
+      "unmatchedResults": [],
+      "model": "gpt-5.5",
+      "noCompleteLine": false
+    }
+  }
+]

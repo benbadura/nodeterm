@@ -53,6 +53,30 @@ describe('planReopen', () => {
     expect(plan).toEqual({ action: 'skip' })
   })
 
+  it('refuses a closed relay (team) tab: a reopen would mount the host nodes on this core', () => {
+    const projects: PlanReopenProject[] = [{ id: 'team', closed: true, remote: true, nodes: [] }]
+    const plan = planReopen({ kind: 'project', projectId: 'team', closedAt: 1 }, projects, 'p2', new Set(), neverRecreates)
+    expect(plan).toEqual({ action: 'refuse', projectId: 'team' })
+  })
+
+  it('refuses a nodes entry for a closed team tab BEFORE recreating anything into it', () => {
+    // insertStored + reopenProjectAfter would write the nodes into the relay copy and then reopen it.
+    const projects: PlanReopenProject[] = [{ id: 'team', closed: true, remote: true, nodes: [] }]
+    let recreated = 0
+    const plan = planReopen({ kind: 'nodes', projectId: 'team', closedAt: 1, nodes: [snap()] }, projects, 'p2', new Set(), () => {
+      recreated++
+      return node('x')
+    })
+    expect(plan).toEqual({ action: 'refuse', projectId: 'team' })
+    expect(recreated).toBe(0)
+  })
+
+  it('an OPEN team tab still takes a restored node (its relay session is live)', () => {
+    const projects: PlanReopenProject[] = [{ id: 'team', remote: true, nodes: [] }]
+    const plan = planReopen({ kind: 'nodes', projectId: 'team', closedAt: 1, nodes: [snap()] }, projects, 'p2', new Set(), alwaysRecreates())
+    expect(plan).toMatchObject({ action: 'insertStored', projectId: 'team', reopenProjectAfter: false })
+  })
+
   it('skips a project entry whose project was permanently deleted since', () => {
     const plan = planReopen({ kind: 'project', projectId: 'gone', closedAt: 1 }, [], 'p2', new Set(), neverRecreates)
     expect(plan).toEqual({ action: 'skip' })

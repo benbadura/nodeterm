@@ -181,11 +181,11 @@ describe('ShortcutsSection rows', () => {
 
   it('renders every group as its own divided block, rows packed inside it', () => {
     render()
-    expect(host.querySelectorAll('h3')).toHaveLength(6)
+    expect(host.querySelectorAll('h3')).toHaveLength(7)
     expect(ids()).toHaveLength(COMMAND_DEFINITIONS.length)
     // The rows now live INSIDE their group's wrapper, so the shell's `divide-y` separates
     // GROUPS: the policy row + the filter rail + one block per group.
-    expect(body().children).toHaveLength(2 + 6)
+    expect(body().children).toHaveLength(2 + 7)
   })
 
   // `settings.keybindings` is hand-editable JSON and `mergeSettings` passes it through with NO
@@ -550,7 +550,7 @@ describe('commitCandidate', () => {
 
   // Dictation is its own conflict bucket (Task 1), so NEITHER of the three gates above can see an
   // overlap with it — the detector is silent by design and the load path deliberately permits one.
-  // These two gates are what makes `conflictBucket`'s "the Settings UI REFUSES to create one" true.
+  // These two gates are what makes `conflictBuckets`'s "the Settings UI REFUSES to create one" true.
   //
   // They are SCOPED, and the four tests below are the discriminating matrix: the keyed gesture is
   // offered only in plain app focus (`globalKeybindings.ts` — `!ctx.typing && !ctx.terminal &&
@@ -581,7 +581,7 @@ describe('commitCandidate', () => {
     expect(kb()['terminal.find']).toEqual(['Cmd+Alt+D'])
   })
 
-  it('refuses a keyed Dictate chord that a global-bucket command already holds', () => {
+  it('refuses a keyed Dictate chord that a view-bucket command already holds', () => {
     const r = commitCandidate('speech.dictation', 'Cmd+K', 'replace')
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.error).toContain('Command palette')

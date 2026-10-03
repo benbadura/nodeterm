@@ -1,0 +1,35 @@
+{
+  "request": {
+    "maxBytes": 262144
+  },
+  "parse": {
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "the one line that survives"
+          }
+        ]
+      }
+    ],
+    "skipped": 5
+  },
+  "page": {
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "the one line that survives"
+          }
+        ]
+      }
+    ],
+    "found": true,
+    "olderCursor": null,
+    "unmatchedResults": []
+  }
+}

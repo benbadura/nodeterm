@@ -1,0 +1,107 @@
+[
+  {
+    "before": null,
+    "maxBytes": 262144,
+    "grownMaxBytes": 262144,
+    "start": 0,
+    "parse": {
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Help me decide the rollout."
+            }
+          ],
+          "at": 1790362800000,
+          "key": 0
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool",
+              "name": "AskUserQuestion",
+              "arg": "",
+              "body": "**Transport**\n\nWhich transport should the phone use first?\n\n- **Relay (Recommended)** — Works from anywhere.\n- **SSH** — Direct to the host.",
+              "questions": [
+                {
+                  "question": "Which transport should the phone use first?",
+                  "header": "Transport",
+                  "multiSelect": false,
+                  "options": [
+                    {
+                      "label": "Relay (Recommended)",
+                      "description": "Works from anywhere."
+                    },
+                    {
+                      "label": "SSH",
+                      "description": "Direct to the host."
+                    }
+                  ]
+                }
+              ],
+              "id": "toolu_ask_01",
+              "result": "User has answered your questions: \"Which transport should the phone use first?\"=\"Relay (Recommended)\". You can now continue with the user's answers in mind."
+            }
+          ],
+          "at": 1790362801000,
+          "key": 276
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool",
+              "name": "AskUserQuestion",
+              "arg": "",
+              "body": "**Surfaces**\n\nWhich surfaces should get it? _(select all that apply)_\n\n- **Desktop** — Electron\n- **Server Edition** — Browser\n- **Mobile** — iOS",
+              "questions": [
+                {
+                  "question": "Which surfaces should get it?",
+                  "header": "Surfaces",
+                  "multiSelect": true,
+                  "options": [
+                    {
+                      "label": "Desktop",
+                      "description": "Electron"
+                    },
+                    {
+                      "label": "Server Edition",
+                      "description": "Browser"
+                    },
+                    {
+                      "label": "Mobile",
+                      "description": "iOS"
+                    }
+                  ]
+                }
+              ],
+              "id": "toolu_ask_02",
+              "result": "User has answered your questions: \"Which surfaces should get it?\"=\"Desktop, Mobile\". You can now continue with the user's answers in mind."
+            }
+          ],
+          "at": 1790362803000,
+          "key": 1445
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Relay first, on desktop and mobile."
+            }
+          ],
+          "at": 1790362805000,
+          "key": 2594
+        }
+      ],
+      "olderCursor": null,
+      "unmatchedResults": [],
+      "model": "claude-opus-5-5",
+      "effort": "high",
+      "noCompleteLine": false
+    }
+  }
+]

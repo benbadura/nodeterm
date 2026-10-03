@@ -8,6 +8,7 @@ import { hookServer } from '../hook-server'
 import { nodeAuthToken } from '../node-auth-token'
 import { initPlatform, resetPlatformForTests } from '../../platform'
 import { fakePlatform } from '../../platform-fake'
+import { testTmpDir } from '../../test-tmp'
 
 describe('buildManagedScript', () => {
   const s = buildManagedScript('claude')
@@ -96,8 +97,11 @@ describe('buildManagedScript', () => {
     it('fires a backgrounded "answered" POST in the wait branch after reading a valid answer', () => {
       // Guarded on a valid allow/deny answer, tagged nodeterm_answered on both transports, and
       // backgrounded (& + short --max-time) so the decision JSON is never delayed.
-      expect(s).toContain('if [ "$nt_decision" = "allow" ] || [ "$nt_decision" = "deny" ]; then')
-      const answered = s.match(/--data-urlencode "nodeterm_answered=\$\{nt_decision\}"/g) ?? []
+      // The VERB decoded from the answer file (never the file itself: a structured answer carries
+      // user text, which must not reach an argv) — see managed-script.answer.test.ts.
+      expect(s).toContain('if [ "$nt_verb" = "allow" ] || [ "$nt_verb" = "deny" ]; then')
+      expect(s).not.toContain('nodeterm_answered=${nt_decision}')
+      const answered = s.match(/--data-urlencode "nodeterm_answered=\$\{nt_verb\}"/g) ?? []
       expect(answered.length).toBe(2)
       // Each backgrounded answered POST reads the payload from the temp file and self-deletes it
       // after curl returns (the file must never outlive its reader).
@@ -119,7 +123,9 @@ describe('buildManagedScript', () => {
     })
     it('polls the answer file every 0.5s up to the armed seconds', () => {
       expect(s).toContain('nt_answer="$HOME/.nodeterm/pending/$nt_pending.answer"')
-      expect(s).toContain('nt_max=$((NODETERM_PERM_WAIT_SECS * 2))')
+      // nt_wait = NODETERM_PERM_WAIT_SECS, or the long interactive hold for a plan / question.
+      expect(s).toContain('nt_wait="$NODETERM_PERM_WAIT_SECS"')
+      expect(s).toContain('nt_max=$((nt_wait * 2))')
       expect(s).toContain('sleep 0.5')
     })
     it('prints the exact allow / deny decision JSON', () => {
@@ -143,14 +149,15 @@ describe('buildManagedScript', () => {
     it('the wait branch is ABSENT from a non-claude agent script, not merely env-inert', () => {
       for (const agent of ['codex', 'gemini', 'grok', 'copilot', 'opencode']) {
         const script = buildManagedScript(agent)
-        expect(script, `${agent} script arms the perm wait`).not.toContain('NODETERM_PERM_WAIT_SECS * 2')
+        expect(script, `${agent} script arms the perm wait`).not.toContain('"$NODETERM_PERM_WAIT_SECS"')
+        expect(script, `${agent} script holds`).not.toContain('nt_wait')
         expect(script, `${agent} script polls the answer file`).not.toContain('.answer')
         expect(script, `${agent} script can print a decision`).not.toContain('hookSpecificOutput')
         expect(script).toContain(`/hook/${agent}`)
       }
       // And claude keeps the whole branch.
       const claude = buildManagedScript('claude')
-      expect(claude).toContain('nt_max=$((NODETERM_PERM_WAIT_SECS * 2))')
+      expect(claude).toContain('nt_max=$((nt_wait * 2))')
       expect(claude).toContain('"behavior":"deny"')
     })
   })
@@ -187,7 +194,7 @@ describe('buildManagedScript', () => {
      *  which branch of the gate is taken. `uname` rather than an env var on purpose: that is what
      *  the script reads, and it is what keeps working when a caller replaces the environment. */
     const run = (unameS: string, cygpath: string | null): CurlCall[] => {
-      const dir = mkdtempSync(join(tmpdir(), 'nt-payload-'))
+      const dir = testTmpDir('nt-payload-')
       const bin = join(dir, 'bin')
       const home = join(dir, 'home')
       mkdirSync(bin, { recursive: true })

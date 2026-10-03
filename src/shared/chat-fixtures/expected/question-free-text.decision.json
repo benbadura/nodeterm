@@ -1,0 +1,5 @@
+{
+  "ok": true,
+  "content": "{\"hookSpecificOutput\":{\"hookEventName\":\"PermissionRequest\",\"decision\":{\"behavior\":\"allow\",\"updatedInput\":{\"questions\":[{\"question\":\"Which transport should the phone use first?\",\"header\":\"Transport\",\"multiSelect\":false,\"options\":[{\"label\":\"Relay (Recommended)\",\"description\":\"Works from anywhere.\"},{\"label\":\"SSH\",\"description\":\"Direct to the host.\"}]}],\"answers\":{\"Which transport should the phone use first?\":\"Both, behind a flag\"}}}}}",
+  "decision": "allow"
+}

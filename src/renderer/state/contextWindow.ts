@@ -25,7 +25,8 @@ function load(): Record<string, ContextWindowUsage> {
 
 function persistable(map: Record<string, ContextWindowUsage>): Record<string, ContextWindowUsage> {
   // Older records have no provenance; invalidate them instead of guessing their agent.
-  return Object.fromEntries(Object.entries(map).filter(([, usage]) => usage?.windowSource === 'transcript'))
+  return Object.fromEntries(Object.entries(map).filter(([, usage]) =>
+    usage?.windowSource === 'transcript' && !usage.nodeId && !usage.cleared))
 }
 
 /** Keep only the MAX_SESSIONS most-recently-updated entries (LRU by updatedAt). */
@@ -55,16 +56,53 @@ function scheduleSave(bySessionId: Record<string, ContextWindowUsage>): void {
 
 interface ContextWindowState {
   bySessionId: Record<string, ContextWindowUsage>
+  /** Remote observations are node-owned and never restored from browser storage. */
+  byNodeId: Record<string, ContextWindowUsage>
   set(usage: ContextWindowUsage): void
 }
 
 export const useContextWindow = create<ContextWindowState>((set) => ({
   bySessionId: load(),
+  byNodeId: {},
   set: (usage) =>
     set((s) => {
+      if (usage.nodeId) {
+        if (usage.cleared) {
+          if (s.byNodeId[usage.nodeId]?.sessionId !== usage.sessionId) return s
+          const byNodeId = { ...s.byNodeId }
+          delete byNodeId[usage.nodeId]
+          return { byNodeId }
+        }
+        return { byNodeId: prune({ ...s.byNodeId, [usage.nodeId]: usage }) }
+      }
+      if (usage.cleared) return s
       const merged = { ...s.bySessionId, [usage.sessionId]: usage }
       const bySessionId = prune(merged)
       scheduleSave(bySessionId)
       return { bySessionId }
     })
 }))
+
+/**
+ * The ONE reader of a node's context usage — the header ContextMeter and the ⌘M composer's model /
+ * effort labels both call it, so they can never show different models for one session.
+ *
+ * A copied rollout has the same session id on two hosts: SSH Codex observations belong to the node
+ * that requested them (`scoped`), never to a local/session-only snapshot. Everything else is keyed
+ * by session id, and a value whose session id does not match is not this session's.
+ */
+export function useContextUsage({
+  sessionId,
+  nodeId,
+  scoped
+}: {
+  sessionId: string | null | undefined
+  nodeId?: string
+  scoped: boolean
+}): ContextWindowUsage | undefined {
+  return useContextWindow((s) => {
+    if (!sessionId) return undefined
+    const value = scoped ? (nodeId ? s.byNodeId[nodeId] : undefined) : s.bySessionId[sessionId]
+    return value?.sessionId === sessionId ? value : undefined
+  })
+}

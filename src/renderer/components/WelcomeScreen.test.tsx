@@ -139,3 +139,68 @@ describe('WelcomeScreen — Recently closed filter (issue #506)', () => {
     expect(host.querySelector('.welcome__recent')).toBeNull()
   })
 })
+
+/**
+ * The two lists under the cards live in ONE container (`.welcome__lists`), which styles.css makes
+ * exactly as wide as the card row and splits into two columns. Before, each list was its own
+ * centered max-width box: the page read as a ragged, left-leaning column (#1062 follow-up). The CSS
+ * half is pinned in styles.welcome-layout.test.ts; this pins the half the CSS depends on — both
+ * sections are direct children of the same container, conversations first, and a section that is not
+ * drawn leaves no placeholder behind (`:only-child` is what lets the other span both columns).
+ */
+describe('WelcomeScreen — one container for both lists', () => {
+  let root: Root
+  let host: HTMLElement
+  beforeEach(() => {
+    host = document.createElement('div')
+    document.body.appendChild(host)
+    root = createRoot(host)
+  })
+  afterEach(() => {
+    act(() => root.unmount())
+    host.remove()
+  })
+  const render = async (el: React.ReactElement): Promise<void> => {
+    await act(async () => root.render(el))
+  }
+  const base = { onNewProject: noop, onOpenFolder: noop, onCloneRepo: noop, onConnectSsh: noop }
+  const recent = {
+    recentConversations: [
+      { agentId: 'claude' as const, sessionId: 's1', cwd: '/w', lastActiveAt: 1, title: 'Fix it', titleSource: 'prompt' as const }
+    ],
+    recentActionFor: () => ({ label: 'Resume' }),
+    onResumeRecent: noop
+  }
+  const closedProjects = [{ id: 'p1', name: 'Web', cwd: '/w' }]
+  const lists = (): HTMLElement => {
+    const el = host.querySelector<HTMLElement>('.welcome__lists')
+    expect(el, 'no .welcome__lists container').not.toBeNull()
+    return el!
+  }
+
+  it('puts Recent conversations and Recently closed side by side in the same container, in that order', async () => {
+    await render(<WelcomeScreen {...base} {...recent} closedProjects={closedProjects} />)
+    const kids = [...lists().children]
+    expect(kids).toHaveLength(2)
+    expect(kids[0].classList.contains('welcome__recent--convs')).toBe(true)
+    expect(kids[1].classList.contains('welcome__recent--closed')).toBe(true)
+    // The container sits after the card row, as a sibling — not inside it, not before it.
+    expect(lists().previousElementSibling?.classList.contains('welcome__cards')).toBe(true)
+  })
+
+  it('a lone section is the container’s only child, so it takes the full width', async () => {
+    await render(<WelcomeScreen {...base} closedProjects={closedProjects} />)
+    expect([...lists().children].map((c) => c.className)).toEqual(['welcome__recent welcome__recent--closed'])
+    await render(<WelcomeScreen {...base} {...recent} closedProjects={[]} />)
+    expect(lists().children).toHaveLength(1)
+    expect(lists().firstElementChild!.classList.contains('welcome__recent--convs')).toBe(true)
+  })
+
+  it('an empty conversation list leaves no element behind', async () => {
+    await render(<WelcomeScreen {...base} {...recent} recentConversations={[]} closedProjects={closedProjects} />)
+    expect(lists().children).toHaveLength(1)
+    await render(<WelcomeScreen {...base} />)
+    // `:empty` hides it — no stray 28px margin under the cards on a first-run screen.
+    expect(lists().childNodes).toHaveLength(0)
+  })
+})

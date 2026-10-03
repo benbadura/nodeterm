@@ -1,5 +1,7 @@
 import type { SshConnection } from '@shared/ssh'
+import { groupBoundBranch, nearestBoundBranch } from '@shared/pull-card-links'
 import type { NodeIcon } from '@shared/node-icon'
+import { normalizeIssueRef } from '@shared/github-issue-ref'
 import { SYSTEM_NODE_COLORS, type CanvasNode } from '../state/workspace'
 import type { KanbanSession } from '../components/kanban/KanbanView'
 
@@ -46,6 +48,9 @@ export function toKanbanSession(n: CanvasNode): KanbanSession | null {
     kind: 'terminal',
     agentId: n.data.agentId as string | undefined,
     icon: n.data.icon as NodeIcon | undefined,
+    // Re-validated, like everything read off node data for display: the issue card groups sessions
+    // by this, and a malformed value must bind to nothing rather than to a wrong card.
+    issueRef: normalizeIssueRef(n.data.issueRef),
     // What the card modal's co-attach terminal needs to join THIS node's session the same way the
     // canvas TerminalNode does.
     spawn: {
@@ -54,7 +59,39 @@ export function toKanbanSession(n: CanvasNode): KanbanSession | null {
       agentId: n.data.agentId as string | undefined,
       accountId: n.data.accountId as string | undefined,
       ssh: n.data.ssh as SshConnection | undefined,
-      sshRemoteTmux: !!n.data.sshRemoteTmux
+      sshRemoteTmux: !!n.data.sshRemoteTmux,
+      terminalFontSize: n.data.terminalFontSize as number | undefined
     }
   }
+}
+
+/** The branch of the worktree the node's nearest BOUND ancestor group works in — the same frame
+ *  `cwdForNewNodeIn` hands a worktree path from. A pull request whose head is this branch links to
+ *  the node's card. Read from the persisted binding (`data.worktree.branch`), so it needs no git
+ *  read; a stale binding (directory deleted) still names the branch, which is exactly when its PR
+ *  tends to merge. Cycle-safe: a hand-edited parent loop ends the walk. */
+export function worktreeBranchOf(n: CanvasNode, byId: ReadonlyMap<string, CanvasNode>): string | undefined {
+  return nearestBoundBranch(n.parentId, (id) => {
+    const parent = byId.get(id)
+    return parent && {
+      parentId: parent.parentId,
+      boundBranch: groupBoundBranch(parent.type === 'group', parent.data?.worktree)
+    }
+  })
+}
+
+/**
+ * The board's session cards, from the canvas nodes. On an SSH project the cards carry NO worktree
+ * branch: worktree groups are local-only, so a branch link there is not supported — and leaving the
+ * branch off HERE is what keeps the card face, the merge-driven move and the card modal (which says
+ * so) in agreement. An issue-bound card still links through its issue.
+ */
+export function kanbanSessionsFrom(nodes: CanvasNode[], options: { ssh: boolean }): KanbanSession[] {
+  const byId = new Map(nodes.map((n) => [n.id, n]))
+  return nodes.flatMap((n): KanbanSession[] => {
+    const card = toKanbanSession(n)
+    if (!card) return []
+    const worktreeBranch = options.ssh ? undefined : worktreeBranchOf(n, byId)
+    return [worktreeBranch ? { ...card, worktreeBranch } : card]
+  })
 }

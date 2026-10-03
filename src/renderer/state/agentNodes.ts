@@ -41,6 +41,11 @@ interface AgentNodesState {
    */
   activityById: Record<string, string>
   /**
+   * When each subagent last streamed transcript, for `sweepStaleWorking`. Kept out of `byId` for the
+   * same reason as `activityById`: it changes on every chunk, and Canvas lays out from `byId`.
+   */
+  lastActivityAt: Record<string, number>
+  /**
    * Per-ephemeral-node UI overrides (keyed by node id: subagent ids + `loop-<parentId>`).
    * `positions` holds an OFFSET FROM THE PARENT AGENT NODE, not a canvas position: the card
    * always shares the agent's coordinate space (it inherits the agent's `parentId`), so an
@@ -85,7 +90,28 @@ interface AgentNodesState {
   toggleExpanded(id: string): void
   /** Drop a card's dragged position + resized size, returning it to its laid-out spot. */
   resetPlacement(id: string): void
-  start(toolUseId: string, viz: Omit<SubagentViz, 'state' | 'startedAt'> & { startedAt?: number }): void
+  /**
+   * Draw (or re-open) a card. `supersedes` names a card this one REPLACES — Claude's first subagent
+   * of a session is drawn from its tool call, then its native `SubagentStart` arrives under the
+   * child's own id (core/claude-subagent-lifecycle.ts). The old card's start time, place, size,
+   * expansion and selection move to the new key, so the user sees one card that never moved. Its
+   * streamed activity is DROPPED, not moved: the native tail reads the same transcript file from
+   * its first byte, and moving it would print everything twice.
+   *
+   * `lastActivityAt` seeds the sweep's clock for a card replayed after a reload; it is kept out of
+   * `byId` like every activity time. A superseded card's clock is carried too (it is a time, not
+   * text, so it cannot double) — the new key must not look older than the card it replaces.
+   */
+  start(
+    toolUseId: string,
+    viz: Omit<SubagentViz, 'state' | 'startedAt'> & { startedAt?: number; lastActivityAt?: number },
+    supersedes?: string
+  ): void
+  /**
+   * End a card. Idempotent on a card already done — except that a late end carrying STATS (tokens
+   * / tool uses) fills them in: Claude's native stop ends a sync child ~40 ms before the tool
+   * path's end brings the numbers the card shows, and dropping those would be a regression.
+   */
   finish(toolUseId: string, result: SubagentResult): void
   /** Append a chunk of the subagent's live transcript. */
   appendActivity(toolUseId: string, chunk: string): void
@@ -119,7 +145,7 @@ interface AgentNodesState {
    */
   clearFinishedForParent(parentNodeId: string): void
   /**
-   * Mark every card still `working` past `staleMs` as done — the decay `clearFinishedForParent`
+   * Mark every card still `working` with no sign of life for `staleMs` as done — the decay `clearFinishedForParent`
    * depends on.
    *
    * Without it a subagent whose `finish()` never arrives (crashed CLI, killed pane, slept machine)
@@ -127,6 +153,10 @@ interface AgentNodesState {
    * one being fixed. The number is `WORKING_STALE_MS`, imported rather than chosen: that module
    * exists because three surfaces each invented their own timeout, and a subagent card inventing a
    * fourth would be the same mistake in a new place.
+   *
+   * "No sign of life" counts from the card's last streamed activity, falling back to its start.
+   * Counting from the start alone declared every subagent that ran longer than the window dead
+   * while its transcript was still streaming, and the next turn boundary then removed its card.
    *
    * It marks done rather than deleting, so the card stays readable and the next turn boundary takes
    * it; `finish()` landing late is a no-op on an entry that is already done.
@@ -183,6 +213,7 @@ function dropCards(s: AgentNodesState, ids: string[]): Partial<AgentNodesState> 
   if (!ids.length) return s
   const byId = { ...s.byId }
   const activityById = { ...s.activityById }
+  const lastActivityAt = { ...s.lastActivityAt }
   const positions = { ...s.positions }
   const sizes = { ...s.sizes }
   const expanded = { ...s.expanded }
@@ -191,6 +222,7 @@ function dropCards(s: AgentNodesState, ids: string[]): Partial<AgentNodesState> 
   for (const id of ids) {
     delete byId[id]
     delete activityById[id]
+    delete lastActivityAt[id]
     delete positions[id]
     delete sizes[id]
     delete expanded[id]
@@ -198,7 +230,7 @@ function dropCards(s: AgentNodesState, ids: string[]): Partial<AgentNodesState> 
   // A card that just vanished must not stay "selected" — a later card reusing the id would come
   // back pre-selected.
   const selectedId = s.selectedId && ids.includes(s.selectedId) ? null : s.selectedId
-  return { byId, activityById, positions, sizes, expanded, selectedId }
+  return { byId, activityById, lastActivityAt, positions, sizes, expanded, selectedId }
 }
 
 function saveLoopOverrides(s: Overrides): void {
@@ -217,6 +249,7 @@ function saveLoopOverrides(s: Overrides): void {
 export const useAgentNodes = create<AgentNodesState>((set) => ({
   byId: {},
   activityById: {},
+  lastActivityAt: {},
   selectedId: null,
   autoHideFinished: false,
   ...loadLoopOverrides(),
@@ -256,15 +289,48 @@ export const useAgentNodes = create<AgentNodesState>((set) => ({
       return { positions, sizes }
     }),
 
-  start: (toolUseId, viz) =>
-    set((s) => ({
-      byId: { ...s.byId, [toolUseId]: { ...viz, state: 'working', startedAt: viz.startedAt ?? s.byId[toolUseId]?.startedAt ?? Date.now() } }
-    })),
+  start: (toolUseId, { lastActivityAt: seed, ...viz }, supersedes) =>
+    set((s) => {
+      const old = supersedes && supersedes !== toolUseId ? s.byId[supersedes] : undefined
+      const startedAt = viz.startedAt ?? s.byId[toolUseId]?.startedAt ?? old?.startedAt ?? Date.now()
+      const card: SubagentViz = { ...viz, state: 'working', startedAt }
+      // The sweep's clock: the newest of the replayed seed, this key's own and the replaced card's.
+      const clocks = [seed, s.lastActivityAt[toolUseId], old && supersedes ? s.lastActivityAt[supersedes] : undefined]
+        .filter((t): t is number => t !== undefined)
+      const withClock = (m: Record<string, number>): Record<string, number> =>
+        clocks.length ? { ...m, [toolUseId]: Math.max(...clocks) } : m
+      if (!old || !supersedes) {
+        return { byId: { ...s.byId, [toolUseId]: card }, lastActivityAt: withClock(s.lastActivityAt) }
+      }
+      const next = dropCards(s, [supersedes]) as AgentNodesState
+      // Move what the user did to the old card, unless the new key already carries its own.
+      const inherit = !(toolUseId in s.byId)
+      const carry = <T>(m: Record<string, T>, from: Record<string, T>): Record<string, T> =>
+        inherit && supersedes in from ? { ...m, [toolUseId]: from[supersedes] } : m
+      return {
+        ...next,
+        byId: { ...next.byId, [toolUseId]: card },
+        lastActivityAt: withClock(next.lastActivityAt),
+        positions: carry(next.positions, s.positions),
+        sizes: carry(next.sizes, s.sizes),
+        expanded: carry(next.expanded, s.expanded),
+        selectedId: s.selectedId === supersedes ? toolUseId : next.selectedId
+      }
+    }),
 
   finish: (toolUseId, result) =>
     set((s) => {
       const prev = s.byId[toolUseId]
-      if (!prev || prev.state === 'done') return s
+      if (!prev) return s
+      if (prev.state === 'done') {
+        if (result.tokens === undefined && result.toolUses === undefined) return s
+        const stats = {
+          ...(result.durationMs !== undefined ? { durationMs: result.durationMs } : {}),
+          ...(result.tokens !== undefined ? { tokens: result.tokens } : {}),
+          ...(result.toolUses !== undefined ? { toolUses: result.toolUses } : {})
+        }
+        return { byId: { ...s.byId, [toolUseId]: { ...prev, ...stats } } }
+      }
       if (s.autoHideFinished) return dropCards(s, [toolUseId])
       // Async subagents end via a <task-notification> that carries no timing stats — fall
       // back to the card's own elapsed time so the duration doesn't vanish on completion.
@@ -276,7 +342,10 @@ export const useAgentNodes = create<AgentNodesState>((set) => ({
     set((s) => {
       if (!s.byId[toolUseId]) return s
       const activity = ((s.activityById[toolUseId] ?? '') + chunk).slice(-12000) // bounded tail
-      return { activityById: { ...s.activityById, [toolUseId]: activity } }
+      return {
+        activityById: { ...s.activityById, [toolUseId]: activity },
+        lastActivityAt: { ...s.lastActivityAt, [toolUseId]: Date.now() }
+      }
     }),
 
   clearForParent: (parentNodeId) => set((s) => dropCards(s, cardsOf(s, parentNodeId))),
@@ -286,10 +355,18 @@ export const useAgentNodes = create<AgentNodesState>((set) => ({
 
   sweepStaleWorking: (now = Date.now(), staleMs = WORKING_STALE_MS) =>
     set((s) => {
+      // An activity time ahead of `now` (the clock stepped back after it was stamped) would keep
+      // the card working until wall time caught up; clamp it, so the silence window restarts once.
+      const future = Object.keys(s.lastActivityAt).filter((id) => s.lastActivityAt[id] > now)
+      const lastActivityAt = future.length
+        ? { ...s.lastActivityAt, ...Object.fromEntries(future.map((id) => [id, now])) }
+        : s.lastActivityAt
       const stale = Object.keys(s.byId).filter(
-        (id) => s.byId[id].state === 'working' && now - s.byId[id].startedAt > staleMs
+        (id) =>
+          s.byId[id].state === 'working' &&
+          now - Math.max(s.byId[id].startedAt, lastActivityAt[id] ?? 0) > staleMs
       )
-      if (!stale.length) return s
+      if (!stale.length) return future.length ? { lastActivityAt } : s
       const byId = { ...s.byId }
       for (const id of stale) {
         const prev = byId[id]
@@ -297,7 +374,7 @@ export const useAgentNodes = create<AgentNodesState>((set) => ({
         // still true, and it is `finish()`'s own fallback for the async case.
         byId[id] = { ...prev, state: 'done', durationMs: prev.durationMs ?? now - prev.startedAt }
       }
-      return { byId }
+      return future.length ? { byId, lastActivityAt } : { byId }
     }),
 
   tidyFanout: (parentNodeId) =>

@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { barFillPercent, contextFillColor, formatModelLabel, percentNumber, severityColor } from './usageFormat'
+import {
+  barFillPercent,
+  contextFillColor,
+  formatModelLabel,
+  heldUsageText,
+  percentNumber,
+  severityColor,
+  usageFailureText
+} from './usageFormat'
 
 describe('formatModelLabel', () => {
   it('formats family + version ids', () => {
@@ -76,5 +84,31 @@ describe('contextFillColor', () => {
     // 90% USED context is red; 90% REMAINING quota is green. Same number, opposite meaning.
     expect(contextFillColor(90)).toBe('#ff453a')
     expect(severityColor(null, 90)).toBe('#30d158')
+  })
+})
+
+describe('usage failure copy', () => {
+  const limit = { kind: 'session', group: 'session', usedPercent: 10, severity: null, resetsAt: null, windowMinutes: null, scopeLabel: null, isActive: false }
+
+  it('keeps the generic wording for a failure it cannot name', () => {
+    expect(usageFailureText(null)).toBe('Could not read usage.')
+    expect(usageFailureText({})).toBe('Could not read usage.')
+    expect(usageFailureText({}, 'on this host')).toBe('Could not read usage on this host.')
+  })
+
+  it('names a 429 wherever it happened', () => {
+    const text = 'Rate limited by the usage endpoint (HTTP 429) — try again in a few minutes.'
+    expect(usageFailureText({ rateLimited: true })).toBe(text)
+    expect(usageFailureText({ rateLimited: true }, 'on this host')).toBe(text)
+  })
+
+  it('explains kept numbers only when a failed read kept some', () => {
+    const now = Date.now()
+    expect(heldUsageText({ status: 'ok', limits: [limit], updatedAt: now })).toBeNull()
+    expect(heldUsageText({ status: 'error', limits: [], updatedAt: now })).toBeNull()
+    expect(heldUsageText({ status: 'error', limits: [limit], updatedAt: now }))
+      .toBe('Latest read failed — showing numbers from a moment ago.')
+    expect(heldUsageText({ status: 'error', limits: [limit], updatedAt: now - 2 * 3_600_000, rateLimited: true }))
+      .toBe('Latest read was rate limited (HTTP 429) — showing numbers from 2h ago.')
   })
 })

@@ -1,0 +1,65 @@
+{
+  "page": {
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Özet çıkar: **README** — 3 madde ✓"
+          }
+        ],
+        "at": 1790589601000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "## Özet\n\n- bir\n- iki\n- üç\n\n```ts\nconst x = 1\n```"
+          }
+        ],
+        "at": 1790589602000
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "a string content (older record shape)"
+          }
+        ],
+        "at": 1790589603000
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "first part"
+          },
+          {
+            "kind": "text",
+            "text": "second part"
+          }
+        ],
+        "at": 1790589604000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "answer as a part list"
+          }
+        ],
+        "at": 1790589605000
+      }
+    ],
+    "found": true,
+    "olderCursor": null,
+    "unmatchedResults": [],
+    "model": "gemini-3.5-flash"
+  },
+  "skipped": 0
+}

@@ -67,7 +67,8 @@ export const AGENT_BINARIES: Record<string, readonly string[]> = {
   copilot: ['copilot'],
   gemini: ['gemini'],
   opencode: ['opencode'],
-  grok: ['grok']
+  grok: ['grok'],
+  antigravity: ['agy']
 }
 
 /**
@@ -165,22 +166,43 @@ export function binaryFromLaunchCmd(launchCmd: string | null | undefined): strin
  * (`src/renderer/state/workspace.ts`) resolves exactly this `launchCmd`, and falls back to the
  * agent id itself for an id it does not know, which is mirrored here.
  *
- * Still null (⇒ `unknown`, ⇒ refuse) in the two cases where no honest answer exists: a
- * `custom:<uuid>` whose definition is not in the list handed to us, and a launch command whose
- * program cannot be named without naming something every plain shell also runs. Null is a refusal,
- * not a guess — but a caller holding the settings can now avoid it for every configured agent.
+ * A custom agent with a BLANK launch command and a builtin `baseAgent` answers that base's binaries,
+ * because that is what `resolveAgentConfig` launches (`launchCmd.trim() || base.launchCmd`).
+ *
+ * Still null (⇒ `unknown`, ⇒ refuse) in the three cases where no honest answer exists: a
+ * `custom:<uuid>` whose definition is not in the list handed to us; a launch command whose program
+ * cannot be named without naming something every plain shell also runs; and a blank (or non-string)
+ * launch command with no valid builtin `baseAgent`. Null is a refusal, not a guess — but a caller
+ * holding the settings can now avoid it for every configured agent.
  *
  * `customAgents` is structural rather than `CustomAgent[]` so this stays a leaf module.
  */
 export function binariesFor(
   agentId: string,
-  customAgents?: readonly { id: string; launchCmd: string }[]
+  customAgents?: readonly { id: string; launchCmd: string; baseAgent?: string }[]
 ): readonly string[] | null {
-  const builtin = AGENT_BINARIES[agentId]
+  // Own property only: `constructor` / `__proto__` / `toString` must not resolve to a prototype
+  // member — an agent id is hand-editable (project.json, settings.json).
+  const builtin = Object.prototype.hasOwnProperty.call(AGENT_BINARIES, agentId)
+    ? AGENT_BINARIES[agentId]
+    : undefined
   if (builtin) return builtin
-  const custom = customAgents?.find((c) => c.id === agentId)
+  // Settings are hand-editable JSON: a null / non-object entry is skipped, never dereferenced.
+  const custom = customAgents?.find((c) => !!c && typeof c === 'object' && c.id === agentId)
   if (custom) {
-    const name = binaryFromLaunchCmd(custom.launchCmd)
+    // A BLANK command with a base harness runs the base's own command — `resolveAgentConfig`
+    // (`shared/agents/custom-agent.ts`) resolves `launchCmd.trim() || base.launchCmd`, so the pane
+    // runs e.g. `claude`, and that is what argv will show. Without this the most common custom shape
+    // (a claude-compatible proxy configured by env alone) was unverifiable on every surface. Own
+    // property only: `baseAgent` is hand-editable JSON, and `constructor` must not index the table.
+    // Hand-editable JSON: a non-string command is treated as blank, never dereferenced (a number
+    // here used to throw inside the desktop gates). `mirrorCustomAgents` coerces the same way.
+    const launchCmd = typeof custom.launchCmd === 'string' ? custom.launchCmd : ''
+    if (!launchCmd.trim()) {
+      const base = custom.baseAgent
+      return base && Object.prototype.hasOwnProperty.call(AGENT_BINARIES, base) ? AGENT_BINARIES[base] : null
+    }
+    const name = binaryFromLaunchCmd(launchCmd)
     return name ? [name] : null
   }
   // A `custom:` id we were given no definition for is unknowable — deriving from the id would yield

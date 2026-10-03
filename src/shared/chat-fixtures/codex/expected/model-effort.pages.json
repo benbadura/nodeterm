@@ -1,0 +1,61 @@
+[
+  {
+    "before": null,
+    "maxBytes": 262144,
+    "grownMaxBytes": 262144,
+    "start": 0,
+    "parse": {
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "one"
+            }
+          ],
+          "at": 1790240401000,
+          "key": 385
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "a"
+            }
+          ],
+          "at": 1790240402000,
+          "key": 771
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "two"
+            }
+          ],
+          "at": 1790240404000,
+          "key": 1430
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "b"
+            }
+          ],
+          "at": 1790240405000,
+          "key": 1816
+        }
+      ],
+      "olderCursor": null,
+      "unmatchedResults": [],
+      "model": "gpt-5.6-sol",
+      "effort": "medium",
+      "noCompleteLine": false
+    }
+  }
+]

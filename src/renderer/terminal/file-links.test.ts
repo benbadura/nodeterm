@@ -36,8 +36,24 @@ describe('matchFileTokens', () => {
     expect(matchFileTokens('https://example.com/a/b plain word')).toEqual([])
   })
 
-  it('skips ~ paths (no home resolution in v1)', () => {
-    expect(matchFileTokens('~/notes.md')).toEqual([])
+  it('matches home-relative ~/ paths with their tilde attached', () => {
+    expect(matchFileTokens('~/notes.md')).toEqual([
+      { text: '~/notes.md', startIndex: 0, path: '~/notes.md', line: undefined }
+    ])
+    // Claude Code's plan-approval footer — the path the user Cmd+clicks.
+    const line = 'ctrl-g to edit in Vim · ~/.claude/plans/wondrous-rossum.md'
+    const [t] = matchFileTokens(line)
+    expect(t.text).toBe('~/.claude/plans/wondrous-rossum.md')
+    expect(t.path).toBe('~/.claude/plans/wondrous-rossum.md')
+    expect(line.slice(t.startIndex, t.startIndex + t.text.length)).toBe(t.text)
+    expect(matchFileTokens('(~/src/a.ts:12)')).toEqual([
+      { text: '~/src/a.ts:12', startIndex: 1, path: '~/src/a.ts', line: 12 }
+    ])
+  })
+
+  it('does not treat a mid-word tilde or ~user as a home path', () => {
+    expect(matchFileTokens('backup~/notes.md')).toEqual([])
+    expect(matchFileTokens('~alice/notes.md')).toEqual([])
   })
 })
 
@@ -60,6 +76,12 @@ describe('resolveFileToken', () => {
     expect(resolveFileToken('../x.ts', '~/proj/sub')).toBe('~/proj/x.ts')
     expect(resolveFileToken('../../../x.ts', '~/proj')).toBeNull() // .. may not pop the ~
     expect(resolveFileToken('/abs/x.ts', '~/proj')).toBe('/abs/x.ts') // absolutes unaffected
+  })
+
+  it('keeps a ~/ token home-rooted whatever the cwd, for the core to expand', () => {
+    expect(resolveFileToken('~/.claude/plans/p.md', '/root/nodeterm')).toBe('~/.claude/plans/p.md')
+    expect(resolveFileToken('~/a/../b.md', undefined)).toBe('~/b.md')
+    expect(resolveFileToken('~/../etc/passwd', '/x')).toBeNull() // .. may not pop the ~
   })
 })
 

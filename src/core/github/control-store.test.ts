@@ -108,3 +108,29 @@ describe('GitHubControlStore', () => {
     })
   })
 })
+
+describe('GitHubControlStore mapping approval', () => {
+  const digest = 'a'.repeat(64)
+  const input = { localApprovalId: 'local-a', projectId: 'project-a', repository: 'nodeterm/nodeterm' }
+
+  it('records the column mapping it approved and answers for exactly that mapping', async () => {
+    const store = new GitHubControlStore(userDataDir)
+    const state = await store.approve({ expectedRevision: 0, ...input, mappingDigest: digest })
+    expect(state.approvals[0].mappingDigest).toBe(digest)
+    expect(store.isMappingApproved(state, { ...input, mappingDigest: digest })).toBe(true)
+    expect(store.isMappingApproved(state, { ...input, mappingDigest: 'b'.repeat(64) })).toBe(false)
+    expect(store.isMappingApproved(state, { ...input, repository: 'other/repo', mappingDigest: digest })).toBe(false)
+  })
+
+  it('keeps an approval written before mappings were bound: readable, but not approved for writes', async () => {
+    await fs.writeFile(path.join(userDataDir, 'github-issues-control.json'), JSON.stringify({
+      version: 1, revision: 3, authProvider: 'gh',
+      approvals: [{ ...input, enabled: true, approvedAt: 1 }]
+    }))
+    const store = new GitHubControlStore(userDataDir)
+    const state = await store.load()
+    expect(state.revision).toBe(3)
+    expect(store.isApproved(state, input)).toBe(true)
+    expect(store.isMappingApproved(state, { ...input, mappingDigest: digest })).toBe(false)
+  })
+})

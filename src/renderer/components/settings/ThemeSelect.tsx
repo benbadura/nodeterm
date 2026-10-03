@@ -119,18 +119,22 @@ function ThemeMenu({
         className="tab-menu theme-select__menu"
         style={{ top: flip.top, left: flip.left, minWidth: anchor.width, zIndex: 80 }}
       >
-        <Group
-          label="Dark"
-          themes={TERMINAL_THEMES.filter((t) => t.dark)}
-          value={value}
-          onPick={onPick}
-        />
-        <Group
-          label="Light"
-          themes={TERMINAL_THEMES.filter((t) => !t.dark)}
-          value={value}
-          onPick={onPick}
-        />
+        {/* `display: contents` in the default look; under Liquid Glass the scroller, so its end can
+            fade (the menu itself is the glass, and a mask there would fade the blur too). */}
+        <div className="theme-select__list">
+          <Group
+            label="Dark"
+            themes={TERMINAL_THEMES.filter((t) => t.dark)}
+            value={value}
+            onPick={onPick}
+          />
+          <Group
+            label="Light"
+            themes={TERMINAL_THEMES.filter((t) => !t.dark)}
+            value={value}
+            onPick={onPick}
+          />
+        </div>
       </div>
     </>,
     document.body

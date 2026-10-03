@@ -20,6 +20,19 @@ export function cardMeta(k: ProjectKanban, nodeId: string): KanbanCardMeta | und
 
 export const metaList = (k: ProjectKanban): KanbanCardMeta[] => (Array.isArray(k.meta) ? k.meta : [])
 
+/** The ONE tolerant reader of a card's assignees. The value comes from a hand-editable, git-shared
+ *  file, so a non-list reads as nobody and an entry without a string `name` + `color` is skipped —
+ *  a board that iterated it raw threw `not iterable` during render, i.e. a boot loop. */
+export function cardAssignees(meta: KanbanCardMeta | undefined): BoardLogAuthor[] {
+  const list: unknown = meta?.assignees
+  if (!Array.isArray(list)) return []
+  return list.filter(
+    (a): a is BoardLogAuthor =>
+      !!a && typeof a === 'object' && typeof (a as BoardLogAuthor).name === 'string' &&
+      typeof (a as BoardLogAuthor).color === 'string'
+  )
+}
+
 /** Writes one card's meta back; an entry with no fields left is DROPPED (absent = clean file),
  *  and an emptied meta array drops the key entirely. */
 export function withCardMeta(
@@ -47,10 +60,9 @@ export function toggleAssignee(
   person: BoardLogAuthor
 ): ProjectKanban {
   const cur = cardMeta(k, nodeId)
-  const had = (cur?.assignees ?? []).some((a) => a.name === person.name)
-  const assignees = had
-    ? (cur?.assignees ?? []).filter((a) => a.name !== person.name)
-    : [...(cur?.assignees ?? []), person]
+  const current = cardAssignees(cur)
+  const had = current.some((a) => a.name === person.name)
+  const assignees = had ? current.filter((a) => a.name !== person.name) : [...current, person]
   return withCardMeta(k, nodeId, {
     assignees,
     dueAt: cur?.dueAt,
@@ -181,10 +193,10 @@ export function reorderLabels(k: ProjectKanban, id: string, beforeId: string | n
 /** Toggle a label on a card (add if absent, remove if present). Preserves the card's other meta. */
 export function toggleCardLabel(k: ProjectKanban, nodeId: string, labelId: string): ProjectKanban {
   const cur = cardMeta(k, nodeId)
-  const has = (cur?.labels ?? []).includes(labelId)
-  const labels = has
-    ? (cur?.labels ?? []).filter((x) => x !== labelId)
-    : [...(cur?.labels ?? []), labelId]
+  // A hand-edited file can hold a non-list here: read it as no labels, never `.includes` of a string
+  // or an object thrown out of a click handler.
+  const held = Array.isArray(cur?.labels) ? cur.labels.filter((x): x is string => typeof x === 'string') : []
+  const labels = held.includes(labelId) ? held.filter((x) => x !== labelId) : [...held, labelId]
   return withCardMeta(k, nodeId, {
     assignees: cur?.assignees,
     dueAt: cur?.dueAt,

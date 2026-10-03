@@ -1,0 +1,64 @@
+{
+  "info": {
+    "id": "ses_someoneElse00000000000",
+    "slug": "quiet-harbor",
+    "projectID": "prj_fixture",
+    "directory": "/srv/demo",
+    "path": "",
+    "title": "Fixture session",
+    "agent": "build",
+    "model": {
+      "id": "demo-model",
+      "providerID": "opencode"
+    },
+    "version": "1.18.25",
+    "summary": {
+      "additions": 0,
+      "deletions": 0,
+      "files": 0
+    },
+    "cost": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "time": {
+      "created": 1780000000000,
+      "updated": 1780000000000
+    }
+  },
+  "messages": [
+    {
+      "info": {
+        "role": "user",
+        "time": {
+          "created": 1780000001000
+        },
+        "agent": "build",
+        "model": {
+          "providerID": "opencode",
+          "modelID": "demo-model"
+        },
+        "summary": {
+          "diffs": []
+        },
+        "id": "msg_1",
+        "sessionID": "ses_0a1b2c3d4ffeSynthetic000001"
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "SOMEONE ELSE PRIVATE",
+          "id": "prt_fixture0062",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "sessionId": "ses_0a1b2c3d4ffeSynthetic000001",
+  "parse": {
+    "messages": [
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "x"
+          }
+        ],
+        "at": 1780000001000
+      }
+    ],
+    "skipped": 0,
+    "effort": "🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪"
+  },
+  "page": {
+    "messages": [
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "x"
+          }
+        ],
+        "at": 1780000001000
+      }
+    ],
+    "found": true,
+    "olderCursor": null,
+    "unmatchedResults": [],
+    "effort": "🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪🧪"
+  }
+}

@@ -1,9 +1,12 @@
 import { useState } from 'react'
 import { AccountChip, useAccountChip } from './AccountChip'
+import { LiveLinkChip } from './LiveLinkChip'
+import type { SessionSource } from '../session/session'
 import { IconBellFilled, IconCircleCheck, IconClose } from './icons'
 import { NodeIconView } from './NodeIcon'
 import { ProjectGlyph } from './ProjectGlyph'
 import type { SessionRowVM } from '../lib/sessionList'
+import { sessionStateAgeTitle } from '../lib/sessionList'
 import { useContextWindow } from '../state/contextWindow'
 import { useSessionNaming } from '../state/sessionNaming'
 import { useSettings } from '../state/settings'
@@ -20,6 +23,9 @@ export interface SessionRowProps {
   onDragEnd(): void
   /** Status-group mode only: elapsed time since the current state began. */
   stateAgeLabel?: string
+  /** The session this row's PROJECT belongs to (`projectSessionSource`): only a local one shows
+   *  this machine's LIVE chip — a relay tab's node with the same id is not ours (R57). */
+  liveLinkSource: SessionSource | null
 }
 
 function dirName(p?: string): string {
@@ -37,7 +43,8 @@ export function SessionRow({
   onContextMenu,
   onDragStart,
   onDragEnd,
-  stateAgeLabel
+  stateAgeLabel,
+  liveLinkSource
 }: SessionRowProps): JSX.Element {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(row.title)
@@ -156,6 +163,7 @@ export function SessionRow({
             </span>
           )}
           <AccountChip chip={accountChip} className="ss-account" />
+          <LiveLinkChip nodeId={row.id} source={liveLinkSource} className="ss-live" />
           {row.loop && (
             <span className="ss-loop">
               {row.loop.kind} · {row.loop.count}
@@ -201,7 +209,10 @@ export function SessionRow({
             {row.sshHost && <span className="ss-meta__ssh">⇅ {row.sshHost}</span>}
             {row.cwd && <span className="ss-meta__cwd">{dirName(row.cwd)}</span>}
             {stateAgeLabel && (
-              <span className="ss-meta__state-age" title={`Entered this state ${stateAgeLabel}`}>
+              <span
+                className={`ss-meta__state-age${row.statusClock === 'restored' ? ' ss-meta__state-age--restored' : ''}`}
+                title={sessionStateAgeTitle(stateAgeLabel, row.statusClock, row.lastSeenState)}
+              >
                 {stateAgeLabel}
               </span>
             )}

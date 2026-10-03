@@ -1,0 +1,7 @@
+{"type":"user","content":[{"type":"text","text":"truncat
+42
+null
+[1,2,3]
+   
+{"type":"some_future_record","content":"never rendered"}
+{"type":"user","content":[{"type":"text","text":"the one line that survives"}],"prompt_index":0}

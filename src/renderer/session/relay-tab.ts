@@ -14,8 +14,15 @@
 //    forever — a dead tab that never errors. So we RACE `ready()` against the connection's real
 //    close signal (relayClient.onClosed) plus a timeout backstop, and reject on either.
 
-import type { Project, RelayClientApi } from '@shared/types'
+import type { HostedRole, HostedSessionApi, Project, RelayClientApi } from '@shared/types'
 import { buildRelayApi, type RelayApiHandle } from '../bridge/relay-api'
+import { E_DISCONNECTED } from '../../shared/rpc'
+import { onLocalRelayClose } from '../bridge/relay-local-close'
+import { sanitizeRelayProject } from './relay-ssh'
+import { closedReasonMessage, RelayApprovalError } from '../lib/hostedTeam'
+import { attachHostedOwner } from '../lib/hostedOwner'
+import { useHostedTeams, type HostedTeamInfo } from '../state/hostedTeams'
+import { hostedPendingSink } from '../state/hostedPending'
 import {
   createSession,
   bindProjectToSession,
@@ -24,6 +31,7 @@ import {
   disposeSession,
   getSessionStores,
   takeSessionOffline,
+  projectIdsBoundToSession,
   type SessionSource,
 } from './session'
 
@@ -45,15 +53,55 @@ export interface RelayTabDeps {
   setActiveProject: (projectId: string) => void
   /** TEST SEAM: build the relay api handle. Production omits it → `buildRelayApi`. */
   buildApi?: (connectionId: string) => RelayApiHandle
-  /** TEST SEAM: approval-timeout backstop (default `APPROVAL_TIMEOUT_MS`). */
+  /** Approval-timeout backstop (default `APPROVAL_TIMEOUT_MS`). A hosted team's first join passes
+   *  the host's own pending TTL: an owner has ten minutes to answer, not one. */
   timeoutMs?: number
+  /** The connection was made from a hosted team's join code: build the hosted api (its `hosted`
+   *  verbs and role gate). Absent = a Team Access relay tab, byte-identical to before. */
+  hosted?: boolean
+  /** Switch to the tab once it is live (default true). A reconnect nobody clicked (boot, a dropped
+   *  tab coming back) binds its tab without taking the screen from whatever the user is on. */
+  activate?: boolean
+  /** HOSTED only: place the host's shared projects as tabs (one per project, reusing a reconnecting
+   *  team's greyed tabs) and return their ids in host order — never empty (a team with nothing
+   *  shared gets one placeholder). Absent = a Team Access tab: `projects[0]` exactly as before. */
+  placeProjects?: (projects: Project[]) => string[]
+  /** Activate this tab when it is among the placed ones (the one the user just shared). */
+  focusProjectId?: string
 }
 
 export interface RelayTab {
   sessionId: string
+  /** The tab activated on open: the focused one, else the first placed. */
   projectId: string
+  /** Every tab this connection serves (one for a Team Access tab, one per shared project for a
+   *  hosted team), in the host's order. */
+  projectIds: string[]
+  /** A hosted team's tab: this device's role there and the team's name. Absent otherwise. */
+  hosted?: HostedTeamInfo
   /** Tear the tab's session down (runs the held presence teardown + relay socket close, once). */
   dispose(): void
+}
+
+const ROLES: readonly HostedRole[] = ['owner', 'editor', 'commenter', 'viewer']
+
+/**
+ * Ask a hosted host which role this device has, and publish it to the api's role gate BEFORE
+ * anything mounts (nothing but this request has been sent yet). An answer that cannot be read is the
+ * LOWEST role: the host enforces the real one either way, and the direction a wrong guess must err
+ * in is "shows less", never "sends what will be refused".
+ */
+async function learnHostedRole(hosted: HostedSessionApi, handle: RelayApiHandle, label: string): Promise<HostedTeamInfo> {
+  const self = await hosted.self().catch((err: unknown) => {
+    // The connection itself is gone (closed from either side): there is no tab to open — never a
+    // Viewer guess over a dead socket (R41).
+    if ((err as { code?: unknown } | null)?.code === E_DISCONNECTED) throw err
+    return null
+  })
+  const role: HostedRole = self && ROLES.includes(self.role) ? self.role : 'viewer'
+  handle.setHostedRole?.(role)
+  const hostLabel = self && typeof self.hostLabel === 'string' ? self.hostLabel.trim() : ''
+  return { role, teamLabel: hostLabel || label }
 }
 
 /**
@@ -65,18 +113,23 @@ export async function openRelayTab(
   label: string,
   deps: RelayTabDeps
 ): Promise<RelayTab> {
-  const build = deps.buildApi ?? buildRelayApi
+  const build = deps.buildApi ?? ((id: string) => buildRelayApi(id, undefined, deps.hosted ? { hosted: true } : undefined))
   // Built BEFORE we await ready() so the one-shot onApproved listener is registered in time.
   const handle = build(connectionId)
 
+  let hostedInfo: HostedTeamInfo | undefined
   try {
     await raceApproval(handle, connectionId, deps)
+    // A hosted team's tab learns its role before its session exists, so nothing a component sends
+    // on mount is sent under the wrong one (see bridge/hosted-gate.ts).
+    if (handle.api.hosted) hostedInfo = await learnHostedRole(handle.api.hosted, handle, label)
   } catch (err) {
     handle.close() // tear the dead/stuck relay socket down before surfacing the failure
     throw err
   }
 
   const session = createSession('relay', handle.api, label)
+  if (hostedInfo) useHostedTeams.getState().set(session.id, hostedInfo)
   // The teardowns the tab owes on disconnect (obligation 1): the presence subscription this session
   // just opened, and the relay socket. Both run exactly once in disposeSession.
   holdSessionTeardown(session.id, getSessionStores(session.id).presence.connect())
@@ -88,28 +141,53 @@ export async function openRelayTab(
   // transport to the relay api; Stage-3 sync then keeps it live. If the host shared nothing (or the
   // project was deleted), OR we're reconnecting (no `adoptProject` dep — the existing tab is reused),
   // fall back to the labelled tab so it still opens rather than throwing.
+  // A hosted team shares several projects through one connection: `placeProjects` turns each into
+  // its own tab (id = the host's project id, since the relay api translates no ids), and every one
+  // of them is bound to this session.
   // The load runs AFTER createSession + the held teardowns, so a host that vanishes between approval
   // and load would leave the SESSIONS entry, its presence subscription (the peer lingers in host
   // facepiles) and the relay socket all leaking. Dispose the just-created session before rethrowing
   // — `disposeSession` runs the held teardowns exactly once (idempotent).
   try {
     const ws = await handle.api.workspace.load()
-    const hostProject = ws.projects[0]
+    let projectIds: string[]
+    if (deps.placeProjects) {
+      projectIds = deps.placeProjects(ws.projects.map(sanitizeRelayProject))
+    } else {
+      const hostProject = ws.projects[0]
+      projectIds = [
+        hostProject && deps.adoptProject
+          ? deps.adoptProject(sanitizeRelayProject(hostProject)).id
+          : deps.addProject(label).id
+      ]
+    }
+    if (projectIds.length === 0) projectIds = [deps.addProject(label).id]
+    for (const id of projectIds) bindProjectToSession(id, session.id)
     const projectId =
-      hostProject && deps.adoptProject
-        ? deps.adoptProject({ ...hostProject, remote: true }).id
-        : deps.addProject(label).id
-    bindProjectToSession(projectId, session.id)
-    setActiveSession(session.id)
-    deps.setActiveProject(projectId)
+      deps.focusProjectId && projectIds.includes(deps.focusProjectId) ? deps.focusProjectId : projectIds[0]
+    if (deps.activate !== false) {
+      setActiveSession(session.id)
+      deps.setActiveProject(projectId)
+    }
+    // An OWNER answers the devices asking to join. Its subscription (and its queued requests) go
+    // with the session: a drop or a close runs this teardown, a reconnect subscribes and pulls anew.
+    if (hostedInfo?.role === 'owner' && handle.api.hosted) {
+      holdSessionTeardown(
+        session.id,
+        attachHostedOwner(handle.api.hosted, { projectId, teamLabel: hostedInfo.teamLabel }, hostedPendingSink)
+      )
+    }
 
     return {
       sessionId: session.id,
       projectId,
+      projectIds,
+      ...(hostedInfo ? { hosted: hostedInfo } : {}),
       dispose: () => disposeSession(session.id),
     }
   } catch (err) {
     disposeSession(session.id)
+    if (hostedInfo) useHostedTeams.getState().forget(session.id)
     throw err
   }
 }
@@ -133,7 +211,10 @@ export interface RelayDropDeps {
  *  reconnect in place. NEVER removes the project (that is only a user close). Idempotent. */
 export function handleRelayDrop(tab: RelayTab, deps: RelayDropDeps): void {
   takeSessionOffline(tab.sessionId)
-  deps.setProjectUnavailable(tab.projectId, true)
+  // Every tab the connection served greys, so each one can reconnect in place: the ones placed at
+  // mount and any a share event bound to the session since (bindings survive going offline).
+  const ids = new Set([...tab.projectIds, ...projectIdsBoundToSession(tab.sessionId)])
+  for (const id of ids) deps.setProjectUnavailable(id, true)
 }
 
 export interface RelayReconnectDeps {
@@ -189,19 +270,46 @@ function raceApproval(
   return new Promise<void>((resolve, reject) => {
     let settled = false
     let unClose: () => void = () => {}
+    let unLocal: () => void = () => {}
     let timer: ReturnType<typeof setTimeout> | null = null
     const finish = (fn: () => void) => {
       if (settled) return
       settled = true
       unClose()
+      unLocal()
       if (timer) clearTimeout(timer)
       fn()
     }
-    unClose = deps.relayClient.onClosed(connectionId, () =>
-      finish(() => reject(new Error('The relay connection closed before it was approved.')))
+    // A hosted connection this renderer closed itself (the SAS was declined) is closed NOW: main
+    // never reports it, and the approval wait would otherwise run its full ten minutes.
+    if (handle.api.hosted) {
+      unLocal = onLocalRelayClose(connectionId, () =>
+        finish(() => reject(new RelayApprovalError('The relay connection closed before it was approved.')))
+      )
+    }
+    // A hosted host may say WHY before it closes (an owner declined, nobody answered); a close
+    // without a reason keeps the old sentence exactly.
+    unClose = deps.relayClient.onClosed(connectionId, (reason) =>
+      finish(() =>
+        reject(
+          new RelayApprovalError(
+            closedReasonMessage(reason) ?? 'The relay connection closed before it was approved.',
+            reason
+          )
+        )
+      )
     )
     timer = setTimeout(
-      () => finish(() => reject(new Error('Timed out waiting for the host to approve.'))),
+      () =>
+        finish(() =>
+          reject(
+            new Error(
+              handle.api.hosted
+                ? (closedReasonMessage('expired') as string)
+                : 'Timed out waiting for the host to approve.'
+            )
+          )
+        ),
       deps.timeoutMs ?? APPROVAL_TIMEOUT_MS
     )
     handle.ready().then(

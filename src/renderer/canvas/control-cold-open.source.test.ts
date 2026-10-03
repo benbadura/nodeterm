@@ -49,8 +49,14 @@ describe('the cold-open dispatch block (source pins)', () => {
     expect(guard, 'the cold-open guard inside the routing block').toBeGreaterThan(-1)
     expect(refusal, 'the off-screen refusal').toBeGreaterThan(guard)
     // …and it RETURNS, so control cannot fall through to the refusal after writing the node —
-    // which would answer an agent "nothing was changed" about a node it just queued.
-    expect(coldOpenBody()).toMatch(/queuedIds: coldIds\s*\}\s*\}\)\s*return\s*\}/)
+    // which would answer an agent "nothing was changed" about a node it just queued. Both exits
+    // return: the plain cold-open reply, and the `--run-now` reply built from it (#925).
+    const body = coldOpenBody()
+    expect(body).toMatch(/queuedIds: coldIds\s*\}\s*as Record<string, unknown>\s*\}/)
+    expect(body).toMatch(
+      /reply\(mergeRunNow\(coldReply, await startNodesHeadlessRef\.current\(owner, held\)\)\)\s*return\s*\}/
+    )
+    expect(body).toMatch(/reply\(coldReply\)\s*return\s*\}/)
   })
 
   it('the guard polarity is not inverted — a NON-cold verb must not be cold-written', () => {
@@ -80,9 +86,9 @@ describe('the cold-open dispatch block (source pins)', () => {
     expect(body).not.toContain('addAndConnect')
   })
 
-  it('writes through the store: applyNodeMutation for nodes, appendCanvasLinks for edges', () => {
+  it('writes through the store: applyOwnNodeMutation for nodes, appendCanvasLinks for edges', () => {
     const body = coldOpenBody()
-    expect(body).toContain('applyNodeMutation(owner.id, {')
+    expect(body).toContain('applyOwnNodeMutation(owner.id, {')
     expect(body).toContain('appendCanvasLinks(owner.id,')
     expect(body).toContain('writeDisk()')
   })
@@ -91,7 +97,7 @@ describe('the cold-open dispatch block (source pins)', () => {
     // `flowToNodeStates` drops `initialCommand` by design, so a node upserted without moving its
     // command into `pendingLaunch` is the silent-never-starts mutation.
     const body = coldOpenBody()
-    expect(body).toMatch(/const armed = armForColdOpen\(built\)/)
+    expect(body).toMatch(/const armed = withLaunchBrief\(armForColdOpen\(built\), openPrompt\.promptFile\)/)
     expect(body).toMatch(/flowToNodeStates\(\[node\]\)\[0\]/)
     // `--after` rides that same held launch rather than a second mechanism.
     expect(body).toMatch(/pendingLaunch: \{ \.\.\.held, after: coldAfterIds \}/)
@@ -100,7 +106,7 @@ describe('the cold-open dispatch block (source pins)', () => {
   it('refusal-before-write: every refusal precedes the first store write', () => {
     const body = coldOpenBody()
     const firstWrite = Math.min(
-      ...['applyNodeMutation', 'appendCanvasLinks'].map((s) => {
+      ...['applyOwnNodeMutation', 'appendCanvasLinks'].map((s) => {
         const i = body.indexOf(s)
         return i === -1 ? body.length : i
       })

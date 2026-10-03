@@ -28,7 +28,7 @@ function mergeSettings(saved: Partial<Settings> | null | undefined): Settings {
   // A shortcut EQUAL to the default seeds nothing: the override would only restate what the
   // registry already says, and would then pin that chord against any future default change.
   // **The seeded value survives the read path.** `speech.dictation` has its OWN conflict bucket
-  // (`conflictBucket` in shared/keybindings.ts), so it can never be a participant in a
+  // (`conflictBuckets` in shared/keybindings.ts), so it can never be a participant in a
   // cross-command collision, and the READ path's sanitizer (`sanitizeKeybindingOverrides`) has
   // nothing to strip — neither the seed nor the user's own override on the same chord. (It used
   // not to: both were deleted on load, and dictation silently fell back to the registry default.)
@@ -91,6 +91,11 @@ function mergeSettings(saved: Partial<Settings> | null | undefined): Settings {
   }
   // Keep the mirror in lockstep with the resolved mode so an older build still honors the choice.
   merged.vanillaLaunchDefault = merged.agentLaunchMode === "subscription";
+  // Pre-release switch that became the "Liquid Glass" appearance; honoured once so a tester's
+  // choice carries over, and only where the appearance still followed the terminal.
+  const legacyGlass = (saved as { glassTerminals?: unknown } | null | undefined)?.glassTerminals;
+  if (legacyGlass === true && merged.appTheme === "auto") merged.appTheme = "liquid-glass";
+  delete (merged as { glassTerminals?: unknown }).glassTerminals;
   return merged;
 }
 

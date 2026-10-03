@@ -10,6 +10,7 @@ import {
   remoteTmuxConf,
   parseLsDirs,
   sshAttachmentId,
+  sshChipRepeatsProject,
   sshConnectionIdForProject,
   sshHostKey
 } from './ssh'
@@ -108,6 +109,45 @@ describe('sshConnectionIdForProject', () => {
     // The regression this guards: an attached node resolving the LOCAL project's (absent) master
     // and, with no `sshRemote`, degrading into a local shell wearing the remote node's identity.
     expect(sshConnectionIdForProject('local-project', ubuntu)).not.toBe('local-project')
+  })
+})
+
+describe('sshChipRepeatsProject', () => {
+  const project = { host: '95.217.38.239', user: 'root' }
+
+  it('hides the chip on an SSH-project terminal of that same host', () => {
+    expect(sshChipRepeatsProject(project, true, project)).toBe(true)
+  })
+
+  it('hides it for a remote-tmux node saved under another user: it runs as the project user', () => {
+    // `sshConnectionIdForProject` serves it from the project's master, so a chip naming the
+    // creator's user would not just repeat the project — it would be wrong.
+    expect(sshChipRepeatsProject({ host: '95.217.38.239', user: 'alice' }, true, project)).toBe(true)
+  })
+
+  it('keeps it for a plain `ssh` node as a DIFFERENT user on the same host', () => {
+    // That node runs its own local `ssh alice@host`, so the user is real information.
+    expect(sshChipRepeatsProject({ host: '95.217.38.239', user: 'alice' }, false, project)).toBe(
+      false
+    )
+    expect(sshChipRepeatsProject(project, false, project)).toBe(true)
+  })
+
+  it('keeps it for a node on another host (a host attachment)', () => {
+    expect(sshChipRepeatsProject({ host: 'devbox', user: 'root' }, true, project)).toBe(false)
+  })
+
+  it('keeps it in a LOCAL project, where nothing else says the node is remote', () => {
+    expect(sshChipRepeatsProject(project, false, undefined)).toBe(false)
+    expect(sshChipRepeatsProject(project, true, undefined)).toBe(false)
+  })
+
+  it('a hostless node never matches (undefined === undefined is not a match)', () => {
+    const hostless = { host: undefined, user: 'root' } as unknown as typeof project
+    expect(sshChipRepeatsProject(hostless, true, undefined)).toBe(false)
+    expect(sshChipRepeatsProject({ host: '', user: 'root' }, true, { host: '', user: 'root' })).toBe(
+      false
+    )
   })
 })
 

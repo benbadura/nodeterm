@@ -222,6 +222,23 @@ stricter:
 A **headless** host boots the service like every other core service, but with no UI attached nothing
 queries it.
 
+### Hosted team relay (the `team` CLI)
+
+A Server Edition can host a team that desktops join over the relay, run with the `team` CLI as the
+service's own user (`node ~/.nodeterm-server-app/out/server/main.cjs team …`); the operator guide is
+`docs/hosted-team-relay.md`. Two of its verbs exist for the desktop's **Share with team**, and both
+work by hand from a shell on the host. `team bootstrap --owner-key <key> --adopt <dir>
+[--owner-label <name>]` is the whole setup in one idempotent call: it creates the team and starts
+hosting, makes the key an owner, adopts the folder into this core's workspace (deduplicated by real
+path; an existing `.nodeterm/project.json` keeps its nodes) and shares it, then prints the join
+code. `team resume --project <id>` restarts, on this core's own tmux socket, the agent sessions a
+desktop handed over, each with its conversation resumed; it reads its session list as JSON on
+**stdin**, never from the command line. Under `--json`, a server failure (exit 1) prints one JSON
+line on stdout, with a stable code when the server sent one (`E_BAD_KEY`, `E_BAD_CWD`,
+`E_HOSTING_OFF`, `E_ADOPT_FAILED`, `E_BAD_REQUEST`, `E_UNSUPPORTED`); a command line the CLI itself
+refuses exits 2 on stderr only. The browser build cannot start Share with team: it has no SSH
+projects, and its `shareTeam` rejects with `E_UNSUPPORTED`.
+
 ## Security model
 
 Single-user auth. There is one password; sessions are per-browser.
@@ -407,6 +424,16 @@ The following affordances change shape in the browser (no native OS is reachable
   Note also that **Ctrl+Shift+C** (advertised as copy on Linux/Windows) additionally opens
   Chromium's element inspector and a page cannot suppress that; **Ctrl+Insert** is the
   browser-safe copy chord.
+- **Markdown view toggle (⌘/Ctrl+M)** — works in the browser: with no main process to
+  intercept it, the bridge matches the user's `node.toggleMarkdown` binding with its own
+  window keydown listener (`src/renderer/bridge/markdown-toggle-key.ts`) and honors the
+  terminal-first policy like the desktop. **macOS Chrome reserves ⌘M for window
+  minimize** and never delivers it to the page, so on a Mac the default chord does
+  nothing — remap it in Settings → Keyboard Shortcuts, or use the node's right-click
+  "Markdown view". On Linux/Windows the default is Ctrl+M, which under the default
+  app-first policy is taken from a focused terminal exactly as on the desktop (a shell sees
+  Ctrl+M as Enter). Inside a focused Monaco editor Ctrl+M stays Monaco's own "toggle Tab
+  key moves focus" binding; hover the node with focus elsewhere to toggle its preview.
 
 The **backpressure / flow-control** gap noted in the Phase 2 limitations is now
 closed: a flooding PTY is automatically paused based on the WebSocket
@@ -563,6 +590,19 @@ factory had just persisted. On the new channel the browser three-way merges inst
 (`renderer/lib/serverChange.ts`): nodes the server opened are adopted silently, ropes and bridges
 are merged against the last-known disk copy, and unsaved local edits survive. Nothing is asked of
 the user, because both sides of this merge are the same application.
+
+`open-terminal` / `open-agent` accept `--run-now` as a no-op: server opens already start at once,
+headless. `--run-now` together with `--after` is refused, in the desktop's words
+(`RUN_NOW_AFTER_REFUSAL`). `run --node <id>` delivers a node's retained launch (the Run now
+button's job) for the node's creator only. It requires verified identity and resolves the node
+through the ownership record, never by the first id match, because node ids can repeat across
+projects. It refuses an SSH node before its write-ahead claim, and answers a `--project` naming any
+other project as "no node with id". `run`, and every immediate open that carries a launch command,
+deliver through the same echo-verified launcher the desktop's headless start uses
+(`core/headless-launch.ts`), with `release:false`: the server keeps its client attached, which is
+what keeps even a plain-shell session reachable. The deferred `--after` release (`refreshArmed`)
+still pastes with `sendText`. Neither `--run-now` nor `run` unhides a closed project or raises a
+notice, the same as the server's other immediate opens.
 
 Validate upgrades with a disposable `NODETERM_DATA_DIR` and port. Restarting a shared live Server
 service is an explicit operator action; it is not part of a test, repair, or boot-rescue flow.

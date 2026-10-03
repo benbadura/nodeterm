@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { rankQuickOpenFiles, type QuickOpenIndexedFile } from '../lib/quickOpenSearch'
+import { contentHit as contentHitQ, labelHit as labelHitQ, rankPaletteCommands } from '../lib/paletteSearch'
 import { IconEditor } from './icons'
 
 export interface Command {
@@ -40,19 +41,6 @@ interface CommandPaletteProps {
   extraCommands?: Command[]
 }
 
-/** Case-insensitive subsequence match — "ntr" matches "New TeRminal". */
-function matches(label: string, q: string): boolean {
-  if (!q) return true
-  const s = label.toLowerCase()
-  let i = 0
-  for (const ch of q.toLowerCase()) {
-    i = s.indexOf(ch, i)
-    if (i === -1) return false
-    i++
-  }
-  return true
-}
-
 /** Cmd/Ctrl+K command palette: fuzzy-filter actions and jump targets, Enter to run. */
 export function CommandPalette({
   commands,
@@ -66,15 +54,11 @@ export function CommandPalette({
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
 
-  // Fuzzy-match label+hint; also substring-match the body text (e.g. terminal output).
-  const contentHit = (c: Command) =>
-    query.length >= 2 && !!c.content && c.content.toLowerCase().includes(query.toLowerCase())
-  const labelHit = (c: Command) => matches(`${c.label} ${c.hint ?? ''}`, query)
+  // Rank (label substring > hint > fuzzy > body text) BEFORE the cap — see lib/paletteSearch.
+  const contentHit = (c: Command) => contentHitQ(c, query)
+  const labelHit = (c: Command) => labelHitQ(c, query)
 
-  const filtered = useMemo(
-    () => commands.filter((c) => labelHit(c) || contentHit(c)).slice(0, 50),
-    [commands, query]
-  )
+  const filtered = useMemo(() => rankPaletteCommands(commands, query, 50), [commands, query])
 
   const fileCommands = useMemo<Command[]>(() => {
     if (!fileIndex || !onOpenFile || query.trim().length < 1) return []

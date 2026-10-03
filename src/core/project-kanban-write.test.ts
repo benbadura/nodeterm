@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ensureProjectBoard, setProjectCardColumn } from './project-kanban-write'
 import { DEFAULT_BOARD_COLUMNS } from '../shared/kanban-default-board'
+import { isValidRank } from '../shared/kanban-rank'
 
 const NOW = new Date('2026-09-10T12:00:00.000Z')
 
@@ -30,6 +31,15 @@ describe('ensureProjectBoard', () => {
     expect(out.kanban.assignments).toEqual([])
     expect(out.rev).toBe(8)
     expect(out.savedAt).toBe(NOW.toISOString())
+  })
+
+  it('seeds the lifecycle category the desktop default carries (a phone-born board is the same board)', () => {
+    const out = parse(ensureProjectBoard(file(), NOW, () => 'kcol-fixed'))
+    expect(out.kanban.columns.map((c: { category?: string }) => c.category)).toEqual([
+      'unstarted',
+      'started',
+      'done'
+    ])
   })
 
   it('mints a distinct id per column, in the desktop shape', () => {
@@ -90,7 +100,8 @@ describe('setProjectCardColumn', () => {
 
   it('assigns an unassigned card and bumps rev', () => {
     const out = parse(setProjectCardColumn(board(), 'term-a-1', 'kcol-a', NOW))
-    expect(out.kanban.assignments).toEqual([{ nodeId: 'term-a-1', columnId: 'kcol-a' }])
+    expect(out.kanban.assignments).toEqual([{ nodeId: 'term-a-1', columnId: 'kcol-a', rank: expect.any(String) }])
+    expect(isValidRank(out.kanban.assignments[0].rank)).toBe(true)
     expect(out.rev).toBe(8)
   })
 
@@ -98,7 +109,7 @@ describe('setProjectCardColumn', () => {
     const out = parse(
       setProjectCardColumn(board([{ nodeId: 'term-a-1', columnId: 'kcol-a' }]), 'term-a-1', 'kcol-b', NOW)
     )
-    expect(out.kanban.assignments).toEqual([{ nodeId: 'term-a-1', columnId: 'kcol-b' }])
+    expect(out.kanban.assignments).toEqual([{ nodeId: 'term-a-1', columnId: 'kcol-b', rank: expect.any(String) }])
   })
 
   it('columnId null drops the assignment (the virtual Ungrouped column)', () => {
@@ -114,9 +125,31 @@ describe('setProjectCardColumn', () => {
     )
     expect(out.kanban.assignments).toEqual([
       { nodeId: 'term-z-9', columnId: 'kcol-b' },
-      { nodeId: 'term-a-1', columnId: 'kcol-a' }
+      { nodeId: 'term-a-1', columnId: 'kcol-a', rank: expect.any(String) }
     ])
     expect(out.kanban.meta).toEqual([{ nodeId: 'term-a-1', priority: 'high' }])
+  })
+
+  // The phone's move names no anchor, so it follows the desktop's unanchored rule: the TOP of the
+  // destination, where the person who just filed it will look for it.
+  it('an unanchored move lands at the TOP of a column that already has cards', () => {
+    const out = parse(
+      setProjectCardColumn(
+        board([
+          { nodeId: 'term-z-9', columnId: 'kcol-b' },
+          { nodeId: 'term-y-8', columnId: 'kcol-b' },
+          { nodeId: 'term-a-1', columnId: 'kcol-a' }
+        ]),
+        'term-a-1',
+        'kcol-b',
+        NOW
+      )
+    )
+    expect(out.kanban.assignments.map((a: { nodeId: string }) => a.nodeId)).toEqual([
+      'term-a-1',
+      'term-z-9',
+      'term-y-8'
+    ])
   })
 
   it('refuses a column this board does not have', () => {
@@ -132,7 +165,7 @@ describe('setProjectCardColumn', () => {
 
   it('accepts a node id the canvas does not list yet (it may have just been registered)', () => {
     const out = parse(setProjectCardColumn(board(), 'term-new-1', 'kcol-a', NOW))
-    expect(out.kanban.assignments).toEqual([{ nodeId: 'term-new-1', columnId: 'kcol-a' }])
+    expect(out.kanban.assignments).toEqual([{ nodeId: 'term-new-1', columnId: 'kcol-a', rank: expect.any(String) }])
   })
 
   it('refuses a project with no board at all — the caller seeds one first', () => {

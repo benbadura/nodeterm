@@ -59,3 +59,44 @@ export function recordTunnelRepair(
 ): TunnelRepairState {
   return { failures: ok ? 0 : (state?.failures ?? 0) + 1, lastAttemptAt: now }
 }
+
+/**
+ * How many CONSECUTIVE failed liveness probes it takes before the user is told the tunnel is lost.
+ *
+ * One was the old rule, and it made the banner a flapping alarm: the probe is a single `curl -m 5`
+ * over the shared master, so one slow round trip (a busy mux, a queued child gate, a curl timeout)
+ * put "lost their verified connection" on screen for a tunnel that was fine — field report from a
+ * Linux desktop driving a Mac on the same desk, no sleep involved. The REPAIR still runs on the
+ * first failure (see `shouldAttemptTunnelRepair`); only the warning waits for a second opinion,
+ * one watchdog tick later. A repair that succeeds resets the streak, so a real-but-healed loss
+ * never shows a banner at all.
+ */
+export const TUNNEL_LOST_STRIKES = 2
+
+export function shouldReportTunnelLost(consecutiveFailures: number): boolean {
+  return consecutiveFailures >= TUNNEL_LOST_STRIKES
+}
+
+/**
+ * One line naming WHY a tunnel probe failed, for the log. The probe used to fold every failure into
+ * `false`, so a field report could not tell a dead listener from a slow master from a refused ssh.
+ * `code` is the ssh child's exit status: ssh's own failures are 255, otherwise it is the remote
+ * `curl`'s (7 = connection refused → nobody listening on the socket, 28 = the 5 s timeout).
+ * `stdout` is the `%{http_code}` curl printed (`000` = no HTTP answer; 421 = a different owner).
+ */
+export function describeTunnelProbe(code: number, stdout: string): string {
+  const http = stdout.trim() || 'none'
+  const hint =
+    code === 255
+      ? 'ssh failed'
+      : code === 7
+        ? 'nothing listening on the socket'
+        : code === 28
+          ? 'curl timed out'
+          : code === 0 && http === '421'
+            ? 'another hook server answered (bearer mismatch)'
+            : code === 0
+              ? 'unexpected HTTP answer'
+              : 'probe failed'
+  return `${hint} (exit ${code}, http ${http})`
+}

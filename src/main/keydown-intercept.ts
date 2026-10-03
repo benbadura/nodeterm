@@ -1,6 +1,7 @@
 import { IPC } from '../shared/ipc'
 import {
   getEffectiveBindings,
+  policyStandsDown,
   sanitizeKeybindingOverrides,
   type TerminalShortcutPolicy
 } from '../shared/keybindings'
@@ -150,7 +151,11 @@ export function keydownIntercept(
   // stays cheap on main's input path.
   const ev = toShortcutEvent(input)
   if (bindings.toggleMarkdown.some((s) => matchesShortcut(ev, s, isMac))) {
-    return { action: 'toggle-markdown' }
+    // A held chord is still CLAIMED (the menu's Minimize owns this accelerator, so letting a
+    // repeat through would minimize the window mid-hold) but forwards nothing: one press, one
+    // toggle — the rule the Server Edition's browser listener (`markdown-toggle-key.ts`) applies
+    // too, and the same shape as the held ⌘0 below.
+    return { action: input.isAutoRepeat ? null : 'toggle-markdown' }
   }
   // Repurpose Cmd/Ctrl+W: the renderer closes the selected node(s); if none are selected it asks
   // us to close the window (the standard behavior). ⇧ is left to the menu's Close All Windows —
@@ -199,30 +204,11 @@ export function navigationClearsRecording(details: {
   return details.isMainFrame && !details.isSameDocument
 }
 
-/**
- * PURE. Does the user's `terminalShortcutPolicy` mean this window must stop claiming chords right
- * now? The composition `index.ts` hands to `installKeydownIntercepts`' 5th parameter, exported so
- * it can be pressed instead of living untested inside a closure in a 5000-line file.
- *
- * **Both halves are refusals and both matter.** `app-first` is the shipped default, so it must be
- * false whatever the mirror reports — that is the byte-identical guarantee of this feature: a user
- * who never touched the setting sees exactly the pre-feature intercepts, even though their
- * renderer is reporting terminal focus all day. And `terminalFocused` is a MIRROR of the
- * renderer's `document.activeElement`, which is why `false` is its reset value everywhere: a page
- * that died mid-report, a window that never had one, a reload — all resolve to "intercepts on",
- * never to "intercepts off with nothing alive to turn them back on".
- *
- * Why the policy is read here rather than the intercepts simply being uninstalled under
- * `terminal-first`: the policy is a live setting and the focus changes per keystroke, so there is
- * nothing static to install against — and an app-first user's window must not be a different
- * window from a terminal-first user's.
- */
-export function policyStandsDown(
-  policy: TerminalShortcutPolicy,
-  terminalFocused: boolean
-): boolean {
-  return policy === 'terminal-first' && terminalFocused
-}
+// `policyStandsDown` moved to `shared/keybindings.ts` (with its full rationale) so the Server
+// Edition's browser-side ⌘M listener (`renderer/bridge/markdown-toggle-key.ts`) applies the SAME
+// predicate — main is not importable from the renderer. Re-exported so this module stays the one
+// place `index.ts` and its tests import the intercept pieces from.
+export { policyStandsDown }
 
 /**
  * PURE. The CLOSE leg's extra stand-down, applied REGARDLESS of the policy (issue #383): off-mac,
@@ -439,6 +425,18 @@ export function installKeydownIntercepts(
     // it either.
     if (decision.action === 'close-node' && isCloseSuspended()) return
     event.preventDefault()
-    if (decision.action) win.webContents.send(keydownInterceptChannel(decision.action))
+    if (!decision.action) return
+    // ⌘0 carries its modifiers (issue #915 review): the renderer reads them to decide whether the
+    // chord is the platform's terminal-font reset (⌘ on mac, Ctrl elsewhere — never both) before
+    // falling back to canvas zoom-to-100%. The decision above accepts `meta || control`, so without
+    // them a mac Ctrl+0 was indistinguishable from ⌘0 there.
+    if (decision.action === 'zoom-actual-size') {
+      win.webContents.send(keydownInterceptChannel(decision.action), {
+        meta: input.meta,
+        control: input.control
+      })
+      return
+    }
+    win.webContents.send(keydownInterceptChannel(decision.action))
   })
 }

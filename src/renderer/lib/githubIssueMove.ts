@@ -9,6 +9,8 @@
 // cheap, easily mis-aimed gesture; the outcome is not. So state-changing moves ask first, and
 // label-only moves stay immediate.
 
+import type { GitHubCloseReason } from '@shared/github-issues'
+
 export type GitHubMoveIntentKind = 'noop' | 'labels-only' | 'close' | 'reopen'
 
 export interface GitHubMoveIntent {
@@ -19,7 +21,17 @@ export interface GitHubMoveConfirmation {
   message: string
   confirmLabel: string
   danger: boolean
+  /** A close asks WHY: GitHub records a reason on every closed issue, and a board close used to
+   *  file every one — including the ones being dismissed — as `completed`. Absent for a reopen,
+   *  which GitHub records as `reopened` on its own. */
+  closeReasons?: Array<{ value: GitHubCloseReason; label: string }>
+  defaultCloseReason?: GitHubCloseReason
 }
+
+const CLOSE_REASONS: Array<{ value: GitHubCloseReason; label: string }> = [
+  { value: 'completed', label: 'Completed' },
+  { value: 'not_planned', label: 'Not planned' }
+]
 
 interface MovableIssue {
   number: number
@@ -54,7 +66,9 @@ export function githubMoveConfirmation(
     return {
       message: `Close ${name} on GitHub? Everyone watching the issue is notified.`,
       confirmLabel: 'Close issue',
-      danger: true
+      danger: true,
+      closeReasons: CLOSE_REASONS,
+      defaultCloseReason: 'completed'
     }
   }
   if (kind === 'reopen') {

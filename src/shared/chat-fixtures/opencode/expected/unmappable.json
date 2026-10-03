@@ -1,0 +1,37 @@
+{
+  "sessionId": "ses_0a1b2c3d4ffeSynthetic000001",
+  "parse": {
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "kept"
+          }
+        ],
+        "at": 1780000003000
+      }
+    ],
+    "skipped": 11,
+    "model": "demo-model"
+  },
+  "page": {
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "kept"
+          }
+        ],
+        "at": 1780000003000
+      }
+    ],
+    "found": true,
+    "olderCursor": null,
+    "unmatchedResults": [],
+    "model": "demo-model"
+  }
+}

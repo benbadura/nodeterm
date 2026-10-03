@@ -218,11 +218,21 @@ describe('⌘M → markdown view, stolen back from Window ▸ Minimize', () => {
     expect(press({ control: true, key: 'm', code: 'KeyM' })).toEqual(UNTOUCHED)
   })
 
-  it('repeats keep toggling (no auto-repeat rule here, unlike ⌘0)', () => {
+  // A held chord used to forward a toggle on every OS repeat, strobing the view; the Server
+  // Edition's browser listener never did. Both shells now agree: the repeat is still CLAIMED (so
+  // it cannot fall through to Window ▸ Minimize, whose accelerator this is) but forwards nothing —
+  // the held-⌘0 shape.
+  it('drops OS auto-repeat while still swallowing the key', () => {
     expect(press({ meta: true, key: 'm', code: 'KeyM', isAutoRepeat: true })).toEqual({
       prevented: true,
-      sent: [IPC.appToggleMarkdown]
+      sent: []
     })
+    expect(
+      press({ control: true, key: 'm', code: 'KeyM', isAutoRepeat: true }, { isMac: false })
+    ).toEqual({ prevented: true, sent: [] })
+    expect(
+      keydownIntercept(input({ meta: true, key: 'm', code: 'KeyM', isAutoRepeat: true }), DEFAULTS, true)
+    ).toEqual({ action: null })
   })
 })
 
@@ -679,5 +689,38 @@ describe('the close leg stands down inside a terminal, off-mac only (#383)', () 
     )
     expect(menuSync).toContain('closeStandsDownInTerminal(interceptIsMac, terminalFocused)')
     expect(menuSync).toContain('MENU_ITEM_ID_CLOSE')
+  })
+})
+
+// Issue #915 review: the forwarded ⌘0 carries its modifiers, so the renderer can apply the SAME
+// per-platform predicate the terminal font reset uses (⌘ on mac, Ctrl elsewhere) — without them a
+// mac Ctrl+0 cleared a terminal's font override while the browser path would not.
+describe('zoom-actual-size forwards the chord modifiers (#915)', () => {
+  const capture = (over: Partial<KeydownInterceptInput>): unknown[][] => {
+    const calls: unknown[][] = []
+    let handler: ((e: { preventDefault(): void }, i: KeydownInterceptInput) => void) | null = null
+    const win: KeydownInterceptTarget = {
+      webContents: {
+        on: (_event, listener) => {
+          handler = listener
+        },
+        send: (channel, ...args) => {
+          calls.push([channel, ...args])
+        }
+      }
+    }
+    installKeydownIntercepts(win, () => ({ closeNode: [], toggleMarkdown: [] }), true, () => false, () => false)
+    ;(handler as unknown as (e: { preventDefault(): void }, i: KeydownInterceptInput) => void)(
+      { preventDefault: () => undefined },
+      input({ code: 'Digit0', key: '0', ...over })
+    )
+    return calls
+  }
+  it('sends { meta, control } with the zoom-actual-size signal', () => {
+    expect(capture({ meta: true })).toEqual([[IPC.appZoomActualSize, { meta: true, control: false }]])
+    expect(capture({ control: true })).toEqual([[IPC.appZoomActualSize, { meta: false, control: true }]])
+    expect(capture({ meta: true, control: true })).toEqual([
+      [IPC.appZoomActualSize, { meta: true, control: true }]
+    ])
   })
 })

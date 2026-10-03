@@ -391,7 +391,7 @@ export function SshProjectDialog({ onCreate, onManage, onClose }: SshProjectDial
           </div>
         )}
         {mkdirErr && (
-          <p className="confirm__msg" style={{ color: 'var(--danger, #e5534b)', margin: '0 0 8px', fontSize: 12 }}>
+          <p className="confirm__msg" style={{ color: 'var(--danger)', margin: '0 0 8px', fontSize: 12 }}>
             {mkdirErr}
           </p>
         )}

@@ -1,0 +1,38 @@
+[
+  {
+    "before": null,
+    "maxBytes": 262144,
+    "grownMaxBytes": 262144,
+    "start": 0,
+    "parse": {
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "think first"
+            }
+          ],
+          "at": 1790627717000,
+          "key": 446
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "The visible answer."
+            }
+          ],
+          "at": 1790627721000,
+          "key": 1665
+        }
+      ],
+      "olderCursor": null,
+      "unmatchedResults": [],
+      "model": "gpt-5.5",
+      "noCompleteLine": false
+    }
+  }
+]

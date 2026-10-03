@@ -1,0 +1,43 @@
+[
+  {
+    "before": null,
+    "maxBytes": 262144,
+    "grownMaxBytes": 262144,
+    "start": 0,
+    "parse": {
+      "messages": [
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool",
+              "name": "!",
+              "arg": "git log --oneline -3",
+              "id": "user_bash",
+              "result": "a1 one b2 two c3 three"
+            }
+          ],
+          "at": 1790627717000,
+          "key": 446
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool",
+              "name": "view",
+              "arg": "/srv/demo/README.md",
+              "id": "user_view",
+              "result": "# Demo"
+            }
+          ],
+          "at": 1790627720000,
+          "key": 1359
+        }
+      ],
+      "olderCursor": null,
+      "unmatchedResults": [],
+      "noCompleteLine": false
+    }
+  }
+]

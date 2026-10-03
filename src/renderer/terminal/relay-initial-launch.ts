@@ -1,6 +1,6 @@
 import type { PendingLaunch } from '@shared/types'
 import { createLaunchWriter } from './launch-command'
-import type { DeliveryOutcome } from './command-delivery'
+import type { DeliveryOutcome } from '@shared/command-delivery'
 
 // Transient proof is scoped to this connection, never restored from workspace data. Consume
 // before settle so a parked/remounted view cannot retry even if no bytes ultimately arrived.

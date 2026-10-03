@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { readLocal, writeLocal } from '../lib/localStore'
 import { useSettings } from './settings'
+import { issueUrl, type IssueRef } from '@shared/github-issue-ref'
 
 // Which view each project shows (canvas or kanban) — PERSONAL, per machine: persisted in
 // localStorage, deliberately never in the git-shared .nodeterm/project.json (spec rule).
@@ -41,9 +42,12 @@ interface ViewModeState {
   defaultView: ProjectView
   setDefaultView(v: ProjectView): void
   toggle(projectId: string): void
-  /** Global swimlane overview — when true, kanban shows all projects as swimlanes instead of per-project tabs. */
+  /** Set a project's view explicitly (stored, so it overrides the default like `toggle`). */
+  setView(projectId: string, view: ProjectView): void
+  /** The board's SCOPE: true = all projects as swimlanes (Omni), false = the active project's
+   *  board. Omni is a scope of the kanban side, not a third view — see `toggleBoardView`. */
   globalKanban: boolean
-  toggleGlobalKanban(): void
+  setGlobalKanban(on: boolean): void
   /** Which swimlane is currently highlighted in the global overview (jump target). */
   highlightedSwimlaneId: string | null
   setHighlightedSwimlaneId(id: string | null): void
@@ -59,6 +63,15 @@ interface ViewModeState {
   requestedCardNodeId: string | null
   requestCard(nodeId: string): void
   clearCardRequest(): void
+  /**
+   * A GitHub issue whose summary should open on the board — set by a node's `#N` chip (canvas
+   * header or session card). One-shot like `requestedCardNodeId`: KanbanView opens the issue's
+   * summary once the issue lane has loaded, or the issue on GitHub when the board does not show it
+   * (no GitHub sync, another repository, a page not fetched), and clears it either way.
+   */
+  requestedIssue: IssueRef | null
+  requestIssue(ref: IssueRef): void
+  clearIssueRequest(): void
 }
 
 /** The resolved view for a project: its explicit entry, or the default. */
@@ -97,6 +110,9 @@ export const useViewMode = create<ViewModeState>((set) => ({
   requestedCardNodeId: null,
   requestCard: (nodeId) => set({ requestedCardNodeId: nodeId }),
   clearCardRequest: () => set({ requestedCardNodeId: null }),
+  requestedIssue: null,
+  requestIssue: (ref) => set({ requestedIssue: ref }),
+  clearIssueRequest: () => set({ requestedIssue: null }),
   toggle: (projectId) =>
     set((s) => {
       // Flip the RESOLVED view and store it EXPLICITLY, so this choice now overrides the default.
@@ -108,13 +124,21 @@ export const useViewMode = create<ViewModeState>((set) => ({
       save(next)
       // Leaving the board (or entering it) drops any unconsumed request — it belonged to the view
       // the user just left, and firing it later would pop a card out of nowhere.
-      return { viewByProject: next, requestedCardNodeId: null }
+      return { viewByProject: next, requestedCardNodeId: null, requestedIssue: null }
     }),
-  toggleGlobalKanban: () =>
+  setView: (projectId, view) =>
     set((s) => {
-      const next = !s.globalKanban
-      saveGlobalKanban(next)
-      return { globalKanban: next, requestedCardNodeId: null, highlightedSwimlaneId: null }
+      if (s.viewByProject[projectId] === view) return s
+      const next: Record<string, ProjectView> = { ...s.viewByProject, [projectId]: view }
+      save(next)
+      return { viewByProject: next, requestedCardNodeId: null, requestedIssue: null }
+    }),
+  setGlobalKanban: (on) =>
+    set((s) => {
+      if (s.globalKanban === on) return s
+      saveGlobalKanban(on)
+      // Changing scope drops any unconsumed request, for the same reason `toggle` does.
+      return { globalKanban: on, requestedCardNodeId: null, requestedIssue: null, highlightedSwimlaneId: null }
     })
 }))
 
@@ -142,4 +166,93 @@ export function isGlobalKanbanOpen(): boolean {
     return false
   }
   return useViewMode.getState().globalKanban
+}
+
+/**
+ * OMNI IS A SCOPE OF THE KANBAN SIDE, NOT A THIRD VIEW. The view toggle (tab icon, ⌘⇧B, the
+ * menu) flips canvas ⇄ board, and the board shows either this project or all projects. So:
+ * leaving Omni through the scope switch lands on THIS project's board, and the view toggle from
+ * Omni lands on the canvas. It used to be an overlay independent of the per-project view, so its
+ * close fell through to whatever the project's view happened to be — "Canvas view" from Omni
+ * could land on a board, and closing Omni opened from a board could land on the canvas.
+ *
+ * `globalKanban` stays independent of which project is active on purpose: Omni spans every
+ * project, and a project switch made from a lane (create a card there, open one) must not drop
+ * the user out of it because the new project's own view is the canvas.
+ *
+ * These are the only writers of `globalKanban`; TabBar, the menu IPC and the registry commands
+ * all come through here, so the decision exists once.
+ */
+
+/** Show the board with every project (Omni). No-op while the feature is off. */
+export function showAllProjectsBoard(): boolean {
+  if (!isOmniKanbanEnabled(useSettings.getState().settings)) return false
+  useViewMode.getState().setGlobalKanban(true)
+  return true
+}
+
+/** Show `projectId`'s own board — the scope switch's "This project", and where closing Omni lands. */
+export function showProjectBoard(projectId: string): void {
+  const vm = useViewMode.getState()
+  vm.setGlobalKanban(false)
+  if (projectId) vm.setView(projectId, 'kanban')
+}
+
+/** Leave the board entirely, whichever scope it shows, for `projectId`'s canvas. */
+export function showCanvas(projectId: string): void {
+  const vm = useViewMode.getState()
+  vm.setGlobalKanban(false)
+  if (projectId) vm.setView(projectId, 'canvas')
+}
+
+/**
+ * The view toggle (canvas ⇄ board). From any board it goes to the canvas; from the canvas it
+ * opens the board in the scope `omniKanbanAsDefault` picks. Returns false when there is nothing
+ * to toggle (no project and no Omni).
+ */
+export function toggleBoardView(projectId: string): boolean {
+  if (isGlobalKanbanOpen() || (projectId && isKanbanOpen(projectId))) {
+    showCanvas(projectId)
+    return true
+  }
+  const settings = useSettings.getState().settings
+  if (isOmniKanbanEnabled(settings) && settings.omniKanbanAsDefault === true) return showAllProjectsBoard()
+  if (!projectId) return false
+  showProjectBoard(projectId)
+  return true
+}
+
+/**
+ * The dedicated "All projects" command: from Omni back to this project's board, from anywhere
+ * else into Omni. False while the feature is off.
+ */
+export function toggleAllProjectsBoard(projectId: string): boolean {
+  if (!isOmniKanbanEnabled(useSettings.getState().settings)) return false
+  if (isGlobalKanbanOpen()) showProjectBoard(projectId)
+  else showAllProjectsBoard()
+  return true
+}
+
+/**
+ * Show a GitHub issue from a node's `#N` chip. Only a board with GitHub sync can show it, so only
+ * then is the board brought up (the issue lane lives there) and asked to open it — toggling FIRST,
+ * because leaving or entering the board drops any unconsumed request. A project whose board has no
+ * GitHub sync does not get its saved view flipped to a board that cannot show the issue: the issue
+ * opens on GitHub instead (`openExternal`, the caller's session shell). An invalid reference opens
+ * nothing.
+ */
+export function openIssueOnBoard(
+  projectId: string,
+  ref: IssueRef,
+  boardShowsIssues: boolean,
+  openExternal: (url: string) => void
+): void {
+  if (!boardShowsIssues) {
+    const url = issueUrl(ref)
+    if (url) openExternal(url)
+    return
+  }
+  const vm = useViewMode.getState()
+  if (projectId && !isKanbanOpen(projectId)) vm.toggle(projectId)
+  useViewMode.getState().requestIssue(ref)
 }

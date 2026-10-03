@@ -76,7 +76,13 @@ export function ShortcutRecorderButton({
   // Did THIS instance arm the (global) main-process bit? See `release`.
   const armedRef = useRef(false)
   const def = COMMANDS_BY_ID.get(commandId)!
-  const opts = { isMac, allowHold: def.allowHoldChord === true }
+  const opts = {
+    isMac,
+    allowHold: def.allowHoldChord === true,
+    // Bare keys only where the registry lets the command have one; normalizeBindingForCommand
+    // (below) still refuses a bare key a command's flags do not permit (e.g. Delete's SAFE set).
+    allowBare: def.scope === 'board' || def.allowBareKey === true
+  }
 
   // Refs only ⇒ stable with no deps, so the mount-time cleanup below cannot capture stale state,
   // and idempotent ⇒ running it twice, or on an unmount that was never armed, does nothing.

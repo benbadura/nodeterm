@@ -13,7 +13,7 @@
 // parse must never be invented or overwritten), or a request that is already satisfied (a board that
 // exists, a card already in that column) — a retry must not churn `rev`.
 
-import { DEFAULT_BOARD_COLUMNS, makeColumnId } from '../shared/kanban-default-board'
+import { defaultBoardColumns, makeColumnId } from '../shared/kanban-default-board'
 import {
   KANBAN_LABEL_COLORS,
   boardLabels,
@@ -22,6 +22,7 @@ import {
   setCardLabels
 } from '../shared/kanban-labels'
 import type { KanbanLabelColor, ProjectKanban } from '../shared/types'
+import { placeAssignment, type RankedEntry } from '../shared/kanban-order'
 
 /** Parse `raw` as the `{version:1, rev, nodes}` project file, or null. */
 function parseProjectFile(raw: string): Record<string, unknown> | null {
@@ -73,14 +74,16 @@ export function ensureProjectBoard(raw: string, now: Date, mintId = makeColumnId
   const board = boardOf(root)
   if (!board) return null
   if (columnsOf(board).length > 0) return null
-  board.columns = DEFAULT_BOARD_COLUMNS.map((c) => ({ id: mintId(), title: c.title, color: c.color }))
+  board.columns = defaultBoardColumns(mintId)
   if (!Array.isArray(board.assignments)) board.assignments = []
   root.kanban = board
   return bumped(root, now)
 }
 
 /**
- * Move one card to `columnId`, or to the virtual Ungrouped column (`columnId === null`).
+ * Move one card to `columnId`, or to the virtual Ungrouped column (`columnId === null`). The move
+ * names no position, so — like every unanchored move on the desktop — the card lands at the TOP of
+ * the destination column.
  *
  * Only `kanban.assignments` is touched: `meta` (assignees / due / priority / labels) is independent
  * of placement on the desktop too, and a move must not disturb it.
@@ -118,8 +121,14 @@ export function setProjectCardColumn(
   // Already there — including "already Ungrouped", which is what an ABSENT assignment means.
   if ((current ?? null) === columnId) return null
 
-  const kept = before.filter((a) => a?.nodeId !== nodeId)
-  board.assignments = columnId === null ? kept : [...kept, { nodeId, columnId }]
+  if (columnId === null) {
+    board.assignments = before.filter((a) => a?.nodeId !== nodeId)
+  } else {
+    // Unanchored ⇒ the TOP of the destination, through the SAME placement the desktop's
+    // `assignNode` uses: one new rank, the array kept in rank order for builds that ignore it,
+    // every other entry (and every field this surface does not know) untouched.
+    board.assignments = placeAssignment(before as unknown as RankedEntry[], nodeId, columnId, 'top')
+  }
   if (!Array.isArray(board.columns)) board.columns = columns
   root.kanban = board
   return bumped(root, now)
@@ -208,8 +217,8 @@ export function parseCardLabelEdit(raw: unknown): CardLabelEdit | null {
  * meta round-trip untouched (the same raw-object discipline as the rest of this file).
  *
  * A project with no board gets the default one seeded first, exactly as the desktop's first
- * "+ Label" does (`NodeLabels` edits `kanban ?? defaultKanban()`) — but only when the edit actually
- * changes something, so a no-op never writes a board nobody asked for.
+ * "+ Label" does (`NodeLabels` edits `kanban ?? defaultKanban(projectId)`) — but only when the
+ * edit actually changes something, so a no-op never writes a board nobody asked for.
  *
  * Returns null (nothing written) for a file of the wrong shape, an unusable `kanban` block, an
  * `add` naming a label this palette does not have (the phone's copy is stale — applying a dangling
@@ -255,7 +264,7 @@ export function editProjectCardLabels(
 
   const next = k as unknown as Record<string, unknown>
   if (columnsOf(next).length === 0) {
-    next.columns = DEFAULT_BOARD_COLUMNS.map((c) => ({ id: mintId(), title: c.title, color: c.color }))
+    next.columns = defaultBoardColumns(mintId)
   }
   if (!Array.isArray(next.assignments)) next.assignments = []
   root.kanban = next

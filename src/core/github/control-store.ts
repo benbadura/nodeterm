@@ -27,6 +27,7 @@ type ApprovalInput = {
   localApprovalId: string
   projectId: string
   repository: string
+  mappingDigest?: string
 }
 
 function validString(value: unknown, max = 512): value is string {
@@ -40,7 +41,8 @@ function validApproval(value: unknown): value is GitHubProjectApproval {
     validString(approval.projectId, 256) &&
     parseGitHubRepository(approval.repository) === approval.repository &&
     approval.enabled === true &&
-    Number.isSafeInteger(approval.approvedAt) && approval.approvedAt > 0
+    Number.isSafeInteger(approval.approvedAt) && approval.approvedAt > 0 &&
+    (approval.mappingDigest === undefined || validString(approval.mappingDigest, 128))
 }
 
 function validState(value: unknown): value is GitHubControlState {
@@ -74,7 +76,8 @@ export class GitHubControlStore {
     return this.mutate(input.expectedRevision, (state) => {
       if (!validString(input.localApprovalId, 128) ||
           !validString(input.projectId, 256) ||
-          parseGitHubRepository(input.repository) !== input.repository) {
+          parseGitHubRepository(input.repository) !== input.repository ||
+          (input.mappingDigest !== undefined && !validString(input.mappingDigest, 128))) {
         throw new GitHubControlError('invalid-control-input')
       }
       const approval: GitHubProjectApproval = {
@@ -82,7 +85,8 @@ export class GitHubControlStore {
         projectId: input.projectId,
         repository: input.repository,
         enabled: true,
-        approvedAt: Date.now()
+        approvedAt: Date.now(),
+        ...(input.mappingDigest ? { mappingDigest: input.mappingDigest } : {})
       }
       return {
         ...state,
@@ -126,6 +130,20 @@ export class GitHubControlStore {
       approval.localApprovalId === input.localApprovalId &&
       approval.projectId === input.projectId &&
       approval.repository === input.repository)
+  }
+
+  /** Approved for WRITES: the repository approval, and the column mapping it was given for is the
+   *  one on disk now. An approval from before mappings were bound carries no digest and never
+   *  matches — it keeps reading (isApproved) until the user approves again. */
+  isMappingApproved(
+    state: GitHubControlState,
+    input: { localApprovalId: string; projectId: string; repository: string; mappingDigest: string }
+  ): boolean {
+    return state.approvals.some((approval) => approval.enabled &&
+      approval.localApprovalId === input.localApprovalId &&
+      approval.projectId === input.projectId &&
+      approval.repository === input.repository &&
+      approval.mappingDigest === input.mappingDigest)
   }
 
   private mutate(

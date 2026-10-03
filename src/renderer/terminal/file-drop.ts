@@ -119,7 +119,7 @@ export async function clipboardImages(): Promise<File[]> {
   }
 }
 
-const readAsBase64 = (file: File): Promise<string | null> =>
+export const readAsBase64 = (file: File): Promise<string | null> =>
   new Promise((resolve) => {
     const reader = new FileReader()
     reader.onerror = () => resolve(null)

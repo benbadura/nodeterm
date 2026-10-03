@@ -4,6 +4,9 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import path from 'node:path'
 
 import { publishCanvasMutation } from '../core/canvas-sync'
+import { contentOf, diffContent, type CanvasContent } from '../shared/canvas-content'
+import { groupsFirst } from '../shared/node-order'
+import { launchHeadless } from '../core/headless-launch'
 import { gateProjectTarget, GRANT_CAP } from '../core/project-grants'
 import {
   LINK_ENDPOINT_NOT_FOUND,
@@ -18,6 +21,8 @@ import {
   type NodeColor
 } from '../shared/node-colors'
 import { applyStickyWrite, parseStickyArgs, resolveStickyRef } from '../shared/sticky-write'
+import type { HeadlessLaunchFailure, HeadlessLaunchResult } from '../shared/headless-launch'
+import { localNodePtyOptions } from '../shared/node-pty-options'
 import type { WorkspaceStore } from '../core/workspace-store'
 import {
   AGENT_CONFIG,
@@ -33,9 +38,26 @@ import {
 import { assembleLaunchCommand } from '../shared/agents/launch'
 import type { AgentState, NormalizedAgentEvent } from '../shared/agents/normalize'
 import { oneLine } from '../shared/one-line'
+import { RUN_NOW_AFTER_REFUSAL, runNowRequested } from '../shared/control-verbs'
+import {
+  RUN_NOW_AFTER_SUCCESS_REFUSAL,
+  normalizeSuccessWaitHold,
+  parseAfterSuccessArg,
+  parseSuccessDeadlineArg,
+  successDepRefusal,
+  successWaitSatisfied,
+  type StationOutcomeRecord,
+  type SuccessDepFacts,
+  type SuccessWaitHold
+} from '../shared/station-outcome'
+import { isRemoteSessionNode } from '../shared/worktree'
+import { issueLaunchPrompt, resolveIssueArg, type IssueRef } from '../shared/github-issue-ref'
+import { runEndedEvent, runStartedEvent } from '../shared/issue-runs'
+import type { BoardLogEntry } from '../shared/types'
 import { UNKNOWN_CODEX_CLI_CAPS } from '../shared/types'
 import type {
   BridgeLink,
+  CanvasMutation,
   CanvasNodeState,
   ClaudeCliCaps,
   CodexCliCaps,
@@ -61,6 +83,10 @@ export interface HeadlessPty {
   paneCommand(persistKey: string): Promise<string | null>
   sessionExists(persistKey: string): Promise<boolean>
   sendText(nodeId: string, text: string, opts?: { enter?: boolean }): Promise<TextDeliveryResult>
+  persistentSpawnAvailable(): boolean
+  writeHeadless(persistKey: string, data: string): boolean
+  onOutput(persistKey: string, cb: (chunk: string) => void): () => void
+  releaseHeadless(persistKey: string): void
   destroySession(
     clientId: number | null,
     persistKey: string,
@@ -98,14 +124,43 @@ export interface HeadlessNodeFactoryDeps {
   /** Hook-mirror lookups. A stored agentId wins; these cover a plain terminal running an agent. */
   stateOf(nodeId: string): AgentState | undefined
   agentIdOf?(nodeId: string): string | undefined
+  /** A station's latest task report (`report-outcome`, core's store) — what `--after-success` waits
+   *  on. Absent = no report is ever known, so a success wait never releases on its own. */
+  outcomeOf?(nodeId: string): StationOutcomeRecord | undefined
+  /** Has this station been handed new work (a `send` / `reply` queued or landed, a `run`) that no
+   *  turn since has finished? core/station-handover.ts — while it has, plain `--after` on it is not
+   *  satisfied, whatever its state reads: its `done` is the PREVIOUS task's. Absent = nothing is
+   *  ever handed over (the pre-tracker behaviour). */
+  handedOver?(nodeId: string): boolean
   env?: Record<string, string | undefined>
   now?: () => number
-  publishNode?: (projectId: string, node: CanvasNodeState) => void
-  publishRemoval?: (projectId: string, nodeId: string) => void
+  /**
+   * Cast one content op (node, edge or board) to every client. Default: the reflector
+   * (`publishCanvasMutation`), whose listener is the canvas authority. Every op is cast BEFORE the
+   * save that persists it (`castAndSave`): on a governed project the save is overlaid with the
+   * authority's content, which holds only what it heard as ops.
+   */
+  publishMutation?: (projectId: string, m: CanvasMutation) => void
+  /** The whole project, to browsers, on `workspace:server-change` (merged, never a conflict bar). */
   publishProject?: (project: Project) => void
   /** Injectable only so tests can seed creator facts; production uses a fresh process-local ledger. */
   ownership?: HeadlessNodeOwnership
+  /** Test seam for the launch settle; production uses core's SETTLE_* defaults. */
+  launchTiming?: { quietMs: number; capMs: number }
+  /**
+   * The `owner/repo` a project's kanban board syncs with — what `open-agent --issue #N` means. The
+   * GitHub host controller's answer (configured, else detected from the project's git remote), the
+   * same one the issue lane uses. Absent/throwing/null = only the board's explicitly configured
+   * repository counts, and a `#N` against a board with none is refused — never guessed.
+   */
+  issueRepository?: (projectId: string) => Promise<string | null>
+  /** Append to a project's board log (the issue card's run history). Absent = no history is
+   *  written; the session still opens. */
+  appendBoardLog?: (projectId: string, entry: BoardLogEntry) => Promise<boolean>
 }
+
+/** The author of a run-history line this factory writes: the app acting on an agent's request. */
+const RUN_LOG_AUTHOR = { name: 'nodeterm', color: '#8b8b8b' } as const
 
 export interface HeadlessNodeOwner {
   sourceNodeId: string
@@ -132,6 +187,46 @@ export function createHeadlessNodeOwnership(): HeadlessNodeOwnership {
     forget: (nodeId) => owners.delete(nodeId),
     clear: () => owners.clear()
   }
+}
+
+/** One node an `open-*` persisted but could not start. */
+export interface OpenLaunchFailure {
+  id: string
+  reason: HeadlessLaunchFailure
+  /** The node still holds its launch (manualOnly), so the user's Run now can deliver it. */
+  retained: boolean
+}
+
+/**
+ * The `open-*` failure reply (#925). Each failed node is named with its own reason, grouped, so a
+ * caller can tell a failure Run now may get past from one it repeats: `line-too-long` fails the
+ * same way on every attempt, and this edition has no `--prompt-file` (the open flag allowlist),
+ * so the only way past it is a shorter prompt or command. "Do not repeat the open request" holds
+ * for every reason: the nodes are persisted, so the same request would open duplicates.
+ */
+export function launchFailedError(
+  failures: readonly OpenLaunchFailure[],
+  verb: 'open-terminal' | 'open-agent'
+): string {
+  const groups = new Map<string, OpenLaunchFailure & { ids: string[] }>()
+  for (const f of failures) {
+    const key = `${f.reason}:${f.retained}`
+    const group = groups.get(key) ?? { ...f, ids: [] }
+    group.ids.push(f.id)
+    groups.set(key, group)
+  }
+  const what = (g: OpenLaunchFailure): string =>
+    g.reason === 'line-too-long'
+      ? 'the launch line is longer than a terminal line takes, so Run now will fail the same way; ' +
+        `shorten the ${verb === 'open-terminal' ? 'command' : 'prompt'}`
+      : g.retained
+        ? 'launch retained for Run now in the node'
+        : 'no launch was held'
+  const clauses = [...groups.values()].map((g) => `${g.reason}: ${g.ids.join(', ')} (${what(g)})`)
+  return (
+    `launch-failed: node(s) ${failures.map((f) => f.id).join(', ')} were persisted but their PTY or ` +
+    `initial command could not be delivered — ${clauses.join('; ')}; do not repeat the open request`
+  )
 }
 
 const TERMINAL_LIMIT = 8
@@ -270,6 +365,81 @@ function addEdge(list: BridgeLink[], source: string, target: string, prefix: str
   list.push({ id: edgeId(prefix, source, target), source, target })
 }
 
+/** One node edit a verb re-applies to a fresh read (`savePatches`). Idempotent. */
+interface NodePatch {
+  projectId: string
+  nodeId: string
+  /** Apply to the fresh node. true = it LANDED: the node was in the state this patch is for (see
+   *  each patch for which). A caller that delivers on the strength of a patch asks this, because the
+   *  fresh read can find the node deleted, or re-armed, by a teammate since the verb looked. */
+  apply(node: CanvasNodeState): boolean
+}
+
+/** What `savePatches` did: whether the save landed, and per patch whether it applied to the fresh
+ *  read. A patch LANDED only when both are true. */
+interface PatchSave {
+  saved: boolean
+  applied: boolean[]
+}
+
+/** The held launch this verb owns, by its command: a patch never touches a launch someone replaced. */
+const ownLaunch = (node: CanvasNodeState, command: string): boolean => node.pendingLaunch?.command === command
+
+/** The launch was delivered: the hold is gone. Lands when the hold was still this verb's own. */
+function clearLaunch(projectId: string, nodeId: string, command: string): NodePatch {
+  return {
+    projectId,
+    nodeId,
+    apply: (node) => {
+      if (!ownLaunch(node, command)) return false
+      delete node.pendingLaunch
+      return true
+    }
+  }
+}
+
+/** The launch is claimed (or failed): only an explicit Run now may deliver it now. Lands only when
+ *  THIS patch claimed it: the hold was this verb's own AND nobody had claimed it yet (a launch already
+ *  `manualOnly` on the fresh read was claimed by someone else, and delivering it again would type the
+ *  command twice). */
+function claimLaunch(projectId: string, nodeId: string, command: string, attempted: boolean): NodePatch {
+  return {
+    projectId,
+    nodeId,
+    apply: (node) => {
+      if (!ownLaunch(node, command)) return false
+      const unclaimed = node.pendingLaunch!.manualOnly !== true
+      node.pendingLaunch = { ...node.pendingLaunch!, manualOnly: true, ...(attempted ? { attempted: true } : {}) }
+      return unclaimed
+    }
+  }
+}
+
+/** A dependency this arm waited for has had its first real working turn. */
+function dropAwaitWorking(projectId: string, nodeId: string, command: string, depId: string): NodePatch {
+  return {
+    projectId,
+    nodeId,
+    apply: (node) => {
+      const held = node.pendingLaunch
+      if (!held || !ownLaunch(node, command) || !held.awaitWorking?.includes(depId)) return false
+      const rest = held.awaitWorking.filter((id) => id !== depId)
+      const { awaitWorking: _awaitWorking, ...kept } = held
+      node.pendingLaunch = rest.length ? { ...kept, awaitWorking: rest } : kept
+      return true
+    }
+  }
+}
+
+/** A project absent from a baseline: all of its content is new. */
+const EMPTY_CONTENT: CanvasContent = { nodes: [], bridges: [], ropes: [] }
+
+/** Every project's content, deep-copied: a verb edits its workspace in place (`node.pendingLaunch =
+ *  …`), so a baseline that shared those objects would diff as unchanged. */
+function snapshotContent(workspace: Workspace): Map<string, CanvasContent> {
+  return new Map(workspace.projects.map((p) => [p.id, structuredClone(contentOf(p))]))
+}
+
 function nodeProjects(workspace: Workspace, nodeId: string): Project[] {
   return workspace.projects.filter((project) => project.nodes.some((node) => node.id === nodeId))
 }
@@ -299,28 +469,6 @@ function isDescendant(
     current = byId.get(current.parentId)
   }
   return false
-}
-
-/** Persist frames before their descendants, matching React Flow's hydration requirement. */
-function groupsFirst(nodes: CanvasNodeState[]): CanvasNodeState[] {
-  const byId = new Map(nodes.map((node) => [node.id, node]))
-  const emitted = new Set<string>()
-  const visiting = new Set<string>()
-  const groups: CanvasNodeState[] = []
-  const emit = (node: CanvasNodeState): void => {
-    if (emitted.has(node.id) || node.kind !== 'group') return
-    if (visiting.has(node.id)) return
-    visiting.add(node.id)
-    const parent = node.parentId ? byId.get(node.parentId) : undefined
-    if (parent?.kind === 'group') emit(parent)
-    visiting.delete(node.id)
-    if (!emitted.has(node.id)) {
-      emitted.add(node.id)
-      groups.push(node)
-    }
-  }
-  nodes.forEach(emit)
-  return [...groups, ...nodes.filter((node) => node.kind !== 'group')]
 }
 
 /** Re-fit one persisted group around its direct children without moving them in parent space. */
@@ -481,16 +629,7 @@ function ungroupPersistedNodes(
 }
 
 function ptyOptions(project: Project, node: CanvasNodeState): PtyCreateOptions {
-  return {
-    cwd: node.cwd || project.cwd,
-    cols: TERMINAL_COLS,
-    rows: TERMINAL_ROWS,
-    persistKey: node.id,
-    ownerProjectId: project.id,
-    ...(node.agentId ? { agentId: node.agentId } : {}),
-    ...(node.agentModel ? { agentModel: node.agentModel } : {}),
-    ...(node.accountId ? { accountId: node.accountId } : {})
-  }
+  return localNodePtyOptions(project, node, { cols: TERMINAL_COLS, rows: TERMINAL_ROWS })
 }
 
 /**
@@ -510,6 +649,10 @@ export class HeadlessNodeFactory {
   private ownership: HeadlessNodeOwnership
   /** Fresh server-spawned agents that have not emitted their first real working turn yet. */
   private awaitingFirstWorking = new Set<string>()
+  /** Stations whose LAST turn ended on an API/model error (#521, the `errored` flag on a `done`),
+   *  from this edition's own event stream — the desktop's `lastTurnError`, kept here so a success
+   *  wait holds on an errored turn on both editions. Cleared by the next genuine new turn. */
+  private lastTurnErrored = new Set<string>()
   /**
    * Server-local `open-project` grants. The browser shell's grant ledger is process-local too,
    * but Server Edition has its own process and handler. A service restart deliberately clears
@@ -518,6 +661,8 @@ export class HeadlessNodeFactory {
    */
   private projectGrants = new Map<string, Set<string>>()
   private stopped = false
+  /** Per loaded workspace copy: every project's content as last loaded or saved (`castAndSave`). */
+  private baselines = new WeakMap<Workspace, Map<string, CanvasContent>>()
 
   constructor(private readonly deps: HeadlessNodeFactoryDeps) {
     this.ownership = deps.ownership ?? createHeadlessNodeOwnership()
@@ -532,24 +677,96 @@ export class HeadlessNodeFactory {
     return run
   }
 
-  private publishChangeSet(
-    project: Project,
-    nodes: readonly CanvasNodeState[],
-    removedIds: readonly string[]
-  ): void {
-    this.deps.publishProject?.(project)
-    const publishNode = this.deps.publishNode ?? ((projectId: string, node: CanvasNodeState) => {
-      publishCanvasMutation(projectId, { op: 'upsert', node })
-    })
-    const publishRemoval = this.deps.publishRemoval ?? ((projectId: string, nodeId: string) => {
-      publishCanvasMutation(projectId, { op: 'remove', id: nodeId })
-    })
-    for (const node of nodes) publishNode(project.id, node)
-    for (const nodeId of removedIds) publishRemoval(project.id, nodeId)
+  /** THE ONE READ of the store. A read-only view: never edited, never saved. */
+  private readWorkspace(): Promise<Workspace> {
+    return this.deps.workspaceStore.load({ sideline: false })
   }
 
-  private publish(project: Project, nodes: readonly CanvasNodeState[]): void {
-    this.publishChangeSet(project, nodes, [])
+  /**
+   * The load a verb EDITS. A private copy of the workspace, so no verb ever edits an object the store
+   * or the canvas authority still holds (a governed project's nodes come from the authority's own
+   * state), and the content of every project as loaded: `castAndSave` diffs against it.
+   */
+  private async loadForEdit(): Promise<Workspace> {
+    const workspace = structuredClone(await this.readWorkspace())
+    this.baselines.set(workspace, snapshotContent(workspace))
+    return workspace
+  }
+
+  /**
+   * THE ONE SAVE. Diff every project's whole content against what was last loaded or saved, cast
+   * every op, THEN save. Nothing is hand-listed per verb, and that is the point: on a project the
+   * canvas authority governs, the save is overlaid with the authority's content, which holds only
+   * what it heard as ops, so any change a verb made that is not cast here is dropped from disk
+   * (docs/hosted-team-relay.md). The reflector hands each op to the authority synchronously, so
+   * every one is in its state before the overlay reads it. The ops are cast from a copy, never from
+   * the workspace a verb keeps editing, so nobody downstream holds an object that changes later.
+   *
+   * Refused once canvas control has stopped: the shell detaches the authority from the store right
+   * after, and a verb still mid-launch would otherwise write its copy un-overlaid over the
+   * authority's final flush. `onlyIfChanged` skips a save that would carry no op. Answers whether it
+   * saved.
+   */
+  private async castAndSave(workspace: Workspace, opts: { onlyIfChanged?: boolean } = {}): Promise<boolean> {
+    if (this.stopped) {
+      console.warn('[headless-node-factory] canvas control stopped: a pending canvas write was skipped')
+      return false
+    }
+    const before = this.baselines.get(workspace)
+    const after = snapshotContent(workspace)
+    const cast = this.deps.publishMutation ?? ((projectId: string, m: CanvasMutation) => {
+      publishCanvasMutation(projectId, m)
+    })
+    const ops: Array<[string, CanvasMutation]> = []
+    for (const project of workspace.projects) {
+      const next = after.get(project.id)
+      if (!next) continue
+      for (const m of diffContent(before?.get(project.id) ?? EMPTY_CONTENT, next, project.id)) ops.push([project.id, m])
+    }
+    if (opts.onlyIfChanged && !ops.length) return false
+    for (const [projectId, m] of ops) cast(projectId, m)
+    this.baselines.set(workspace, after)
+    await this.deps.workspaceStore.save(workspace)
+    return true
+  }
+
+  /**
+   * A SECOND phase's save: the launch between the two phases can take seconds, and the copy the
+   * verb loaded before it predates whatever a teammate did meanwhile (a move, a rename, a deletion).
+   * So re-read, re-apply ONLY this verb's own patches to the nodes that still exist (a node deleted
+   * meanwhile stays deleted), and save only if that changed anything. The patches must be idempotent:
+   * every call re-applies all of them, so a later save still carries an earlier one.
+   *
+   * Answers per patch whether it applied to the fresh read, and whether the save landed: a caller
+   * that delivers on the strength of a claim must see BOTH (a stopping factory refuses the save, and
+   * the node may be gone or re-armed since the verb looked).
+   */
+  private async savePatches(patches: readonly NodePatch[]): Promise<PatchSave> {
+    if (!patches.length) return { saved: false, applied: [] }
+    const workspace = await this.loadForEdit()
+    const applied = patches.map((patch) => {
+      const node = workspace.projects.find((p) => p.id === patch.projectId)?.nodes.find((n) => n.id === patch.nodeId)
+      return node ? patch.apply(node) : false
+    })
+    return { saved: await this.castAndSave(workspace, { onlyIfChanged: true }), applied }
+  }
+
+  /** The PERSISTED projects to browsers (`workspace:server-change`), re-read after the save — never
+   *  a verb's own copy, which can predate a teammate's edit and would undo it on every client that
+   *  merges it. Their content already travelled as ops in `castAndSave`. */
+  private async publishPersisted(projectIds: Iterable<string>): Promise<void> {
+    if (!this.deps.publishProject || this.stopped) return
+    const wanted = new Set(projectIds)
+    if (!wanted.size) return
+    for (const project of (await this.readWorkspace()).projects) {
+      if (wanted.has(project.id)) this.deps.publishProject(project)
+    }
+  }
+
+  /** Who opened `nodeId` during THIS server run (and into which project), or undefined — the
+   *  station-failure notice's recipient rule on this edition (src/core/agents/station-notice.ts). */
+  openerOf(nodeId: string): HeadlessNodeOwner | undefined {
+    return this.ownership.ownerOf(nodeId)
   }
 
   /** Literal creator ownership: a caller may act only on nodes it freshly spawned this run. */
@@ -597,6 +814,29 @@ export class HeadlessNodeFactory {
     return result
   }
 
+  /**
+   * Spawn-or-attach `node` and deliver `command` through the shared echo-verified launcher (#925).
+   * - `release:false` keeps the server's synthetic client attached, as it always has.
+   * - `requirePersistent:false`, because that attached client is what keeps even a plain-shell
+   *   session reachable here. (The desktop releases its client, so it refuses a plain shell instead.)
+   * - `createHeadless` goes through `attach()` so the `attached` ledger stays authoritative.
+   */
+  private launch(project: Project, node: CanvasNodeState, command: string): Promise<HeadlessLaunchResult> {
+    const pty = this.deps.ptyManager
+    return launchHeadless(
+      {
+        persistentSpawnAvailable: () => pty.persistentSpawnAvailable(),
+        createHeadless: () => this.attach(project, node),
+        paneCommand: (key) => pty.paneCommand(key),
+        writeHeadless: (key, data) => pty.writeHeadless(key, data),
+        onOutput: (key, cb) => pty.onOutput(key, cb),
+        releaseHeadless: (key) => pty.releaseHeadless(key),
+        timing: this.deps.launchTiming
+      },
+      { ptyOptions: ptyOptions(project, node), command, release: false, requirePersistent: false }
+    )
+  }
+
   private resolveTarget(
     workspace: Workspace,
     source: { project: Project; node: CanvasNodeState },
@@ -623,6 +863,37 @@ export class HeadlessNodeFactory {
       }
     }
     return target
+  }
+
+  private now(): number {
+    return this.deps.now?.() ?? Date.now()
+  }
+
+  private handedOver(depId: string): boolean {
+    return this.deps.handedOver?.(depId) === true
+  }
+
+  /** What a success wait knows about one station, from the same facts this edition's `--after`
+   *  reads (the mirror's `done`, the `awaitWorking` fresh-spawn rule), the errored-turn rule (#521,
+   *  `lastTurnErrored`, which this edition's plain `--after` does not apply), and its report. */
+  private successFacts(
+    project: Project,
+    depId: string,
+    observed?: Pick<NormalizedAgentEvent, 'nodeId' | 'state'>
+  ): SuccessDepFacts {
+    const exists = project.nodes.some((candidate) => candidate.id === depId)
+    const state = observed?.nodeId === depId ? observed.state : this.deps.stateOf(depId)
+    const reported = this.deps.outcomeOf?.(depId)
+    return {
+      exists,
+      turnDone:
+        exists &&
+        !this.awaitingFirstWorking.has(depId) &&
+        !this.lastTurnErrored.has(depId) &&
+        !this.handedOver(depId) &&
+        state === 'done',
+      ...(reported ? { outcome: reported } : {})
+    }
   }
 
   private resolveAfter(
@@ -676,7 +947,7 @@ export class HeadlessNodeFactory {
         }
       }
 
-      const workspace = await this.deps.workspaceStore.load({ sideline: false })
+      const workspace = await this.loadForEdit()
       const source = sourceProject(workspace, sourceNodeId)
       if (!source) return { ok: false, error: 'source node is not in exactly one saved project' }
       if (!sourceCanControl(source.node, this.deps.agentIdOf)) {
@@ -737,6 +1008,23 @@ export class HeadlessNodeFactory {
     return this.open(sourceNodeId, 'open-agent', args, verified)
   }
 
+  /** File one run-history line under the issue card. Never throws: history is a record of work,
+   *  and a failed append must not fail the open or close it describes. */
+  private async logRun(
+    projectId: string,
+    run: { nodeId: string; event: BoardLogEntry['event'] } | null
+  ): Promise<void> {
+    if (!run || !this.deps.appendBoardLog) return
+    await this.deps.appendBoardLog(projectId, {
+      id: randomUUID(),
+      ts: (this.deps.now ?? Date.now)(),
+      author: RUN_LOG_AUTHOR,
+      nodeId: run.nodeId,
+      kind: 'event',
+      event: run.event
+    }).catch(() => false)
+  }
+
   close(
     sourceNodeId: string,
     args: Record<string, string>,
@@ -752,7 +1040,7 @@ export class HeadlessNodeFactory {
         }
       }
 
-      const workspace = await this.deps.workspaceStore.load({ sideline: false })
+      const workspace = await this.loadForEdit()
       const source = sourceProject(workspace, sourceNodeId)
       if (!source) return { ok: false, error: 'source node is not in exactly one saved project' }
       if (!sourceCanControl(source.node, this.deps.agentIdOf)) {
@@ -785,6 +1073,10 @@ export class HeadlessNodeFactory {
         }
       }
 
+      // Each id's project, read NOW: a factory stopped while the panes die clears the ownership
+      // ledger, and the steps below must still know where each node lives.
+      const ownerProject = new Map(ids.map((id) => [id, this.ownership.ownerOf(id)!.projectId]))
+
       // Kill terminal panes first: the durable canvas must never lose a session whose outcome is
       // unknown. Frames have no PTY; closing one is the desktop `ungroup` transform followed by
       // removal of the frame alone, regardless of who owns its members.
@@ -794,19 +1086,32 @@ export class HeadlessNodeFactory {
           .map((id) => this.deps.ptyManager.destroySession(null, id, { everySocket: true }))
       )
 
-      const removedByProject = new Map<Project, string[]>()
-      const changedByProject = new Map<Project, Map<string, CanvasNodeState>>()
+      // Run history first (it awaits), from the read the checks above used.
       for (const id of ids) {
-        const projectId = this.ownership.ownerOf(id)!.projectId
-        const project = workspace.projects.find((candidate) => candidate.id === projectId)
+        const projectId = ownerProject.get(id)!
+        const target = workspace.projects.find((p) => p.id === projectId)?.nodes.find((node) => node.id === id)
+        if (!target?.issueRef) continue
+        // A run ends when its node is CLOSED — never when a turn ends.
+        await this.logRun(projectId, runEndedEvent(target.issueRef, {
+          id: target.id,
+          title: target.title,
+          agentId: target.agentId,
+          agentSessionId: target.agentSessionId
+        }, { state: this.deps.stateOf(target.id) }))
+      }
+
+      // The kills and the history took time: the removals go onto a FRESH read, so an edit a
+      // teammate made meanwhile is never written back from the copy loaded before them. What
+      // changed (removals, promoted frame members, pruned edges) is cast by `castAndSave`.
+      const current = await this.loadForEdit()
+      const touched = new Set<string>()
+      for (const id of ids) {
+        const projectId = ownerProject.get(id)!
+        const project = current.projects.find((candidate) => candidate.id === projectId)
         const target = project?.nodes.find((node) => node.id === id)
         if (!project || !target) continue
         if (target.kind === 'group') {
-          const ungrouped = ungroupPersistedNodes(project.nodes, id)
-          project.nodes = ungrouped.nodes
-          const changed = changedByProject.get(project) ?? new Map<string, CanvasNodeState>()
-          for (const node of ungrouped.promoted) changed.set(node.id, node)
-          changedByProject.set(project, changed)
+          project.nodes = ungroupPersistedNodes(project.nodes, id).nodes
         } else {
           project.nodes = project.nodes.filter((node) => node.id !== id)
         }
@@ -816,26 +1121,26 @@ export class HeadlessNodeFactory {
         if (project.bridges) {
           project.bridges = project.bridges.filter((edge) => edge.source !== id && edge.target !== id)
         }
-        const removed = removedByProject.get(project) ?? []
-        removed.push(id)
-        removedByProject.set(project, removed)
+        touched.add(project.id)
       }
 
-      if (removedByProject.size) {
-        await this.deps.workspaceStore.save(workspace)
-        for (const [project, removed] of removedByProject) {
-          const surviving = project.nodes.map((node) => node.id)
-          const changed = [...(changedByProject.get(project)?.values() ?? [])].filter((node) =>
-            surviving.includes(node.id)
-          )
-          this.publishChangeSet(project, changed, removed)
-        }
-      }
+      // A refused save (canvas control is stopping) removed nothing from the canvas: say so, rather
+      // than report a close whose nodes are still on disk.
+      const saved = touched.size ? await this.castAndSave(current) : true
+      if (saved && touched.size) await this.publishPersisted(touched)
 
       for (const id of ids) {
         this.ownership.forget(id)
         this.attached.delete(id)
         this.awaitingFirstWorking.delete(id)
+      }
+      if (!saved) {
+        return {
+          ok: false,
+          error:
+            `close-not-saved: the sessions of ${ids.join(', ')} were ended, but the canvas could not be ` +
+            'written (canvas control is stopping); the nodes stay on the canvas'
+        }
       }
       return {
         ok: true,
@@ -851,7 +1156,7 @@ export class HeadlessNodeFactory {
     verified: boolean
   ): Promise<ServerControlReply> {
     return this.runExclusive(async () => {
-      const flagError = unsupportedFlags(args, new Set(['from', 'to']))
+      const flagError = unsupportedFlags(args, new Set(['from', 'to', 'one-way']))
       if (flagError) return { ok: false, error: `link: ${flagError}` }
       if (!verified) {
         return {
@@ -860,7 +1165,7 @@ export class HeadlessNodeFactory {
         }
       }
 
-      const workspace = await this.deps.workspaceStore.load({ sideline: false })
+      const workspace = await this.loadForEdit()
       const source = sourceProject(workspace, sourceNodeId)
       if (!source) return { ok: false, error: 'source node is not in exactly one saved project' }
       if (!sourceCanControl(source.node, this.deps.agentIdOf)) {
@@ -898,7 +1203,9 @@ export class HeadlessNodeFactory {
           const node = byId.get(id)
           return node ? headlessLinkEndpoint(node, this.deps.agentIdOf) : null
         },
-        existing
+        existing,
+        // Valueless flag: the shim sends `arg.one-way=` (present, empty).
+        { oneWay: 'one-way' in args }
       )
       if (!plan.edges.length) {
         return {
@@ -910,15 +1217,16 @@ export class HeadlessNodeFactory {
       }
 
       source.project.bridges = [...existing, ...plan.edges]
-      await this.deps.workspaceStore.save(workspace)
-      // An edge-only change has no node mutation to publish; the full-project event is the fanout.
-      this.publish(source.project, [])
+      await this.castAndSave(workspace)
+      await this.publishPersisted([source.project.id])
       const note = plan.skipped.length
         ? ` (skipped ${plan.skipped.map((skipped) => `${skipped.id}: ${skipped.why}`).join('; ')})`
         : ''
       return {
         ok: true,
-        message: `linked ${from} ↔ ${plan.linked.join(', ')}${note}`,
+        message: 'one-way' in args
+          ? `linked one-way: ${from} reads ${plan.linked.join(', ')}${note}`
+          : `linked ${from} ↔ ${plan.linked.join(', ')}${note}`,
         result: { from, linked: plan.linked, skipped: plan.skipped }
       }
     })
@@ -935,7 +1243,7 @@ export class HeadlessNodeFactory {
         color = resolveNodeColor(args.color)
         if (color === undefined) return { ok: false, error: invalidNodeColorMessage() }
       }
-      const workspace = await this.deps.workspaceStore.load({ sideline: false })
+      const workspace = await this.loadForEdit()
       const source = sourceProject(workspace, sourceNodeId)
       if (!source) return { ok: false, error: 'source node is not in exactly one saved project' }
       if (!sourceCanControl(source.node, this.deps.agentIdOf)) {
@@ -965,12 +1273,12 @@ export class HeadlessNodeFactory {
       }
 
       source.project.nodes = grouped.nodes
-      await this.deps.workspaceStore.save(workspace)
+      await this.castAndSave(workspace)
       this.ownership.record(grouped.groupId, {
         sourceNodeId,
         projectId: source.project.id
       })
-      this.publish(source.project, grouped.changed)
+      await this.publishPersisted([source.project.id])
       const skipped = ids.length - resolvable.length
       const note = skipped ? ` (${skipped} unknown id(s) skipped)` : ''
       return {
@@ -985,7 +1293,7 @@ export class HeadlessNodeFactory {
     return this.runExclusive(async () => {
       const flagError = unsupportedFlags(args, new Set(['node', 'title']))
       if (flagError) return { ok: false, error: `rename: ${flagError}` }
-      const workspace = await this.deps.workspaceStore.load({ sideline: false })
+      const workspace = await this.loadForEdit()
       const source = sourceProject(workspace, sourceNodeId)
       if (!source) return { ok: false, error: 'source node is not in exactly one saved project' }
       if (!sourceCanControl(source.node, this.deps.agentIdOf)) {
@@ -1011,10 +1319,73 @@ export class HeadlessNodeFactory {
       source.project.nodes = source.project.nodes.map((node) =>
         node.id === id ? renamed : node
       )
-      await this.deps.workspaceStore.save(workspace)
+      await this.castAndSave(workspace)
       // Metadata only. In particular, Server Edition never mirrors `/rename` into the pane.
-      this.publish(source.project, [renamed])
+      await this.publishPersisted([source.project.id])
       return { ok: true, message: `renamed ${id} to "${title}"` }
+    })
+  }
+
+  /** `run --node <id>` (#925): deliver a node's retained launch now. Server v1 ownership applies:
+   *  only nodes the caller spawned during this server run. */
+  run(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply> {
+    return this.runExclusive(async () => {
+      if (!verified) {
+        return { ok: false, error: 'run-identity-refused: Server Edition canvas control requires verified node identity' }
+      }
+      const flagError = unsupportedFlags(args, new Set(['node', 'project']))
+      if (flagError) return { ok: false, error: `run: ${flagError}` }
+      const id = (args.node ?? '').trim()
+      if (!this.ownsSpawn(sourceNodeId, id)) return this.ownershipRefusal('run', sourceNodeId, id)
+      // Resolve through the ownership record, never by first id match: node ids repeat across
+      // projects (a committed project.json opened from a second folder), and `attach()` is keyed
+      // by id alone, so a stranger copy sorting first would be claimed while the owned session is
+      // typed into. `close` resolves the same way. A `--project` naming any other project is the
+      // desktop's lookup inside the named project coming up empty.
+      const owner = this.ownership.ownerOf(id)!
+      const noNode: ServerControlReply = { ok: false, error: `run: no node with id ${id}` }
+      if (args.project !== undefined && args.project !== owner.projectId) return noNode
+      const workspace = await this.loadForEdit()
+      const project = workspace.projects.find((p) => p.id === owner.projectId)
+      const node = project?.nodes.find((n) => n.id === id)
+      if (!project || !node) return noNode
+      const held = node.pendingLaunch
+      if (!held?.command) return { ok: false, error: `run-nothing-queued: ${id} has no queued launch` }
+      // A remote node is NEVER spawned locally, and this launcher only spawns locally. Refuse
+      // before the claim, leaving the held launch untouched (the desktop's startHeadless guard).
+      if (isRemoteSessionNode(node)) {
+        return {
+          ok: false,
+          error: `run-remote-unsupported: ${id} is an SSH node; the Server Edition cannot start it`
+        }
+      }
+      // Write-ahead, exactly as open() does before its own delivery. Nothing is started unless the
+      // claim landed: a refused save (canvas control is stopping) leaves the launch queued as it was.
+      node.pendingLaunch = { ...held, attempted: true, manualOnly: true }
+      if (!(await this.castAndSave(workspace))) {
+        return {
+          ok: false,
+          error: `run-not-saved: ${id} was not started: the canvas could not be written (canvas control is stopping); its launch stays queued`
+        }
+      }
+      const launched = await this.launch(project, node, held.command)
+      // As open() does: an agent this spawned fresh has not had its first real turn yet, so a
+      // later `--after` on it must not be released by the CLI's boot `done` blip.
+      if (node.agentId && launched.fresh) this.awaitingFirstWorking.add(id)
+      // The launch took time: only its outcome is written, onto a fresh read (`savePatches`).
+      await this.savePatches(launched.outcome === 'delivered' ? [clearLaunch(project.id, id, held.command)] : [])
+      await this.publishPersisted([project.id])
+      return launched.outcome === 'delivered'
+        ? {
+            ok: true,
+            message: `started ${id}; agent startup is not confirmed`,
+            result: { ids: [id], id, started: true, startedIds: [id], queued: false, queuedIds: [] }
+          }
+        : {
+            ok: true,
+            message: `${id} stays queued (${launched.reason}); launch retained for Run now`,
+            result: { ids: [id], id, started: false, startedIds: [], queued: true, queuedIds: [id], reason: launched.reason }
+          }
     })
   }
 
@@ -1025,7 +1396,7 @@ export class HeadlessNodeFactory {
       const color = resolveNodeColor(args.color)
       if (color === undefined) return { ok: false, error: invalidNodeColorMessage() }
 
-      const workspace = await this.deps.workspaceStore.load({ sideline: false })
+      const workspace = await this.loadForEdit()
       const source = sourceProject(workspace, sourceNodeId)
       if (!source) return { ok: false, error: 'source node is not in exactly one saved project' }
       if (!sourceCanControl(source.node, this.deps.agentIdOf)) {
@@ -1044,8 +1415,8 @@ export class HeadlessNodeFactory {
       }
       const byId = new Map(changed.map((node) => [node.id, node]))
       source.project.nodes = source.project.nodes.map((node) => byId.get(node.id) ?? node)
-      await this.deps.workspaceStore.save(workspace)
-      this.publish(source.project, changed)
+      await this.castAndSave(workspace)
+      await this.publishPersisted([source.project.id])
       const skipped = ids.length - changed.length
       const note = skipped ? ` (${skipped} unknown id(s) skipped)` : ''
       return {
@@ -1065,11 +1436,49 @@ export class HeadlessNodeFactory {
     return this.runExclusive(async () => {
       const flagError = unsupportedFlags(
         args,
+        // `run-now` (#925) is a no-op, since a server open already delivers immediately; only its
+        // pairing with `--after` is refused, just below.
         verb === 'open-terminal'
-          ? new Set(['count', 'cwd', 'cmd', 'after', 'project'])
-          : new Set(['agent', 'count', 'cwd', 'prompt', 'after', 'project', 'model'])
+          ? new Set(['count', 'cwd', 'cmd', 'after', 'after-success', 'success-deadline', 'project', 'run-now'])
+          : new Set([
+              'agent',
+              'count',
+              'cwd',
+              'prompt',
+              'after',
+              'after-success',
+              'success-deadline',
+              'project',
+              'model',
+              'issue',
+              'run-now'
+            ])
       )
       if (flagError) return { ok: false, error: `${verb}: ${flagError}` }
+      // "Start now" and "start when X is done" contradict each other: refused in the desktop's
+      // words, before anything is created, rather than silently opening an armed node.
+      if (runNowRequested(args) && args.after) return { ok: false, error: RUN_NOW_AFTER_REFUSAL }
+      if (runNowRequested(args) && args['after-success'] !== undefined) {
+        return { ok: false, error: RUN_NOW_AFTER_SUCCESS_REFUSAL }
+      }
+      // `--after-success` (@shared/station-outcome): the shape was checked in `parseControlRequest`;
+      // re-parsed here with the same grammar. The ids are folded into `after` — a success wait is
+      // `--after` plus the station's report — so the existence, status-reporting and creator checks
+      // below apply to them unchanged; the hold adds the report.
+      const successParsed =
+        args['after-success'] !== undefined ? parseAfterSuccessArg(args['after-success']) : undefined
+      if (successParsed && !successParsed.ok) return { ok: false, error: `${verb}: ${successParsed.error}` }
+      const successIds = successParsed?.ok ? successParsed.ids : []
+      const successDeadline = parseSuccessDeadlineArg(args['success-deadline'])
+      if (!successDeadline.ok) return { ok: false, error: `${verb}: ${successDeadline.error}` }
+      const afterArg = successIds.length
+        ? [
+            ...new Set([
+              ...(args.after ?? '').split(',').map((id) => id.trim()).filter(Boolean),
+              ...successIds
+            ])
+          ].join(',')
+        : args.after
       if (!verified) {
         return {
           ok: false,
@@ -1077,7 +1486,7 @@ export class HeadlessNodeFactory {
         }
       }
 
-      const workspace = await this.deps.workspaceStore.load({ sideline: false })
+      const workspace = await this.loadForEdit()
       const source = sourceProject(workspace, sourceNodeId)
       if (!source) return { ok: false, error: 'source node is not in exactly one saved project' }
       if (!sourceCanControl(source.node, this.deps.agentIdOf)) {
@@ -1085,10 +1494,33 @@ export class HeadlessNodeFactory {
       }
       const target = this.resolveTarget(workspace, source, verb, args, verified)
       if ('ok' in target) return target
-      const after = this.resolveAfter(target, args.after, verb)
+      const after = this.resolveAfter(target, afterArg, verb)
       if (!Array.isArray(after)) return after
       const unownedAfter = this.unownedMutation(sourceNodeId, after)
       if (unownedAfter) return this.ownershipRefusal(verb, sourceNodeId, unownedAfter)
+      // A success wait is only as good as the station's ability to REPORT: only an agent with canvas
+      // control has `report-outcome`, so waiting on anything else could only end at the deadline.
+      for (const depId of successIds) {
+        const dep = target.nodes.find((candidate) => candidate.id === depId)
+        if (!dep || !sourceCanControl(dep, this.deps.agentIdOf)) {
+          return { ok: false, error: successDepRefusal(verb, depId) }
+        }
+      }
+      const successHold: SuccessWaitHold | undefined = successIds.length
+        ? { deps: successIds, deadlineAt: this.now() + successDeadline.ms }
+        : undefined
+      // `--issue`: resolved against the project the node OPENS IN, before anything is written. The
+      // shape gate already ran in `parseControlRequest`; this re-parses with the same grammar.
+      let issueRef: IssueRef | undefined
+      if (verb === 'open-agent' && args.issue !== undefined) {
+        const board = target.kanban?.github
+        const repository = board
+          ? (await this.deps.issueRepository?.(target.id).catch(() => null)) ?? board.repository ?? null
+          : null
+        const issue = resolveIssueArg(args.issue, repository)
+        if (!issue.ok) return { ok: false, error: `open-agent: ${issue.error}` }
+        issueRef = issue.ref
+      }
 
       const settings = this.deps.settings()
       const nodeSize = terminalSize(settings)
@@ -1131,7 +1563,12 @@ export class HeadlessNodeFactory {
       for (const [depId, state] of afterStates) {
         if (state === 'working') this.awaitingFirstWorking.delete(depId)
       }
-      const mustWait = after.some((depId) => afterStates.get(depId) !== 'done')
+      const mustWait =
+        // A `done` from before new work was handed over is not this wait's `done`
+        // (core/station-handover.ts): the creation shortcut must not start the node on it.
+        after.some((depId) => afterStates.get(depId) !== 'done' || this.handedOver(depId)) ||
+        (!!successHold &&
+          !successWaitSatisfied(successHold, (d) => this.successFacts(target, d), this.now()))
       const awaitWorking = after.filter((depId) =>
         afterStates.get(depId) !== 'done' &&
         afterStates.get(depId) !== 'working' &&
@@ -1161,13 +1598,17 @@ export class HeadlessNodeFactory {
           command = assembleLaunchCommand(
             {
               agentId: agentId as AgentId,
-              initialPrompt: args.prompt,
+              // An issue-bound session's first prompt is the REFERENCE line, never the issue's text.
+              initialPrompt: issueRef ? issueLaunchPrompt(issueRef, args.prompt) : args.prompt,
               permissionMode,
               sessionId: mintedSessionId,
               sessionIdFlagSupported,
               launchCmdOverride: settings.agentLaunchCommands?.[agentId as BuiltinAgentId],
               sharedIdentity: codexSharedIdentity,
-              approvalCaps: { codexApprovalValues: codexCaps.approvalValues },
+              approvalCaps: {
+                codexApprovalValues: codexCaps.approvalValues,
+                codexNoDaemon: codexCaps.noDaemon ?? null
+              },
               model: args.model
             },
             this.deps.env ?? process.env
@@ -1184,7 +1625,8 @@ export class HeadlessNodeFactory {
               executor: 'server' as const,
               attempted: !mustWait,
               ...(!mustWait ? { manualOnly: true } : {}),
-              ...(awaitWorking.length ? { awaitWorking: [...awaitWorking] } : {})
+              ...(awaitWorking.length ? { awaitWorking: [...awaitWorking] } : {}),
+              ...(successHold ? { afterSuccess: successHold } : {})
             }
           : undefined
         const node: CanvasNodeState = {
@@ -1200,6 +1642,7 @@ export class HeadlessNodeFactory {
           cwd,
           ...(verb === 'open-agent' ? { agentId: agentId as AgentId } : {}),
           ...(args.model && verb === 'open-agent' ? { agentModel: args.model } : {}),
+          ...(issueRef && verb === 'open-agent' ? { issueRef } : {}),
           ...(mintedSessionId ? { agentSessionId: mintedSessionId } : {}),
           ...(source.node.accountId && verb === 'open-agent' &&
           (agentId === 'claude' || agentId === 'codex')
@@ -1228,39 +1671,73 @@ export class HeadlessNodeFactory {
       target.nodes.push(...created)
       target.ropes = ropes
       target.bridges = bridges
-      await this.deps.workspaceStore.save(workspace)
+      // Creation is written BEFORE anything is launched, and a refused save (canvas control is
+      // stopping) is a failure here: a launch into a node that is not on the canvas is an orphan
+      // agent session nobody can see.
+      if (!(await this.castAndSave(workspace))) {
+        return {
+          ok: false,
+          error: `${verb}-not-saved: nothing was opened: the canvas could not be written (canvas control is stopping)`
+        }
+      }
       for (const node of created) {
         this.ownership.record(node.id, { sourceNodeId, projectId: target.id })
       }
-      this.publish(target, created)
+      await this.publishPersisted([target.id])
+      if (issueRef) {
+        for (const node of created) {
+          await this.logRun(target.id, runStartedEvent(issueRef, {
+            id: node.id,
+            title: node.title,
+            agentId: node.agentId,
+            agentSessionId: node.agentSessionId
+          }))
+        }
+      }
 
       const failed: string[] = []
+      // Why each one failed, reported per id (#925): a reply that says only "retained for Run now"
+      // hides the reason Run now would repeat (`line-too-long`).
+      const reasons: Record<string, HeadlessLaunchFailure> = {}
+      const fail = (id: string, reason: HeadlessLaunchFailure): void => {
+        failed.push(id)
+        reasons[id] = reason
+      }
       for (const node of created) {
         try {
-          const result = await this.attach(target, node)
-          if (!result.sessionId) {
-            failed.push(node.id)
+          const command = commands.get(node.id)
+          if (!command) {
+            // Nothing to deliver now (a plain terminal, or a launch held for `--after`): spawn only.
+            const result = await this.attach(target, node)
+            if (!result.sessionId) fail(node.id, 'spawn-failed')
+            else if (verb === 'open-agent' && result.fresh) this.awaitingFirstWorking.add(node.id)
             continue
           }
-          if (verb === 'open-agent' && result.fresh) this.awaitingFirstWorking.add(node.id)
-          const command = commands.get(node.id)
-          if (command) {
-            if (isLaunchShell(await this.deps.ptyManager.paneCommand(node.id)) &&
-                (await this.deps.ptyManager.sendText(node.id, command)) === true) node.pendingLaunch = undefined
-            else failed.push(node.id)
-          }
+          const launched = await this.launch(target, node, command)
+          if (verb === 'open-agent' && launched.fresh) this.awaitingFirstWorking.add(node.id)
+          if (launched.outcome === 'delivered') node.pendingLaunch = undefined
+          else fail(node.id, launched.reason)
         } catch {
-          failed.push(node.id)
+          // The launcher answers its own failures; only the spawn-only `attach` above throws.
+          fail(node.id, 'spawn-failed')
         }
       }
 
       // Creation and delivery are separate transactions. A refused/throwing send retains the
       // exact command for the user's Run now action; boot still cannot adopt persisted nodes.
+      // The launches took time, so their outcomes are written onto a fresh read, never this copy.
+      const outcomes: NodePatch[] = []
       for (const node of created) {
-        if (failed.includes(node.id) && node.pendingLaunch) node.pendingLaunch.manualOnly = true
+        const command = commands.get(node.id)
+        if (failed.includes(node.id) && node.pendingLaunch) {
+          node.pendingLaunch.manualOnly = true
+          outcomes.push(claimLaunch(target.id, node.id, node.pendingLaunch.command, false))
+        } else if (command && !node.pendingLaunch) {
+          outcomes.push(clearLaunch(target.id, node.id, command))
+        }
       }
-      await this.deps.workspaceStore.save(workspace)
-      this.publish(target, created)
+      await this.savePatches(outcomes)
+      await this.publishPersisted([target.id])
       const ids = created.map((node) => node.id)
       const queuedIds = created
         .filter((node) => node.pendingLaunch && !failed.includes(node.id))
@@ -1272,10 +1749,13 @@ export class HeadlessNodeFactory {
       if (failed.length) {
         return {
           ok: false,
-          error:
-            `launch-failed: node(s) ${failed.join(', ')} were persisted but their PTY or initial ` +
-            'command could not be delivered; launch retained for Run now in the node; do not repeat the open request',
-          result: { ids, id: ids[0], after, ...launchResult }
+          error: launchFailedError(
+            created
+              .filter((node) => failed.includes(node.id))
+              .map((node) => ({ id: node.id, reason: reasons[node.id], retained: !!node.pendingLaunch })),
+            verb
+          ),
+          result: { ids, id: ids[0], after, ...launchResult, reasons, ...(successHold ? { afterSuccess: successHold.deps } : {}) }
         }
       }
       return {
@@ -1284,8 +1764,16 @@ export class HeadlessNodeFactory {
           `opened ${count} ${verb === 'open-agent' ? `${agentId} session` : 'terminal'}(s): ` +
           ids.join(', ') +
           (queuedIds.length ? `; queued: ${queuedIds.join(', ')}` : '') +
-          (deliveredIds.length ? '; launch delivered; agent startup is not confirmed' : ''),
-        result: { ids, id: ids[0], after, ...launchResult }
+          (deliveredIds.length ? '; launch delivered; agent startup is not confirmed' : '') +
+          (successHold ? `; waits for a reported success from: ${successHold.deps.join(', ')}` : ''),
+        result: {
+          ids,
+          id: ids[0],
+          after,
+          ...launchResult,
+          ...(issueRef ? { issue: `${issueRef.owner}/${issueRef.repo}#${issueRef.number}` } : {}),
+          ...(successHold ? { afterSuccess: successHold.deps } : {})
+        }
       }
     })
   }
@@ -1294,7 +1782,7 @@ export class HeadlessNodeFactory {
     return this.runExclusive(async () => {
       const parsed = parseStickyArgs(args)
       if ('error' in parsed) return { ok: false, error: `sticky: ${parsed.error}` }
-      const workspace = await this.deps.workspaceStore.load({ sideline: false })
+      const workspace = await this.loadForEdit()
       const source = sourceProject(workspace, sourceNodeId)
       if (!source) return { ok: false, error: 'source node is not in exactly one saved project' }
       if (!sourceCanControl(source.node, this.deps.agentIdOf)) {
@@ -1344,11 +1832,11 @@ export class HeadlessNodeFactory {
       node.text = write.text
       node.textUpdatedAt = (this.deps.now ?? Date.now)()
       node.textUpdatedBy = source.node.title || source.node.id
-      await this.deps.workspaceStore.save(workspace)
+      await this.castAndSave(workspace)
       if (created) {
         this.ownership.record(node.id, { sourceNodeId, projectId: source.project.id })
       }
-      this.publish(source.project, [node])
+      await this.publishPersisted([source.project.id])
       return {
         ok: true,
         message: `${created ? 'created' : 'updated'} sticky ${node.id} (${write.mode})`,
@@ -1366,8 +1854,10 @@ export class HeadlessNodeFactory {
     return Promise.resolve()
   }
 
-  onAgentEvent(event: Pick<NormalizedAgentEvent, 'nodeId' | 'state'>): void {
+  onAgentEvent(event: Pick<NormalizedAgentEvent, 'nodeId' | 'state' | 'errored' | 'newTurn'>): void {
     if (this.stopped || !event?.nodeId) return
+    if (event.state === 'done' && event.errored === true) this.lastTurnErrored.add(event.nodeId)
+    else if (event.newTurn === true) this.lastTurnErrored.delete(event.nodeId)
     if (event.state === 'working') this.awaitingFirstWorking.delete(event.nodeId)
     if (event.state === 'working' || event.state === 'done') void this.refreshArmed(event)
   }
@@ -1375,41 +1865,63 @@ export class HeadlessNodeFactory {
   refreshArmed(observed?: Pick<NormalizedAgentEvent, 'nodeId' | 'state'>): Promise<void> {
     return this.runExclusive(async () => {
       if (this.stopped) return
-      const workspace = await this.deps.workspaceStore.load({ sideline: false })
-      const changedByProject = new Map<Project, CanvasNodeState[]>()
+      // A READ-ONLY look: every working/done hook event lands here, and most find nothing armed or
+      // nothing ready. Nothing is copied or saved until an arm actually moves; then each save goes
+      // through `savePatches`, a fresh read with only this pass's own patches re-applied, because a
+      // delivery below can take seconds and must never write back the view it started from.
+      const view = await this.readWorkspace()
+      const patches: NodePatch[] = []
+      const changedProjects = new Set<string>()
+      let unsaved = false
+      const patch = (p: NodePatch): void => {
+        patches.push(p)
+        changedProjects.add(p.projectId)
+        unsaved = true
+      }
 
-      for (const project of workspace.projects) {
+      for (const project of view.projects) {
         for (const node of project.nodes) {
           const pending = node.pendingLaunch
           if (!pending || pending.executor !== 'server' || !pending.command || pending.manualOnly) continue
           // A persisted arm surviving a restart is data, not creator proof. Only a node freshly
           // spawned for this caller during the current run may receive automatic input.
           if (!this.ownership.ownerOf(node.id)) continue
-          const markChanged = (): void => {
-            const list = changedByProject.get(project) ?? []
-            if (!list.includes(node)) list.push(node)
-            changedByProject.set(project, list)
-          }
-          if (observed?.state === 'working' && pending.awaitWorking?.includes(observed.nodeId)) {
-            const remaining = pending.awaitWorking.filter((depId) => depId !== observed.nodeId)
-            pending.awaitWorking = remaining.length ? remaining : undefined
+          const command = pending.command
+          let awaitWorking = pending.awaitWorking
+          if (observed?.state === 'working' && awaitWorking?.includes(observed.nodeId)) {
+            const depId = observed.nodeId
+            const rest = awaitWorking.filter((id) => id !== depId)
+            awaitWorking = rest.length ? rest : undefined
             // Persist the evidence even if the dependent PTY is temporarily unavailable. Losing
             // this mutation would strand the arm when the next event is the legitimate `done`.
-            markChanged()
+            patch(dropAwaitWorking(project.id, node.id, command, depId))
           }
-          for (const depId of pending.awaitWorking ?? []) {
+          for (const depId of awaitWorking ?? []) {
             if (!(observed?.state === 'working' && observed.nodeId === depId))
               this.awaitingFirstWorking.add(depId)
           }
           const ready = pending.after.every((depId) => {
             const stillExists = project.nodes.some((candidate) => candidate.id === depId)
             if (!stillExists) return true
-            if (pending.awaitWorking?.includes(depId)) return false
+            if (awaitWorking?.includes(depId)) return false
+            if (this.handedOver(depId)) return false
             return observed?.nodeId === depId
               ? observed.state === 'done'
               : this.deps.stateOf(depId) === 'done'
           })
           if (!ready) continue
+          // `--after-success`: every named station also REPORTED success. The persisted hold is
+          // hand-editable input, so it is re-validated here — a malformed one never fires.
+          const successHold = normalizeSuccessWaitHold(pending.afterSuccess)
+          if (
+            successHold &&
+            !successWaitSatisfied(
+              successHold,
+              (d) => this.successFacts(project, d, observed),
+              this.now()
+            )
+          )
+            continue
           // `sessionExists` is a probe, whereas `createHeadless` is attach-or-create. Never call
           // the latter from boot/event reconciliation: a dead node stays dormant until its owner
           // explicitly opens it or a user views it. A probe failure also stays dormant because an
@@ -1419,14 +1931,16 @@ export class HeadlessNodeFactory {
           if (!live) continue
           // Persist the attempt BEFORE input. A failed/uncertain send (or a crash before its
           // acknowledgement save) must never be replayed by an unrelated hook.
-          pending.manualOnly = true
-          pending.attempted = true
-          await this.deps.workspaceStore.save(workspace)
-          markChanged()
+          patch(claimLaunch(project.id, node.id, command, true))
+          const claim = await this.savePatches(patches)
+          unsaved = false
+          // Type ONLY what this pass claimed on disk: the save landed (a stopping factory refuses it)
+          // and the claim applied to the fresh read (a teammate may have deleted the node, re-armed it
+          // with another command, or claimed it, since the look above).
+          if (!claim.saved || !claim.applied[patches.length - 1]) continue
           if (!isLaunchShell(await this.deps.ptyManager.paneCommand(node.id).catch(() => null))) continue
-          if ((await this.deps.ptyManager.sendText(node.id, pending.command).catch(() => false)) !== true) continue
-          node.pendingLaunch = undefined
-          markChanged()
+          if ((await this.deps.ptyManager.sendText(node.id, command).catch(() => false)) !== true) continue
+          patch(clearLaunch(project.id, node.id, command))
         }
       }
 
@@ -1434,10 +1948,8 @@ export class HeadlessNodeFactory {
       // process-local fresh-spawn index aligned even when several arms named the same dependency.
       if (observed?.state === 'working') this.awaitingFirstWorking.delete(observed.nodeId)
 
-      if (changedByProject.size) {
-        await this.deps.workspaceStore.save(workspace)
-        for (const [project, nodes] of changedByProject) this.publish(project, nodes)
-      }
+      if (unsaved) await this.savePatches(patches)
+      if (changedProjects.size) await this.publishPersisted(changedProjects)
     })
   }
 

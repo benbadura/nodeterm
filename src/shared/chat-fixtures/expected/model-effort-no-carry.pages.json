@@ -1,0 +1,49 @@
+[
+  {
+    "before": null,
+    "maxBytes": 262144,
+    "grownMaxBytes": 262144,
+    "start": 0,
+    "parse": {
+      "messages": [
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "a"
+            }
+          ],
+          "at": 1790362800000,
+          "key": 0
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "next"
+            }
+          ],
+          "at": 1790362801000,
+          "key": 382
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "b"
+            }
+          ],
+          "at": 1790362802000,
+          "key": 635
+        }
+      ],
+      "olderCursor": null,
+      "unmatchedResults": [],
+      "model": "claude-fable-5",
+      "noCompleteLine": false
+    }
+  }
+]

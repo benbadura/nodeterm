@@ -1,0 +1,51 @@
+{
+  "page": {
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "my prompt"
+          }
+        ],
+        "at": 1790589602000
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "explain @src/app.ts"
+          }
+        ],
+        "at": 1790589603000
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "what is in this image?"
+          }
+        ],
+        "at": 1790589604000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "A cat."
+          }
+        ],
+        "at": 1790589608000
+      }
+    ],
+    "found": true,
+    "olderCursor": null,
+    "unmatchedResults": [],
+    "model": "gemini-3.5-flash"
+  },
+  "skipped": 0
+}

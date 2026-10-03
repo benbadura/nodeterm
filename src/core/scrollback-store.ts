@@ -38,8 +38,10 @@ function trailing(data: string): Buffer {
 // All async (fs.promises): snapshots fire per session on a 15s timer and in bursts when many
 // nodes detach at once (project switch / quit) — sync writes here blocked the main event loop,
 // which stalls PTY streaming and all IPC.
-export async function writeScrollback(persistKey: string, data: string): Promise<void> {
-  if (!data) return
+/** Never throws. Resolves true only when the snapshot actually landed on disk — a caller that
+ *  remembers what it wrote (pty-manager's digest skip) must not remember a failed write. */
+export async function writeScrollback(persistKey: string, data: string): Promise<boolean> {
+  if (!data) return false
   const file = snapshotPath(persistKey)
   // Unique tmp per call: overlapping writes for the same key (timer tick + detach snapshot)
   // must not interleave into one tmp file and rename a torn write into place.
@@ -48,9 +50,11 @@ export async function writeScrollback(persistKey: string, data: string): Promise
     await fs.promises.mkdir(dir(), { recursive: true })
     await fs.promises.writeFile(tmp, trailing(data))
     await renameAtomic(tmp, file)
+    return true
   } catch {
     // best-effort: a failed snapshot just means no cold-restore replay for this node
     await fs.promises.rm(tmp, { force: true }).catch(() => {})
+    return false
   }
 }
 

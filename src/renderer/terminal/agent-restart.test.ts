@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { resumeCommand } from '../../shared/agents/config'
+import { resumeCommand, setCustomAgentBaseResolver } from '../../shared/agents/config'
 import { withPermissionMode } from '../../shared/agents/approval-mode'
 import {
   __resetAgentRestartForTests,
@@ -8,16 +8,20 @@ import {
   agentRestartFn,
   clearEnvEligibility,
   exitSequence,
+  exitTimeoutNotice,
   guardConcurrentRestart,
   isShellCommand,
   performExitPhase,
   performRestartResume,
   performResumePhase,
   planBulkRestart,
+  RESTART_EXIT_TIMEOUT_MS,
+  RESTART_LATE_EXIT_MS,
   registerAgentHibernate,
   registerAgentRestart,
   restartEligibility,
   restartSessionId,
+  settleRecycledNode,
   settleRestart,
   summarizeBulkRestart,
   summarizeOutcomes,
@@ -161,9 +165,9 @@ describe('performRestartResume', () => {
 
   it('sends exit, waits for the shell, then delivers the resume command', async () => {
     const { written, io } = fakeIo()
-    let pane = 'claude'
+    let pane = 'gemini'
     const p = performRestartResume({
-      agentId: 'claude',
+      agentId: 'gemini',
       sessionId: 'sid-1',
       io,
       paneCommand: async () => pane,
@@ -174,7 +178,27 @@ describe('performRestartResume', () => {
     pane = 'zsh'
     await vi.advanceTimersByTimeAsync(5000)
     expect(await p).toBe('restarted')
-    expect(written.slice(0, 2)).toEqual(['\x15', '/exit\r'])
+    expect(written.slice(0, 2)).toEqual(['\x15', '/quit\r'])
+    expect(written.join('')).toContain('gemini --resume sid-1')
+  })
+
+  it('restarts claude with Ctrl-Cs only, then delivers its resume command (issue #928)', async () => {
+    const { written, io } = fakeIo()
+    let pane = 'claude'
+    const p = performRestartResume({
+      agentId: 'claude',
+      sessionId: 'sid-1',
+      io,
+      paneCommand: async () => pane,
+      timeoutMs: 6000,
+      pollMs: 100
+    })
+    await vi.advanceTimersByTimeAsync(400) // the three Ctrl-Cs, 150ms apart
+    expect(written).toEqual(['\x03', '\x03', '\x03'])
+    pane = 'zsh'
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(await p).toBe('restarted')
+    expect(written.join('')).not.toContain('/exit')
     expect(written.join('')).toContain('claude --resume sid-1')
   })
 
@@ -188,7 +212,8 @@ describe('performRestartResume', () => {
       timeoutMs: 1000,
       pollMs: 100
     })
-    await vi.advanceTimersByTimeAsync(2000)
+    // past the base window AND the restart's late window (RESTART_LATE_EXIT_MS)
+    await vi.advanceTimersByTimeAsync(62_000)
     expect(await p).toBe('exit-timeout')
     expect(written.join('')).not.toContain('--resume')
   })
@@ -249,9 +274,9 @@ describe('performRestartResume', () => {
 
   it('clears the pending input line before asking the CLI to quit', async () => {
     const { written, io } = fakeIo()
-    let pane = 'claude'
+    let pane = 'gemini'
     const p = performRestartResume({
-      agentId: 'claude',
+      agentId: 'gemini',
       sessionId: 'sid-1',
       io,
       paneCommand: async () => pane,
@@ -264,7 +289,7 @@ describe('performRestartResume', () => {
     expect(await p).toBe('restarted')
     // Half-typed user text in the prompt would otherwise be SUBMITTED as `…the/exit`.
     expect(written[0]).toBe('\x15')
-    expect(written[1]).toBe('/exit\r')
+    expect(written[1]).toBe('/quit\r')
   })
 
   it('takes a pane command that CHANGED away from the CLI as proof it quit', async () => {
@@ -300,7 +325,8 @@ describe('performRestartResume', () => {
     pane = 'node' // a momentary foreground child of the CLI, not its exit
     await vi.advanceTimersByTimeAsync(100)
     pane = 'claude'
-    await vi.advanceTimersByTimeAsync(2000)
+    // past the base window AND the restart's late window (RESTART_LATE_EXIT_MS)
+    await vi.advanceTimersByTimeAsync(62_000)
     expect(await p).toBe('exit-timeout')
     expect(written.join('')).not.toContain('--resume')
   })
@@ -366,7 +392,7 @@ describe('performRestartResume', () => {
     const { written, io } = silentIo()
     let cancel: (() => void) | undefined
     const p = performRestartResume({
-      agentId: 'claude',
+      agentId: 'gemini',
       sessionId: 'sid-1',
       io,
       paneCommand: async () => 'zsh',
@@ -482,9 +508,91 @@ describe('performRestartResume', () => {
       pollMs: 100,
       onDelivery: (c) => handles.push(c)
     })
-    await vi.advanceTimersByTimeAsync(2000)
+    // past the base window AND the restart's late window (RESTART_LATE_EXIT_MS)
+    await vi.advanceTimersByTimeAsync(62_000)
     expect(await p).toBe('exit-timeout')
     expect(handles).toEqual([])
+  })
+})
+
+describe('performRestartResume — a CLI that is slow to quit (issue #899)', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('keeps watching past the base window and resumes a CLI that quits late', async () => {
+    const { written, io } = fakeIo()
+    let pane = '2.1.280' // what tmux reports for a running claude: its version, not `node`
+    const p = performRestartResume({
+      agentId: 'claude',
+      sessionId: 'sid-1',
+      io,
+      paneCommand: async () => pane,
+      pollMs: 250
+    })
+    await vi.advanceTimersByTimeAsync(RESTART_EXIT_TIMEOUT_MS + 14_000) // well past the base window
+    pane = 'zsh' // the CLI finally lets go
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(await p).toBe('restarted')
+    expect(written.slice(0, 3)).toEqual(['\x03', '\x03', '\x03'])
+    expect(written.join('')).toContain('claude --resume sid-1')
+  })
+
+  it('is still bounded: a CLI that never quits is reported once the late window runs out', async () => {
+    const { written, io } = fakeIo()
+    let settled = false
+    const p = performRestartResume({
+      agentId: 'claude',
+      sessionId: 'sid-1',
+      io,
+      paneCommand: async () => 'claude',
+      pollMs: 250
+    }).finally(() => {
+      settled = true
+    })
+    await vi.advanceTimersByTimeAsync(RESTART_EXIT_TIMEOUT_MS + 1000)
+    expect(settled).toBe(false) // the base window alone no longer ends a restart
+    await vi.advanceTimersByTimeAsync(RESTART_LATE_EXIT_MS)
+    expect(await p).toBe('exit-timeout')
+    expect(written.join('')).not.toContain('--resume')
+  })
+
+  it('does not spend the late window on a pane it can no longer read', async () => {
+    const { io } = fakeIo()
+    let pane: string | null = 'claude'
+    let settled = false
+    const p = performRestartResume({
+      agentId: 'claude',
+      sessionId: 'sid-1',
+      io,
+      paneCommand: async () => pane,
+      pollMs: 250
+    }).finally(() => {
+      settled = true
+    })
+    await vi.advanceTimersByTimeAsync(RESTART_EXIT_TIMEOUT_MS + 1000)
+    pane = null
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(settled).toBe(true)
+    expect(await p).toBe('exit-timeout')
+  })
+})
+
+describe('exitTimeoutNotice', () => {
+  it('hands over the resume line for a CLI that may quit after we stopped watching (#899)', () => {
+    const text = exitTimeoutNotice('Restart', resumeCommand('claude', 'sid-1'))
+    expect(text).toContain('Restart failed')
+    expect(text).toContain('Nothing was killed')
+    // The window it names is the one a restart actually waited, not the base 6s.
+    expect(text).toContain(`${(RESTART_EXIT_TIMEOUT_MS + RESTART_LATE_EXIT_MS) / 1000}s`)
+    expect(text).toContain('claude --resume sid-1')
+  })
+
+  it('falls back to "check the pane" when there is no resume line to offer', () => {
+    for (const line of [null, undefined, '']) {
+      const text = exitTimeoutNotice('Restart', line)
+      expect(text).toContain('Check the pane.')
+      expect(text).not.toContain('resume the conversation')
+    }
   })
 })
 
@@ -494,9 +602,9 @@ describe('performExitPhase', () => {
 
   it('quits the CLI and reports exited once the pane reports a shell — writing nothing after', async () => {
     const { written, io } = fakeIo()
-    let pane = 'claude'
+    let pane = 'gemini'
     const p = performExitPhase({
-      agentId: 'claude',
+      agentId: 'gemini',
       sessionId: 'sid-1',
       io,
       paneCommand: async () => pane,
@@ -509,7 +617,7 @@ describe('performExitPhase', () => {
     expect(await p).toBe('exited')
     // The exit phase's ENTIRE output: clear the line, then the CLI's own exit command. The resume
     // line belongs to the other phase, so nothing here may reach the pane after `/exit`.
-    expect(written).toEqual(['\x15', '/exit\r'])
+    expect(written).toEqual(['\x15', '/quit\r'])
   })
 
   it('writes NOTHING and refuses when the pre-flight probe answers null', async () => {
@@ -528,19 +636,29 @@ describe('performExitPhase', () => {
     expect(written).toEqual([])
   })
 
+  it('has no late window unless the caller asks for one (Eco sweep, Pause)', async () => {
+    const { io } = fakeIo()
+    let pane = 'claude'
+    const p = performExitPhase({ agentId: 'claude', sessionId: 'sid-1', io, paneCommand: async () => pane })
+    await vi.advanceTimersByTimeAsync(RESTART_EXIT_TIMEOUT_MS + 1000)
+    pane = 'zsh'
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(await p).toBe('exit-timeout')
+  })
+
   it('reports exit-timeout, without a resume, when the CLI never lets go of the pane', async () => {
     const { written, io } = fakeIo()
     const p = performExitPhase({
-      agentId: 'claude',
+      agentId: 'gemini',
       sessionId: 'sid-1',
       io,
-      paneCommand: async () => 'claude',
+      paneCommand: async () => 'gemini',
       timeoutMs: 1000,
       pollMs: 100
     })
     await vi.advanceTimersByTimeAsync(2000)
     expect(await p).toBe('exit-timeout')
-    expect(written).toEqual(['\x15', '/exit\r']) // never force-killed, never resumed
+    expect(written).toEqual(['\x15', '/quit\r']) // never force-killed, never resumed
   })
 
   it('refuses a session we could never resume into — the exit alone would lose it', async () => {
@@ -584,19 +702,19 @@ describe('performExitPhase', () => {
     // CONSECUTIVE polls, because a single changed reading can be a momentary foreground CHILD of a
     // still-running CLI. Typing the resume line into a live CLI would send it as a message.
     const { io } = fakeIo()
-    const panes = ['claude', 'git', 'claude', 'nu', 'nu']
+    const panes = ['gemini', 'git', 'gemini', 'nu', 'nu']
     let i = 0
     const p = performExitPhase({
-      agentId: 'claude',
+      agentId: 'gemini',
       sessionId: 'sid-1',
       io,
-      // The pre-flight consumes the first reading, so `before` is 'claude'.
+      // The pre-flight consumes the first reading, so `before` is 'gemini'.
       paneCommand: async () => panes[Math.min(i++, panes.length - 1)] ?? null,
       timeoutMs: 5000,
       pollMs: 100
     })
     await vi.advanceTimersByTimeAsync(150) // poll 1 → 'git': changed, but not yet twice
-    await vi.advanceTimersByTimeAsync(100) // poll 2 → 'claude': the CLI is still there
+    await vi.advanceTimersByTimeAsync(100) // poll 2 → 'gemini': the CLI is still there
     await vi.advanceTimersByTimeAsync(250) // polls 3+4 → 'nu' twice in a row
     expect(await p).toBe('exited')
   })
@@ -619,32 +737,17 @@ describe('performExitPhase', () => {
     expect(await p).toBe('not-eligible') // not a timeout: there is no pane left to time out in
   })
 
-  it('splits opencode exit into text then CR (batched-input guard), leaving others one-burst', async () => {
-    // opencode's TUI swallows a one-burst `/exit\r` (measured 1.18.18-1.18.25, Linux, tmux, isolated
-    // socket: `/exit` left in composer with popup armed, exit-timeout at 6s; split CR by 100ms exits
-    // in ~500ms, shipped with 150ms). This pins the split so a refactor cannot silently re-batch it.
-    for (const agentId of ['opencode'] as const) {
-      const { written, io } = fakeIo()
-      let pane = 'opencode'
-      const p = performExitPhase({
-        agentId,
-        sessionId: 'sid-1',
-        io,
-        paneCommand: async () => pane,
-        timeoutMs: 6000,
-        pollMs: 100
-      })
-      // Pre-flight resolves; KILL_LINE + exit text are written, CR not yet.
-      await vi.advanceTimersByTimeAsync(0)
-      expect(written).toEqual(['\x15', '/exit'])
-      await vi.advanceTimersByTimeAsync(150)
-      expect(written).toEqual(['\x15', '/exit', '\r'])
-      pane = 'zsh'
-      await vi.advanceTimersByTimeAsync(5000)
-      expect(await p).toBe('exited')
-    }
-    // Every other agent keeps the historical one-burst path byte-identical.
-    for (const agentId of ['claude', 'codex', 'grok', 'gemini', 'copilot'] as const) {
+  it('quits grok, opencode and copilot with separate Ctrl-Cs and never types into the composer', async () => {
+    // Measured on grok 1.0.40, opencode 1.18.32 and copilot 1.0.88 (macOS, isolated tmux socket,
+    // CLI started from an interactive shell): Ctrl-U clears only the cursor's line, so a typed exit
+    // submitted the rest of a multi-line draft as a prompt. Ctrl-C clears the whole composer:
+    // grok then needs two more (arm + exit), opencode and copilot one more.
+    const cases = [
+      ['grok', 3],
+      ['opencode', 2],
+      ['copilot', 2]
+    ] as const
+    for (const [agentId, count] of cases) {
       const { written, io } = fakeIo()
       let pane: string = agentId
       const p = performExitPhase({
@@ -656,32 +759,158 @@ describe('performExitPhase', () => {
         pollMs: 100
       })
       await vi.advanceTimersByTimeAsync(0)
-      const exit = agentId === 'claude' || agentId === 'copilot' ? '/exit' : '/quit'
-      expect(written).toEqual(['\x15', `${exit}\r`])
+      expect(written, agentId).toEqual(['\x03']) // never in the same burst as the next one
+      await vi.advanceTimersByTimeAsync(150 * (count - 1))
+      expect(written, agentId).toEqual(Array(count).fill('\x03'))
       pane = 'zsh'
       await vi.advanceTimersByTimeAsync(5000)
-      expect(await p).toBe('exited')
+      expect(await p, agentId).toBe('exited')
+      expect(written, agentId).toEqual(Array(count).fill('\x03')) // no exit line, no CR, ever
     }
   })
 
-  it('abandons the split CR when the pane dies mid-delay', async () => {
+  it('keeps gemini on its typed exit: line-clear, then a bare `/quit` in one burst', async () => {
+    // gemini is the one agent not measured (its composer is only reachable after a login), so it
+    // keeps the historical path byte-identical.
+    const { written, io } = fakeIo()
+    let pane = 'gemini'
+    const p = performExitPhase({
+      agentId: 'gemini',
+      sessionId: 'sid-1',
+      io,
+      paneCommand: async () => pane,
+      timeoutMs: 6000,
+      pollMs: 100
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(written).toEqual(['\x15', '/quit\r'])
+    pane = 'zsh'
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(await p).toBe('exited')
+  })
+
+  it('quits codex with two separate Ctrl-Cs and never types into its composer (issue #842)', async () => {
+    // codex-cli 0.155.1, isolated tmux socket: a one-burst `/quit\r` is never submitted, and Ctrl-U
+    // clears only one line of the composer, so any typed exit can end up submitting a leftover draft
+    // as a prompt. Ctrl-C clears the whole composer when it holds text and quits when it is empty:
+    // two of them, apart, quit with or without a draft, and nothing is ever submitted.
+    for (const agentId of ['codex', 'custom:codexish'] as const) {
+      setCustomAgentBaseResolver((id) => (id === 'custom:codexish' ? 'codex' : undefined))
+      const { written, io } = fakeIo()
+      let pane = 'codex'
+      const p = performExitPhase({
+        agentId,
+        sessionId: 'sid-1',
+        io,
+        paneCommand: async () => pane,
+        timeoutMs: 6000,
+        pollMs: 100
+      })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(written).toEqual(['\x03']) // never in the same burst as the second one
+      await vi.advanceTimersByTimeAsync(150)
+      expect(written).toEqual(['\x03', '\x03'])
+      pane = 'zsh'
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(await p).toBe('exited')
+      setCustomAgentBaseResolver(null)
+    }
+  })
+
+  it('still reports codex exited when the first Ctrl-C alone quit it (empty composer)', async () => {
+    const { written, io } = fakeIo()
+    let pane = 'codex'
+    const p = performExitPhase({
+      agentId: 'codex',
+      sessionId: 'sid-1',
+      io: {
+        ...io,
+        write: (data: string) => {
+          io.write(data)
+          pane = 'zsh' // an empty composer: codex quits on the very first Ctrl-C
+        }
+      },
+      paneCommand: async () => pane,
+      timeoutMs: 6000,
+      pollMs: 100
+    })
+    await vi.advanceTimersByTimeAsync(150)
+    expect(written).toEqual(['\x03', '\x03']) // the second one lands on the shell prompt
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(await p).toBe('exited')
+  })
+
+  it('quits claude with three separate Ctrl-Cs and never types into its composer (issue #928)', async () => {
+    // Claude Code 2.1.282, isolated tmux socket: Ctrl-U clears only the cursor's line, so a typed
+    // `/exit` after it submits the rest of a multi-line draft as a prompt. One Ctrl-C clears the whole
+    // composer, the next one arms "Press Ctrl-C again to exit", the third exits. With an empty
+    // composer the second one already exits and the third lands on the shell prompt.
+    for (const agentId of ['claude', 'custom:claudeish'] as const) {
+      setCustomAgentBaseResolver((id) => (id === 'custom:claudeish' ? 'claude' : undefined))
+      const { written, io } = fakeIo()
+      let pane = 'claude'
+      const p = performExitPhase({
+        agentId,
+        sessionId: 'sid-1',
+        io,
+        paneCommand: async () => pane,
+        timeoutMs: 6000,
+        pollMs: 100
+      })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(written).toEqual(['\x03'])
+      await vi.advanceTimersByTimeAsync(150)
+      expect(written).toEqual(['\x03', '\x03'])
+      await vi.advanceTimersByTimeAsync(150)
+      expect(written).toEqual(['\x03', '\x03', '\x03'])
+      pane = 'zsh'
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(await p).toBe('exited')
+      setCustomAgentBaseResolver(null)
+    }
+  })
+
+  it('still reports claude exited when the second Ctrl-C already quit it (empty composer)', async () => {
+    const { written, io } = fakeIo()
+    let pane = 'claude'
+    const p = performExitPhase({
+      agentId: 'claude',
+      sessionId: 'sid-1',
+      io: {
+        ...io,
+        write: (data: string) => {
+          io.write(data)
+          // An empty composer: the first Ctrl-C arms "Press Ctrl-C again", the second quits.
+          if (written.length === 2) pane = 'zsh'
+        }
+      },
+      paneCommand: async () => pane,
+      timeoutMs: 6000,
+      pollMs: 100
+    })
+    await vi.advanceTimersByTimeAsync(300)
+    expect(written).toEqual(['\x03', '\x03', '\x03']) // the third one lands on the shell prompt
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(await p).toBe('exited')
+  })
+
+  it('does not send codex its second Ctrl-C when the pane dies in between', async () => {
     const { written, io } = fakeIo()
     let live = true
     const p = performExitPhase({
-      agentId: 'opencode',
+      agentId: 'codex',
       sessionId: 'sid-1',
       io,
-      paneCommand: async () => 'opencode',
+      paneCommand: async () => 'codex',
       timeoutMs: 6000,
       pollMs: 100,
       isLive: () => live
     })
     await vi.advanceTimersByTimeAsync(0)
-    expect(written).toEqual(['\x15', '/exit'])
     live = false
     await vi.advanceTimersByTimeAsync(200)
     expect(await p).toBe('not-eligible')
-    expect(written).toEqual(['\x15', '/exit']) // CR never sent into a dead pane
+    expect(written).toEqual(['\x03'])
   })
 })
 
@@ -817,7 +1046,7 @@ describe('performRestartResume — grok', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())
 
-  it("quits with grok's own exit line and resumes by session id", async () => {
+  it('quits grok with three Ctrl-Cs and resumes by session id', async () => {
     const { written, io } = fakeIo()
     let pane = 'grok'
     const p = performRestartResume({
@@ -828,12 +1057,12 @@ describe('performRestartResume — grok', () => {
       timeoutMs: 6000,
       pollMs: 100
     })
-    await vi.advanceTimersByTimeAsync(250) // a few polls while the CLI is still up
+    await vi.advanceTimersByTimeAsync(400) // the three Ctrl-Cs, 150ms apart
+    expect(written).toEqual(['\x03', '\x03', '\x03'])
     pane = 'zsh'
     await vi.advanceTimersByTimeAsync(5000)
     expect(await p).toBe('restarted')
-    // `/quit`, not claude's `/exit` — the table is per CLI.
-    expect(written.slice(0, 2)).toEqual(['\x15', '/quit\r'])
+    expect(written.join('')).not.toContain('/quit')
     expect(written.join('')).toContain('grok --resume abc-1')
   })
 
@@ -973,7 +1202,7 @@ describe('performRestartResume — the delivery await is bounded', () => {
   })
   afterEach(() => {
     vi.useRealTimers()
-    vi.doUnmock('./command-delivery')
+    vi.doUnmock('@shared/command-delivery')
     vi.resetModules()
   })
 
@@ -983,7 +1212,7 @@ describe('performRestartResume — the delivery await is bounded', () => {
     // locked out by guardConcurrentRestart for the app's life and the bulk loop hung with no
     // summary. The transport is fixed in command-delivery.ts; this is the belt to that braces —
     // NOTHING may wait forever, whatever the delivery does.
-    vi.doMock('./command-delivery', () => ({
+    vi.doMock('@shared/command-delivery', () => ({
       VERIFY_TIMEOUT_MS: 2000,
       DELIVERY_ATTEMPTS: 3,
       KILL_LINE: '\x15',
@@ -1021,7 +1250,7 @@ describe('guardConcurrentRestart', () => {
     const { written, io } = silentIo()
     const run = guardConcurrentRestart('n-overlap', () =>
       performRestartResume({
-        agentId: 'claude',
+        agentId: 'gemini',
         sessionId: 'sid-1',
         io,
         paneCommand: async () => 'zsh',
@@ -1033,12 +1262,12 @@ describe('guardConcurrentRestart', () => {
     const first = run()
     await vi.advanceTimersByTimeAsync(150)
     // The resume line is in the pane but NOT submitted (no echo to verify it).
-    expect(written.join('')).toContain('claude --resume sid-1')
+    expect(written.join('')).toContain('gemini --resume sid-1')
     // A second menu/bulk click landing in that window would splice `/exit` into the pending line
     // and submit `claude --resume sid-1/exit`.
     expect(await run()).toBe('not-eligible')
     expect(await probe()).toBe('not-eligible')
-    expect(written.filter((w) => w === '/exit\r')).toHaveLength(1)
+    expect(written.filter((w) => w === '/quit\r')).toHaveLength(1)
     await vi.advanceTimersByTimeAsync(10_000) // the fail-open submit ends the delivery
     expect(await first).toBe('restarted')
     expect(await probe()).toBe('restarted') // pane free again
@@ -1389,5 +1618,65 @@ describe('the write verb shares the restart lock', () => {
     expect(body).toContain("outcome === 'not-eligible'")
     // No un-guarded sendText left beside it.
     expect(body.match(/api\.pty\.sendText\(/g) ?? []).toHaveLength(1)
+  })
+})
+
+describe('settleRecycledNode — the recycle outlives its canvas', () => {
+  const deps = (onCanvas: boolean) => {
+    const calls: string[] = []
+    const live: unknown[] = []
+    const stored: unknown[] = []
+    return {
+      calls,
+      live,
+      stored,
+      d: {
+        onCanvas,
+        agentId: 'claude',
+        updateLive: (p: unknown) => {
+          calls.push('live')
+          live.push(p)
+        },
+        updateStored: (p: unknown) => {
+          calls.push('stored')
+          stored.push(p)
+        },
+        dropPark: () => calls.push('dropPark'),
+        markDirty: () => calls.push('dirty')
+      }
+    }
+  }
+
+  it('on the active canvas: one live update carrying the rebind, nothing else', () => {
+    const t = deps(true)
+    settleRecycledNode({ ...t.d, patch: { accountId: 'b' } })
+    expect(t.calls).toEqual(['live'])
+    expect(t.live).toEqual([{ accountId: 'b', agentId: 'claude' }])
+  })
+
+  // The bug: a project switch mid-move unmounted the node, React Flow's `updateNodeData` found no
+  // node and dropped the rebind, and the returning mount re-adopted the park holding the session
+  // the recycle had just killed — "interrupted halfway", on the OLD account.
+  it('off the canvas: drops the dead park and writes the rebind into the stored project', () => {
+    const t = deps(false)
+    settleRecycledNode({ ...t.d, patch: { accountId: 'b' } })
+    expect(t.calls).toEqual(['dropPark', 'stored', 'dirty'])
+    expect(t.live).toEqual([])
+    expect(t.stored).toEqual([{ agentId: 'claude', accountId: 'b' }])
+  })
+
+  it('off the canvas: a move to the SYSTEM account still writes the key (undefined = system)', () => {
+    const t = deps(false)
+    settleRecycledNode({ ...t.d, patch: { accountId: undefined } })
+    expect(t.stored).toHaveLength(1)
+    expect(Object.prototype.hasOwnProperty.call(t.stored[0], 'accountId')).toBe(true)
+    expect((t.stored[0] as { accountId?: string }).accountId).toBeUndefined()
+  })
+
+  it('off the canvas with no rebind (copy failed / plain restart): the account is left alone', () => {
+    const t = deps(false)
+    settleRecycledNode({ ...t.d, patch: undefined })
+    expect(t.stored).toEqual([{ agentId: 'claude' }])
+    expect(t.calls).toContain('dropPark')
   })
 })

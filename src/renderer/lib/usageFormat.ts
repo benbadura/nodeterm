@@ -1,3 +1,4 @@
+import { SYSTEM_COLORS } from './palette'
 // Pure formatting helpers for the usage indicator.
 
 /** "just now" / "5m ago" / "2h ago". */
@@ -8,6 +9,34 @@ export function formatTimeAgo(ts: number): string {
   if (mins < 60) return `${mins}m ago`
   const hours = Math.floor(mins / 60)
   return `${hours}h ago`
+}
+
+/**
+ * The line for a Claude read that failed with no numbers to show. A 429 is named: the usage
+ * endpoint's budget is shared with every Claude CLI using the same login, and a generic
+ * "could not read" sent people debugging an SSH link and credentials that were both fine.
+ * `where` qualifies only the generic wording — a 429 says nothing about the host's link.
+ */
+export function usageFailureText(u: { rateLimited?: boolean } | null | undefined, where = ''): string {
+  if (u?.rateLimited) return 'Rate limited by the usage endpoint (HTTP 429) — try again in a few minutes.'
+  return where ? `Could not read usage ${where}.` : 'Could not read usage.'
+}
+
+/**
+ * The note under bars the service KEPT because the latest read failed (`holdLastGood`: status
+ * 'error' with limits). Null for anything else. Says how old the numbers are, since the pill
+ * above shows them without a stamp.
+ */
+export function heldUsageText(u: {
+  status: string
+  limits: readonly unknown[]
+  updatedAt: number
+  rateLimited?: boolean
+}): string | null {
+  if (u.status !== 'error' || u.limits.length === 0) return null
+  const why = u.rateLimited ? 'was rate limited (HTTP 429)' : 'failed'
+  const ago = formatTimeAgo(u.updatedAt)
+  return `Latest read ${why} — showing numbers from ${ago === 'just now' ? 'a moment ago' : ago}.`
 }
 
 /** "Resets now" / "Resets in 1h 2m" / "Resets in 2d 4h". */
@@ -44,6 +73,9 @@ export function formatModelLabel(model: string | null): string | null {
   return version ? `${family} ${version}` : family
 }
 
+// Literals, not tokens: the notch HUD draws these too and does not load styles.css.
+const { red: RED, yellow: YELLOW, green: GREEN } = SYSTEM_COLORS.dark
+
 /**
  * Fill color for a CONTEXT-WINDOW meter: green while low, yellow from 60% used, red past 85%.
  * Keyed to USED percent — the inverse scale of `barColor`/`severityColor`, which are keyed to
@@ -52,16 +84,16 @@ export function formatModelLabel(model: string | null): string | null {
  * used to carry its own copy of these numbers (issue #78).
  */
 export function contextFillColor(usedPercent: number): string {
-  if (usedPercent > 85) return '#ff453a'
-  if (usedPercent >= 60) return '#ffd60a'
-  return '#30d158'
+  if (usedPercent > 85) return RED
+  if (usedPercent >= 60) return YELLOW
+  return GREEN
 }
 
 /** Bar color by remaining quota: green > 40%, yellow 20–40%, red < 20%. */
 export function barColor(leftPercent: number): string {
-  if (leftPercent > 40) return '#30d158'
-  if (leftPercent >= 20) return '#ffd60a'
-  return '#ff453a'
+  if (leftPercent > 40) return GREEN
+  if (leftPercent >= 20) return YELLOW
+  return RED
 }
 
 /**
@@ -73,12 +105,12 @@ export function barColor(leftPercent: number): string {
 export function severityColor(severity: string | null, leftPercent: number): string {
   switch (severity) {
     case 'normal':
-      return '#30d158'
+      return GREEN
     case 'warning':
-      return '#ffd60a'
+      return YELLOW
     case 'critical':
     case 'exceeded':
-      return '#ff453a'
+      return RED
     default:
       return barColor(leftPercent)
   }

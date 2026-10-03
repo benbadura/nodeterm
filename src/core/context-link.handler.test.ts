@@ -11,6 +11,7 @@ import { IPC } from '../shared/ipc'
 import { initPlatform, resetPlatformForTests } from './platform'
 import { fakePlatform, type FakePlatform } from './platform-fake'
 import type { ContextLinkMap } from '../shared/types'
+import { buildLinkMap } from '../shared/context-link-map'
 import type { PtyManager } from './pty-manager'
 
 const dir = mkdtempSync(join(tmpdir(), 'ctxlink-h-'))
@@ -96,6 +97,37 @@ describe('handleContextLinkRequest — authorization', () => {
       'No linked nodes'
     )
   })
+
+  // Issue #852 end to end: the canvas edge → buildLinkMap → the served documents. The one-way
+  // refusal must hold at the READ, not only in what the discovery note tells the agent.
+  const info = (id: string) => ({ id, title: id === 'node-A' ? 'Reader' : 'Source', sticky: false })
+
+  it('a one-way link lets the reader read and refuses the other side', async () => {
+    await setLinks(buildLinkMap([{ source: 'node-A', target: 'node-B', reader: 'node-A' }], info))
+    expect(await handleContextLinkRequest({ verb: 'list', nodeId: 'node-A', args: {} })).toContain('Source')
+    const back = await handleContextLinkRequest({
+      verb: 'transcript',
+      nodeId: 'node-B',
+      args: { node: 'node-A' }
+    })
+    expect(back).toContain('No linked nodes')
+    expect(back).not.toContain('Reader')
+  })
+
+  it('flipping the direction moves the permission with it', async () => {
+    await setLinks(buildLinkMap([{ source: 'node-A', target: 'node-B', reader: 'node-A' }], info))
+    await setLinks(buildLinkMap([{ source: 'node-A', target: 'node-B', reader: 'node-B' }], info))
+    expect(await handleContextLinkRequest({ verb: 'list', nodeId: 'node-A', args: {} })).toContain(
+      'No linked nodes'
+    )
+    expect(await handleContextLinkRequest({ verb: 'list', nodeId: 'node-B', args: {} })).toContain('Reader')
+  })
+
+  it('a reader-less (pre-#852) link still serves both sides', async () => {
+    await setLinks(buildLinkMap([{ source: 'node-A', target: 'node-B' }], info))
+    expect(await handleContextLinkRequest({ verb: 'list', nodeId: 'node-A', args: {} })).toContain('Source')
+    expect(await handleContextLinkRequest({ verb: 'list', nodeId: 'node-B', args: {} })).toContain('Reader')
+  })
 })
 
 describe('handleContextLinkRequest — local reads', () => {
@@ -163,11 +195,28 @@ describe('handleContextLinkRequest — remote (SSH) reads', () => {
     }
     start(remoteDeps({ runRemoteCommand }))
     await setLinks({
-      'node-A': [{ id: 'node-R', title: 'Remote', agentId: 'opencode', sessionId: "x'; rm -rf ~ #" }]
+      'node-A': [{ id: 'node-R', title: 'Remote', agentId: 'opencode', sessionId: 'ses_6f2a9c1d' }]
     })
     await handleContextLinkRequest({ verb: 'transcript', nodeId: 'node-A', args: {} })
-    expect(sent[0]).toBe(`opencode export 'x'\\''; rm -rf ~ #'`)
+    expect(sent).toEqual([`opencode export 'ses_6f2a9c1d'`])
   })
+
+  // The id is refused before the remote branch too: quoting keeps shell syntax out, but only the
+  // id check keeps a leading `-` from being read by opencode as an option on the host.
+  it.each(["x'; rm -rf ~ #", '--help'])(
+    'sends nothing to a remote opencode export for an unsafe session id (%s)',
+    async (sessionId) => {
+      const sent: string[] = []
+      const runRemoteCommand = async (_nodeId: string, command: string): Promise<string> => {
+        sent.push(command)
+        return '{"messages":[]}'
+      }
+      start(remoteDeps({ runRemoteCommand }))
+      await setLinks({ 'node-A': [{ id: 'node-R', title: 'Remote', agentId: 'opencode', sessionId }] })
+      await handleContextLinkRequest({ verb: 'transcript', nodeId: 'node-A', args: {} })
+      expect(sent).toEqual([])
+    }
+  )
 
   it('falls back to local behavior when the shell injected no remote deps (Server Edition)', async () => {
     const p = join(dir, 'srv.jsonl')

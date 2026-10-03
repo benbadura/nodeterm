@@ -1,0 +1,14 @@
+{"sessionId":"3e7b9c21-4d5a-4f60-8b19-a2c3d4e5f607","projectHash":"c0ffee0000000000000000000000000000000000000000000000000000000000","startTime":"2026-09-28T10:00:00.000Z","lastUpdated":"2026-09-28T10:00:00.000Z","kind":"main","messages":[{"id":"h1","timestamp":"2026-09-28T10:00:01.000Z","type":"user","content":[{"text":"carried in the header record"}]}]}
+{"id":"i1","timestamp":"2026-09-28T10:00:02.000Z","type":"info","content":"Switched to fallback model gemini-2.5-flash"}
+{"id":"w1","timestamp":"2026-09-28T10:00:03.000Z","type":"warning","content":[{"text":"Approaching the context limit."}]}
+{"id":"e1","timestamp":"2026-09-28T10:00:04.000Z","type":"error","content":"[API Error: 429 Resource exhausted]"}
+{"id":"i2","timestamp":"2026-09-28T10:00:05.000Z","type":"info","content":""}
+{"id":"q1","timestamp":"2026-09-28T10:00:06.000Z","type":"mystery","content":"an unknown message type"}
+{truncated line
+null
+7
+["an","array"]
+{"unrelated":true}
+{"id":11,"type":"user","content":"a numeric id is not a message record"}
+{"id":"u9","type":"user","content":"no timestamp at all"}
+{"id":"u10","timestamp":"yesterday","type":"user","content":"an unparseable timestamp"}

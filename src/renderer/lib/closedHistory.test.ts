@@ -5,6 +5,8 @@ import {
   filterClosedProjects,
   mergeClosedHistory,
   recentlyClosedProjects,
+  isClosedTeamTab,
+  CLOSED_TEAM_TAB_NOTICE,
   stateToReopenSnapshot
 } from './closedHistory'
 import type { CanvasNode } from '@renderer/state/workspace'
@@ -71,6 +73,28 @@ describe('stateToReopenSnapshot', () => {
     expect(snap.size).toEqual({ width: 10, height: 20 })
     expect(snap.data.cwd).toBe('/tmp/x')
     expect(snap.data.agentId).toBe('claude')
+  })
+
+  // The persisted twin lives in workspace.json — hand-editable — so the icon is re-validated
+  // here rather than trusted: a reopened session keeps its icon, a garbage one is dropped.
+  it('carries the node icon through, and drops one that fails validation', () => {
+    const entry = (icon: unknown): ClosedSessionEntry => ({
+      id: 'e1', closedAt: 1,
+      node: {
+        id: 'n1', kind: 'terminal', position: { x: 0, y: 0 }, size: { width: 10, height: 10 },
+        title: 'db', color: '#fff', group: null, icon: icon as never
+      },
+      absolutePosition: { x: 0, y: 0 }
+    })
+    expect(stateToReopenSnapshot(entry({ type: 'lucide', name: 'database' })).data.icon).toEqual({
+      type: 'lucide',
+      name: 'database'
+    })
+    expect(stateToReopenSnapshot(entry({ type: 'emoji', value: '\u{1F680}' })).data.icon).toEqual({
+      type: 'emoji',
+      value: '\u{1F680}'
+    })
+    expect(stateToReopenSnapshot(entry({ type: 'lucide', name: 'nope' })).data.icon).toBeUndefined()
   })
 
   it('omits parentId/extent when the node was never parented', () => {
@@ -141,6 +165,35 @@ describe('mergeClosedHistory', () => {
   it('excludes an unavailable closed project', () => {
     const rows = mergeClosedHistory([proj({ id: 'a', closed: true, unavailable: true, closedAt: 5 })])
     expect(rows).toHaveLength(0)
+  })
+
+  it('excludes a closed relay (team) tab: reopening it here would mount the host nodes on this core', () => {
+    const rows = mergeClosedHistory([proj({ id: 'team', closed: true, remote: true, closedAt: 5 })])
+    expect(rows).toHaveLength(0)
+  })
+
+  it('excludes the closed SESSIONS of a closed team tab too (restoring one reopens the tab); an open one keeps them', () => {
+    const entry: ClosedSessionEntry = {
+      id: 's1', closedAt: 9,
+      node: { id: 'n', kind: 'terminal', position: { x: 0, y: 0 }, size: { width: 1, height: 1 }, title: 't', color: '#fff', group: null },
+      absolutePosition: { x: 0, y: 0 }
+    }
+    expect(mergeClosedHistory([proj({ id: 'team', closed: true, remote: true, closedSessions: [entry] })])).toHaveLength(0)
+    expect(mergeClosedHistory([proj({ id: 'team', remote: true, closedSessions: [entry] })]).map((r) => r.kind)).toEqual(['session'])
+  })
+})
+
+describe('closed team tabs', () => {
+  it('isClosedTeamTab is a closed relay project only', () => {
+    expect(isClosedTeamTab({ closed: true, remote: true })).toBe(true)
+    expect(isClosedTeamTab({ remote: true })).toBe(false)
+    expect(isClosedTeamTab({ closed: true })).toBe(false)
+    expect(isClosedTeamTab(undefined)).toBe(false)
+  })
+  it('the refusal says what actually brings the tab back', () => {
+    expect(CLOSED_TEAM_TAB_NOTICE).toBe(
+      'This team tab was closed on this computer. It opens again when you join the team again (close its other tabs first), or when the team stops sharing the project and shares it again.'
+    )
   })
 })
 
@@ -239,7 +292,7 @@ describe('closedTranscriptTarget', () => {
 })
 
 describe('recentlyClosedProjects — the heading promises recency (issue #506)', () => {
-  type Probe = { id: string; name: string; closed?: boolean; unavailable?: boolean; closedAt?: number }
+  type Probe = { id: string; name: string; closed?: boolean; unavailable?: boolean; closedAt?: number; remote?: boolean }
   const p = (id: string, over: Partial<Probe> = {}): Probe => ({ id, name: id, ...over })
 
   it('orders newest-closed first, NOT tab order', () => {
@@ -258,6 +311,11 @@ describe('recentlyClosedProjects — the heading promises recency (issue #506)',
       p('gone', { closed: true, unavailable: true, closedAt: 999 }),
       p('kept', { closed: true, closedAt: 1 })
     ])
+    expect(rows.map((r) => r.id)).toEqual(['kept'])
+  })
+
+  it('drops a closed relay (team) tab: its nodes belong to the host, not to this core', () => {
+    const rows = recentlyClosedProjects([p('team', { closed: true, remote: true, closedAt: 999 }), p('kept', { closed: true, closedAt: 1 })])
     expect(rows.map((r) => r.id)).toEqual(['kept'])
   })
 

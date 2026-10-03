@@ -1,0 +1,12 @@
+not json at all
+null
+[1,2]
+"a string"
+{"timestamp":"2026-09-24T09:00:00.000Z","type":"response_item","payload":null}
+{"timestamp":"2026-09-24T09:00:00.000Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"not an array"}}}
+{"timestamp":"2026-09-24T09:00:00.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[null,7,{"type":"output_text","text":5}]}}
+{"timestamp":"not a date","type":"event_msg","payload":{"type":"user_message","message":"no timestamp survives"}}
+{"timestamp":"2026-09-24T09:00:00.000Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{not json","call_id":"c1"}}
+{"timestamp":"2026-09-24T09:00:00.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"c1","output":{"content":"an object is not text"}}}
+{"timestamp":"2026-09-24T09:00:00.000Z","type":"brand_new_record","payload":{"type":"from_a_newer_codex"}}
+{"timestamp":"2026-09-24T09:00:00.000Z","type":"response_item","payload":{"type":"message","id":"msg_synthetic","role":"assistant","content":[{"type":"output_text","text":"The last line still renders."}],"phase":"final_answer","internal_chat_message_metadata_passthrough":{}},"ordinal":0}

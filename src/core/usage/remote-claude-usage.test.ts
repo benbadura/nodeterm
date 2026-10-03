@@ -286,6 +286,17 @@ describe('fetchRemoteUsage', () => {
     expect(u.status).toBe('unavailable')
   })
 
+  it('says so when the endpoint rate-limited the read (429), and only then', async () => {
+    const limited = await fetchRemoteUsage(
+      target,
+      async () => reply('__NTU_EMAIL__me@example.com', '{"error":{"type":"rate_limit_error"}}', '__NTU_HTTP__429'),
+      1
+    )
+    expect(limited).toMatchObject({ status: 'error', rateLimited: true, email: 'me@example.com' })
+    const http500 = await fetchRemoteUsage(target, async () => reply('oops', '__NTU_HTTP__500'), 1)
+    expect(http500.rateLimited).toBeUndefined()
+  })
+
   it('keeps a broken read visible as an error', async () => {
     const missingCurl = await fetchRemoteUsage(target, async () => reply('__NTU_STATUS__nocurl'), 1)
     expect(missingCurl.status).toBe('error')

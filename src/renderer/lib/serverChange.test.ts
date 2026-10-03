@@ -211,4 +211,34 @@ describe('planServerChange', () => {
     expect(plan.bridges.map((b) => b.id)).toEqual(['bridge-local', 'bridge-new'])
     expect(plan.bridgesChanged).toBe(true)
   })
+
+  it('keeps a one-way link\'s reader through the merge (issue #852)', () => {
+    // The merge used to rebuild every edge as {id, source, target}: any server-side change would
+    // have silently turned the user's one-way link back into a two-way one.
+    const spawned = node('term-spawned')
+    const plan = planServerChange({
+      base: project([caller, first]),
+      incoming: project([caller, first, spawned], {
+        bridges: [{ id: 'bridge-new', source: caller.id, target: spawned.id, reader: spawned.id }]
+      }),
+      liveNodeIds: [caller.id, first.id],
+      liveRopes: [],
+      liveBridges: [{ id: 'bridge-local', source: caller.id, target: first.id, reader: caller.id }]
+    })
+    expect(plan.bridges).toEqual([
+      { id: 'bridge-local', source: caller.id, target: first.id, reader: caller.id },
+      { id: 'bridge-new', source: caller.id, target: spawned.id, reader: spawned.id }
+    ])
+  })
+
+  it('keeps a present-but-invalid reader so it keeps granting nobody', () => {
+    const plan = planServerChange({
+      base: project([caller, first]),
+      incoming: project([caller, first]),
+      liveNodeIds: [caller.id, first.id],
+      liveRopes: [],
+      liveBridges: [{ id: 'bridge-x', source: caller.id, target: first.id, reader: null as never }]
+    })
+    expect(plan.bridges).toEqual([{ id: 'bridge-x', source: caller.id, target: first.id, reader: null }])
+  })
 })

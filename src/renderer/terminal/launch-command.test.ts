@@ -1,8 +1,9 @@
 import { commitLaunchAttempt } from './launch-attempt'
 import type { PendingLaunch } from '@shared/types'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createLaunchWriter, deliverInitialLaunch, launchCommand, registerLaunchWriter } from './launch-command'
-import { KILL_LINE, WINDOWS_KILL_LINE, VERIFY_TIMEOUT_MS, DELIVERY_ATTEMPTS } from './command-delivery'
+import { createLaunchWriter, deliverInitialLaunch, hasLaunchWriter, launchCommand, registerLaunchWriter } from './launch-command'
+import { trustsFreshShell } from '@shared/launch-trust'
+import { KILL_LINE, WINDOWS_KILL_LINE, VERIFY_TIMEOUT_MS, DELIVERY_ATTEMPTS } from '@shared/command-delivery'
 
 function fixture(attempted = false, killLine = KILL_LINE) {
   const cleanups: Array<() => void> = []
@@ -130,6 +131,15 @@ describe('durable launch delivery', () => {
     second()
     expect(await launchCommand('node', 'cmd', true)).toBe('cancelled')
   })
+  it('hasLaunchWriter reports a registered writer, per scope, and forgets it on unregister', () => {
+    const scope = {}
+    expect(hasLaunchWriter('probe')).toBe(false)
+    const off = registerLaunchWriter('probe', async () => 'submitted')
+    expect(hasLaunchWriter('probe')).toBe(true)
+    expect(hasLaunchWriter('probe', scope)).toBe(false)
+    off()
+    expect(hasLaunchWriter('probe')).toBe(false)
+  })
 })
 
 describe('UI initial-command lifecycle', () => {
@@ -237,4 +247,22 @@ it('a pre-input deferred claim preserves UI intent and the same parked writer ca
   expect(await resumed).toBe('submitted')
   expect(await writer('claude brief', false)).toBe('submitted')
   expect(write.mock.calls).toEqual([['claude brief'], ['\r']])
+})
+
+describe('trustsFreshShell', () => {
+  const auto = { manual: false, fresh: true }
+  it('trusts a fresh plain shell and a fresh session-host shell', () => {
+    expect(trustsFreshShell({ ...auto, persistent: false })).toBe(true)
+    expect(trustsFreshShell({ ...auto, persistent: true, sessionHost: true })).toBe(true)
+  })
+  it('still probes a fresh tmux pane, and an older core that does not say', () => {
+    expect(trustsFreshShell({ ...auto, persistent: true })).toBe(false)
+    expect(trustsFreshShell({ ...auto })).toBe(false)
+  })
+  it('never trusts a manual delivery or a warm attach', () => {
+    expect(trustsFreshShell({ manual: true, fresh: true, persistent: false })).toBe(false)
+    expect(trustsFreshShell({ manual: true, fresh: true, sessionHost: true })).toBe(false)
+    expect(trustsFreshShell({ manual: false, fresh: false, persistent: false })).toBe(false)
+    expect(trustsFreshShell({ manual: false, fresh: false, sessionHost: true })).toBe(false)
+  })
 })

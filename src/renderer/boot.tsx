@@ -7,6 +7,7 @@ import { ensureCodexCliCaps } from './state/codexCli'
 import { initAgentResolver } from './state/agent-resolver'
 import { refreshAgentEnv } from './lib/agentEnv'
 import { applyWindowChrome } from './lib/windowChrome'
+import { installMarkdownLinkGuard, LOCAL_LINK_MESSAGE, openExternalQuietly } from './lib/markdownLinks'
 import './styles.css'
 import './tailwind.css'
 
@@ -15,6 +16,21 @@ import './tailwind.css'
 // Windows/Linux and in a Server Edition browser tab there are none, and the reservation pushed the
 // logo in and squeezed the tabs). Runs after main.tsx's shell switch, so the browser flag is set.
 applyWindowChrome()
+
+// Links in rendered markdown (terminal ⌘M view, transcript bubbles, sticky notes, editor preview,
+// the kanban card modal) must never navigate this window: a relative link used to wipe the canvas
+// on the desktop, and any link navigated the Server Edition's tab away. One delegated listener for
+// every surface — contract and reasoning in lib/markdownLinks.ts. Web links go through the bridge
+// (system browser on desktop, a new tab in the Server Edition), guarded so a rejecting bridge
+// cannot surface as an unhandled rejection. The toast is kind 'error' because
+// that is the only kind Canvas renders — an 'info' toast would be a silent no-op.
+installMarkdownLinkGuard(document, {
+  openExternal: (url) => openExternalQuietly((u) => window.nodeTerminal.shell.openExternal(u), url),
+  notifyLocal: () =>
+    window.dispatchEvent(
+      new CustomEvent('nodeterm:toast', { detail: { kind: 'error', message: LOCAL_LINK_MESSAGE } })
+    )
+})
 
 // Register the custom-agent → baseAgent resolver so the capability predicates (hasHooks, canResume,
 // canControlCanvas, …) resolve a custom agent's inherited harness. Reads the live settings store.

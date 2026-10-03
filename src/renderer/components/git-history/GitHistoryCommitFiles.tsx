@@ -1,9 +1,7 @@
 import type { GitFileChange } from '@shared/types'
 import { formatGitHistoryTimestamp } from './git-history-format'
+import { gitStatusColor } from '../../lib/gitStatusColors'
 
-const STATUS_COLOR: Record<string, string> = {
-  M: '#ffd60a', A: '#32d74b', D: '#ff453a', R: '#bf5af2', U: '#6ac4dc'
-}
 
 export type GitHistoryCommitFilesState =
   | { status: 'loading' }
@@ -26,7 +24,7 @@ export function GitHistoryCommitFiles({
     <div className="scm-history__files">
       {meta && <div className="scm-history__meta">{meta}</div>}
       {state.status === 'loading' && <div className="scm-history__meta">Loading files…</div>}
-      {state.status === 'error' && <div className="scm-history__meta" style={{ color: '#ff453a' }} title={state.error}>{state.error}</div>}
+      {state.status === 'error' && <div className="scm-history__meta" style={{ color: 'var(--danger)' }} title={state.error}>{state.error}</div>}
       {state.status === 'ready' && state.entries.length === 0 && (
         <div className="scm-history__meta">No file changes in this commit</div>
       )}
@@ -36,7 +34,7 @@ export function GitHistoryCommitFiles({
           const dir = entry.path.includes('/') ? entry.path.slice(0, entry.path.lastIndexOf('/')) : ''
           return (
             <button key={entry.path} type="button" className="scm-history__file" title={entry.path} onClick={() => onOpenFile(entry)}>
-              <span style={{ width: 12, textAlign: 'center', fontWeight: 700, fontSize: 10, color: STATUS_COLOR[entry.status] ?? 'rgba(255,255,255,0.85)' }}>
+              <span style={{ width: 12, textAlign: 'center', fontWeight: 700, fontSize: 10, color: gitStatusColor(entry.status) }}>
                 {entry.status}
               </span>
               <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

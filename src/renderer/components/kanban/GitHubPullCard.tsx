@@ -1,16 +1,25 @@
 import { memo } from 'react'
 import type { GitHubIssueCardView } from '@shared/github-issues'
+import type { GitHubPullStatus, PullStatusFreshness } from '@shared/github-pull-status'
 import { PULL_STATE_LABEL, pullCardState } from '../../lib/githubPull'
 import { updatedRelative } from '../../lib/relativeTime'
+import { PullStatusLine } from './PullStatusBadges'
 
 /** A pull request on the board. The `pulls` source is `readOnly`, so this card carries no drag
  *  and no move control — its column is derived from the PR's own labels and state, and there is
  *  nothing here the board could write back. */
 export const GitHubPullCard = memo(function GitHubPullCard({
   pull,
+  status,
+  freshness = 'fresh',
+  observedAt,
   onOpen
 }: {
   pull: GitHubIssueCardView
+  /** CI + mergeability from the GraphQL read; absent for a PR that read did not cover. */
+  status?: GitHubPullStatus
+  freshness?: PullStatusFreshness
+  observedAt?: number
   onOpen: (pull: GitHubIssueCardView) => void
 }): React.JSX.Element {
   const state = pullCardState(pull)
@@ -36,6 +45,14 @@ export const GitHubPullCard = memo(function GitHubPullCard({
         #{pull.number}
         <span className={`github-pull-badge github-pull-badge--${state}`}>{PULL_STATE_LABEL[state]}</span>
       </div>
+      {(state === 'open' || state === 'draft') && (
+        <PullStatusLine status={status} freshness={freshness} observedAt={observedAt} />
+      )}
+      {status && status.closes.length > 0 && (
+        <div className="pull-closes">
+          Closes {status.closes.map((number) => `#${number}`).join(', ')}
+        </div>
+      )}
       {pull.labels.length > 0 && (
         <div className="github-issue-card__labels">
           {pull.labels.slice(0, 5).map((label) => (

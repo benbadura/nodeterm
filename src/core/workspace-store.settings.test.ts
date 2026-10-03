@@ -257,6 +257,31 @@ describe('project settings — ssh leg', () => {
     expect(remoteFs.get('/srv/app/.nodeterm/settings.json')).toContain('offline-edit')
   })
 
+  // "Share with team": after the handover the server core owns the host's `.nodeterm/`, so this
+  // desktop keeps its edit in the cache and never pushes it — neither on a write nor as a "heal" of
+  // a host file that is absent or older on a read.
+  it('a project handed to a hosted team never has its settings pushed to the host', async () => {
+    let pushes = 0
+    const store = new WorkspaceStore({
+      ...fakeIO,
+      writeSettings: async (id: string, ssh: { remoteCwd: string }, content: string) => {
+        pushes++
+        return fakeIO.writeSettings(id, ssh, content)
+      }
+    })
+    await store.save(ws([{ ...sshProject(), handedOffTo: { hostId: 'h1', projectId: 'project-9', at: 1 } }]))
+    expect(await store.writeProjectSettings('ps1', { setup: { setupScript: 'kept-local' } })).toBe(true)
+    // The host file is absent and then older than the cache: both would be healed by a push.
+    await store.readProjectSettings('ps1')
+    remoteFs.set('/srv/app/.nodeterm/settings.json', JSON.stringify(
+      { version: 1, rev: 0, savedAt: 't', setup: { setupScript: 'server-owned' } }))
+    await store.readProjectSettings('ps1')
+    expect(pushes).toBe(0)
+    expect(remoteFs.get('/srv/app/.nodeterm/settings.json')).toContain('server-owned')
+    const idx = JSON.parse(await fs.readFile(path.join(userData, 'workspace.json'), 'utf-8'))
+    expect(idx.entries[0].settingsCache.setup.setupScript).toBe('kept-local')
+  })
+
   it('a conflict-marked remote file is reported as such and never overwritten', async () => {
     const store = new WorkspaceStore(fakeIO)
     await store.save(ws([sshProject()]))

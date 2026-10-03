@@ -1,0 +1,151 @@
+{
+  "request": {
+    "maxBytes": 262144
+  },
+  "parse": {
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "look around"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Reading the project."
+          },
+          {
+            "kind": "tool",
+            "name": "read_file",
+            "arg": "/srv/app/src/a.ts",
+            "result": "line one line two line three"
+          },
+          {
+            "kind": "tool",
+            "name": "list_dir",
+            "arg": "/srv/app/src",
+            "result": "a.ts b.ts"
+          },
+          {
+            "kind": "tool",
+            "name": "run_terminal_cmd",
+            "arg": "npm test -- --run",
+            "result": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+          },
+          {
+            "kind": "tool",
+            "name": "search_replace",
+            "arg": "/srv/app/b.ts"
+          },
+          {
+            "kind": "tool",
+            "name": "grep",
+            "arg": "/srv/app"
+          },
+          {
+            "kind": "tool",
+            "name": "future_tool",
+            "arg": "{\"knob\":\"kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk"
+          },
+          {
+            "kind": "tool",
+            "name": "odd_tool",
+            "arg": "not json at all"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Done: tests pass."
+          }
+        ]
+      }
+    ],
+    "skipped": 0,
+    "model": "grok-4.6-build",
+    "effort": "xhigh"
+  },
+  "page": {
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "look around"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Reading the project."
+          },
+          {
+            "kind": "tool",
+            "name": "read_file",
+            "arg": "/srv/app/src/a.ts",
+            "result": "line one line two line three"
+          },
+          {
+            "kind": "tool",
+            "name": "list_dir",
+            "arg": "/srv/app/src",
+            "result": "a.ts b.ts"
+          },
+          {
+            "kind": "tool",
+            "name": "run_terminal_cmd",
+            "arg": "npm test -- --run",
+            "result": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+          },
+          {
+            "kind": "tool",
+            "name": "search_replace",
+            "arg": "/srv/app/b.ts"
+          },
+          {
+            "kind": "tool",
+            "name": "grep",
+            "arg": "/srv/app"
+          },
+          {
+            "kind": "tool",
+            "name": "future_tool",
+            "arg": "{\"knob\":\"kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk"
+          },
+          {
+            "kind": "tool",
+            "name": "odd_tool",
+            "arg": "not json at all"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Done: tests pass."
+          }
+        ]
+      }
+    ],
+    "found": true,
+    "olderCursor": null,
+    "unmatchedResults": [],
+    "model": "grok-4.6-build",
+    "effort": "xhigh"
+  }
+}

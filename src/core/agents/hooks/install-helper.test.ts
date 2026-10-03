@@ -10,7 +10,7 @@ import {
   writeManagedHookFileAtomic,
   type HookSettings
 } from './install-helper'
-import { CLAUDE_HOOK_EVENTS } from '@shared/agents/hook-events'
+import { CLAUDE_HOOK_EVENTS, managedEventName } from '@shared/agents/hook-events'
 
 const cmd = buildManagedHookCommand('/remote/.nodeterm/agent-hooks/claude.sh')
 
@@ -170,6 +170,21 @@ describe('mergeManagedHook — matcher support is opt-in per event', () => {
  * These run on any OS: the win32-ness that matters is the SEPARATOR inside the stored command,
  * which `path.win32` gives us without a Windows runner.
  */
+describe('mergeManagedHook — claude PermissionRequest carries an explicit timeout', () => {
+  it('writes timeout: 600 on the held PermissionRequest handler only, and never a matcher', () => {
+    const out = mergeManagedHook({}, 'CMD', CLAUDE_HOOK_EVENTS)
+    expect(out.hooks!.PermissionRequest).toEqual([{ hooks: [{ type: 'command', command: 'CMD', timeout: 600 }] }])
+    expect(out.hooks!.Stop).toEqual([{ hooks: [{ type: 'command', command: 'CMD' }] }])
+  })
+  it('updates an EXISTING install (the old timeout-less entry is replaced, not duplicated)', () => {
+    const CMD = buildManagedHookCommand('/home/u/.nodeterm/agent-hooks/claude.sh')
+    const old = { hooks: { PermissionRequest: [{ hooks: [{ type: 'command', command: CMD }] }] } }
+    const out = mergeManagedHook(old, CMD, CLAUDE_HOOK_EVENTS)
+    expect(out.hooks!.PermissionRequest).toEqual([{ hooks: [{ type: 'command', command: CMD, timeout: 600 }] }])
+    expect(mergeManagedHook(out, CMD, CLAUDE_HOOK_EVENTS)).toEqual(out) // idempotent
+  })
+})
+
 describe('mergeManagedHook — Windows path separators (issue #558)', () => {
   const winScript = path.win32.join('C:\\Users\\u', '.nodeterm', 'agent-hooks', 'claude.sh')
   const winCmd = buildManagedHookCommand(winScript)
@@ -189,10 +204,11 @@ describe('mergeManagedHook — Windows path separators (issue #558)', () => {
     // The reported state, rebuilt: nine byte-identical definitions on every managed event.
     const dup = { hooks: [{ type: 'command', command: winCmd }] }
     const hooks: Record<string, typeof dup[]> = {}
-    for (const ev of CLAUDE_HOOK_EVENTS) hooks[ev as string] = Array.from({ length: 9 }, () => ({ ...dup }))
+    for (const ev of CLAUDE_HOOK_EVENTS.map(managedEventName)) hooks[ev] = Array.from({ length: 9 }, () => ({ ...dup }))
     const out = mergeManagedHook({ hooks }, winCmd, CLAUDE_HOOK_EVENTS)
-    for (const ev of CLAUDE_HOOK_EVENTS) {
-      expect(out.hooks![ev as string], ev as string).toEqual([{ hooks: [{ type: 'command', command: winCmd }] }])
+    for (const ev of CLAUDE_HOOK_EVENTS.map(managedEventName)) {
+      // One definition, one handler, OUR command (PermissionRequest's also carries its timeout).
+      expect(out.hooks![ev]?.map((d) => d.hooks?.map((h) => h.command)), ev).toEqual([[winCmd]])
     }
   })
 

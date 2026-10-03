@@ -1,7 +1,7 @@
 import type { Project } from '../../shared/types'
 import type { CorePlatform } from '../platform'
 import type { GitHubSecretStore, CommandRunner } from './credentials'
-import { GitHubCredentialResolver } from './credentials'
+import { createTokenValidator, GitHubCredentialResolver } from './credentials'
 import { GitHubControlStore } from './control-store'
 import { GitHubIssuesClient } from './client'
 import { GitHubIssueCache } from './cache'
@@ -26,13 +26,10 @@ export function registerGitHubIntegration(dependencies: Dependencies): {
   controller: GitHubHostController
   service: GitHubIssueService
 } {
-  const validateToken = async (token: string) => {
-    try {
-      return await new GitHubIssuesClient({ token }).getAuthenticatedUser()
-    } catch {
-      return null
-    }
-  }
+  // Tri-state and conditional (see createTokenValidator): a failed check is no longer a null that
+  // every caller reads as "signed out", and an unchanged identity re-validates with a free 304.
+  const validateToken = createTokenValidator((token, etag) =>
+    new GitHubIssuesClient({ token }).checkAuthenticatedUser(etag))
   const controls = new GitHubControlStore(dependencies.userDataDir)
   const coordinator = new GitHubRequestCoordinator()
   const resolver = new GitHubCredentialResolver({
@@ -47,14 +44,24 @@ export function registerGitHubIntegration(dependencies: Dependencies): {
     resolver,
     secret: dependencies.secret,
     validateToken,
-    client: (token) => new GitHubIssuesClient({ token }),
+    client: ({ token, userId }) => new GitHubIssuesClient({
+      token,
+      onRateLimit: (sample) => coordinator.noteRateSample(userId, sample)
+    }),
+    rate: (userId) => ({
+      status: coordinator.rateStatus(userId),
+      throttle: coordinator.throttle(userId)
+    }),
     // Both halves of a credential boundary move: stop work that captured the old credential, and
     // drop the resolver's memo so the next resolve reflects the change immediately instead of
     // serving a revoked credential until its TTL happens to lapse.
     onCredentialBoundaryChange: () => {
       coordinator.cancelAll()
       resolver.invalidate()
-    }
+    },
+    // `service` is declared below; this only runs on a revoke, long after both exist.
+    onRevoked: (projectId) => service.clearCache({ projectId }),
+    onApprovalChanged: (projectId) => service.notifyProject(projectId)
   })
   const service = new GitHubIssueService({
     cache: new GitHubIssueCache(dependencies.userDataDir),

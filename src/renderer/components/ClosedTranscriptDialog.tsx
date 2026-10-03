@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { useDialogStack } from './dialog-stack'
 import type { ClosedSessionEntry } from '@shared/types'
 import { closedTranscriptTarget } from '../lib/closedHistory'
+import { ChatPanelFallback } from '../nodes/ChatPanelFallback'
 
 // Same code split as the ⌘M panel on a terminal node: the transcript reader and the markdown
 // renderer are not on the path to painting a canvas, and this dialog opens on a click.
@@ -51,7 +52,9 @@ export function ClosedTranscriptDialog({ entry, onClose }: ClosedTranscriptDialo
         }}
       >
         {target.ok ? (
-          <Suspense fallback={null}>
+          <Suspense
+            fallback={<ChatPanelFallback title={entry.node.title || 'Closed session'} hint="Esc to close" />}
+          >
             <ChatPanel
               nodeId={target.nodeId}
               sessionId={target.sessionId}

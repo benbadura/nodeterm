@@ -1,0 +1,71 @@
+[
+  {
+    "before": null,
+    "maxBytes": 262144,
+    "grownMaxBytes": 262144,
+    "start": 0,
+    "parse": {
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "How do I list the files here?"
+            }
+          ],
+          "at": 1790627717000,
+          "key": 446
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Use `ls`:\n\n```sh\nls -la\n```\n\n- `-l` long form\n- `-a` hidden files\n\n> Tip: `ls -lh` for sizes."
+            }
+          ],
+          "at": 1790627720000,
+          "key": 1511
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Şimdi Türkçe: dosyaları göster 📁"
+            }
+          ],
+          "at": 1790627725000,
+          "key": 2975
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Tamam — `ls` yeterli. 👍"
+            }
+          ],
+          "at": 1790627727000,
+          "key": 3673
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Second message in the same turn."
+            }
+          ],
+          "at": 1790627728000,
+          "key": 4011
+        }
+      ],
+      "olderCursor": null,
+      "unmatchedResults": [],
+      "model": "claude-opus-5-5",
+      "noCompleteLine": false
+    }
+  }
+]

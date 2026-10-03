@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { useProjects } from '../state/projects'
-import { isOmniKanbanEnabled, useViewMode, viewFor } from '../state/viewMode'
+import { isOmniKanbanEnabled, toggleBoardView, useViewMode, viewFor } from '../state/viewMode'
 import { useAgentStatus } from '../state/agentStatus'
 import { useSettings } from '../state/settings'
 import { accountsForProject, sshAccountsHint, systemAccountDisplay } from '../state/workspace'
@@ -12,7 +12,8 @@ import { sessionCount, sessionForProject, useProjectSession } from '../session/s
 import { tabClickAction } from '../session/relay-tab'
 import { useMenuFlip } from '../ui/useMenuFlip'
 import { commandTooltip } from '../lib/keybindingOverrides'
-import { IconCanvasView, IconKanban, IconMoreVertical, IconPlus } from './icons'
+import { IconCanvasView, IconKanban, IconMoreVertical, IconPlus, IconUpdate } from './icons'
+import { runPendingUpdate, usePendingUpdate } from '../state/pendingUpdate'
 import { ProjectGlyph } from './ProjectGlyph'
 import {
   ALL_PERMISSION_MODES,
@@ -21,6 +22,7 @@ import {
 } from '@shared/agents/config'
 import { bypassSandboxCaveat, permissionModeAgentsLabel } from '@shared/agents/approval-mode'
 import { codexApprovalCaps } from '@renderer/state/codexCli'
+import { PROJECT_NAME_MAX, clampProjectName } from '@shared/project-name'
 
 interface TabBarProps {
   onSwitch: (id: string) => void
@@ -45,6 +47,11 @@ interface TabBarProps {
   /** Deep-link to this project's own pane in Settings — everything this menu can change plus the
    *  shared/machine-local settings families, which have no other entry point. */
   onOpenProjectSettings: (id: string) => void
+  /** Open "Share with team" for an SSH project. Absent = the row is not offered. */
+  onShareWithTeam?: (projectId: string) => void
+  /** Why the share cannot start for this project right now (the row is then disabled with it as
+   *  its tooltip), or null when it can. */
+  shareBlockedReason?: (projectId: string) => string | null
 }
 
 /**
@@ -80,7 +87,9 @@ export function TabBar({
   onRemoteAccess,
   onSetDefaultAccount,
   onSetDefaultPermissionMode,
-  onOpenProjectSettings
+  onOpenProjectSettings,
+  onShareWithTeam,
+  shareBlockedReason
 }: TabBarProps) {
   // Select the raw array and filter in a memo, a `.filter()` inside the selector returns a
   // fresh array every store snapshot, which re-rendered the TabBar on EVERY projects change.
@@ -110,6 +119,9 @@ export function TabBar({
   )
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
+  // The stored name the editor opened on. Committing the cut draft of an over-long one
+  // (issue #940) stores that cut: the user asked to rename and sees what will be stored.
+  const [draftStart, setDraftStart] = useState('')
   // Tab drag-reorder: the project id being dragged + the current drop target ('' = end zone).
   const [dragId, setDragId] = useState<string | null>(null)
   const [dropId, setDropId] = useState<string | null>(null)
@@ -163,8 +175,13 @@ export function TabBar({
 
   const openMenu = (id: string, anchor: HTMLElement) => {
     const r = anchor.getBoundingClientRect()
+    // Under Liquid Glass the bar is a visible glass slab and the caret sits inside it, so the menu
+    // hangs from the BAR's bottom edge rather than 3px inside it (visual QA N11). Still a plain
+    // position, so useMenuFlip keeps flipping/clamping a tall menu.
+    const glass = document.documentElement.dataset.ntGlass === 'on'
+    const bottom = glass ? Math.max(r.bottom, anchor.closest('.tabbar')?.getBoundingClientRect().bottom ?? 0) : r.bottom
     setMenuId(id)
-    setMenuPos({ top: r.bottom + 4, left: r.left, flipBase: r.top - 4 })
+    setMenuPos({ top: bottom + 4, left: r.left, flipBase: r.top - 4 })
   }
 
   // Viewport-edge flip for the caret menu, same behavior as the right-click ContextMenu. The
@@ -175,14 +192,16 @@ export function TabBar({
 
   const startRename = (id: string, current: string) => {
     setEditingId(id)
-    setDraft(current)
+    // Start from what a rename would store, so an over-long name (issue #940) is shown cut.
+    setDraft(clampProjectName(current))
+    setDraftStart(current)
     closeMenu()
   }
 
   const commitRename = () => {
     if (editingId) {
       const name = draft.trim()
-      if (name) onRename(editingId, name)
+      if (name && name !== draftStart) onRename(editingId, name)
     }
     setEditingId(null)
   }
@@ -207,6 +226,7 @@ export function TabBar({
   // The strip scrolls without a visible scrollbar (see .tabbar__tabs), so keep it navigable:
   // a plain mouse wheel scrolls it horizontally, and the active tab is brought into view.
   const tabsRef = useRef<HTMLDivElement>(null)
+  const pendingUpdate = usePendingUpdate((s) => s.pending)
   useEffect(() => {
     tabsRef.current
       ?.querySelector('.tab.active')
@@ -244,6 +264,24 @@ export function TabBar({
       )}
 
       <div className="tabbar">
+        {pendingUpdate && (
+          // Figma-style: first thing after the traffic lights, accent-filled, no ✕. It stays until
+          // the update is installed, the card's dismiss never reaches it.
+          <button
+            className="tabbar__update"
+            title={
+              pendingUpdate.kind === 'downloaded'
+                ? `nodeterm v${pendingUpdate.version} is ready, restart to update`
+                : pendingUpdate.kind === 'manual'
+                  ? `nodeterm v${pendingUpdate.version} is available, download it to update`
+                  : 'This version is no longer supported, update to continue'
+            }
+            onClick={() => runPendingUpdate(pendingUpdate)}
+          >
+            <IconUpdate />
+            Update
+          </button>
+        )}
         <div className="brand">
           <svg className="brand__mark" viewBox="0 0 48 48" width="22" height="22" aria-hidden="true">
             <defs>
@@ -345,7 +383,9 @@ export function TabBar({
                       : `${p.name} disconnected, click to reconnect`
                     : p.ssh
                       ? `${p.ssh.server.user}@${p.ssh.server.host}:${p.ssh.remoteCwd}`
-                      : p.cwd || undefined
+                      : p.relaySsh
+                        ? `${p.relaySsh.user}@${p.relaySsh.host}:${p.relaySsh.remoteCwd}`
+                        : p.cwd || undefined
                 }
               >
                 <ProjectGlyph
@@ -365,10 +405,17 @@ export function TabBar({
                     SSH
                   </span>
                 )}
+                {/* A relay tab of the host's SSH project: display strings only (relay-ssh.ts). */}
+                {!p.ssh && p.relaySsh && (
+                  <span className="tab__ssh" title={`${p.relaySsh.user}@${p.relaySsh.host}`}>
+                    SSH
+                  </span>
+                )}
                 {editingId === p.id ? (
                   <input
                     className="tab__edit"
                     value={draft}
+                    maxLength={PROJECT_NAME_MAX}
                     autoFocus
                     spellCheck={false}
                     onChange={(e) => setDraft(e.target.value)}
@@ -410,21 +457,9 @@ export function TabBar({
                         aria-label={kanbanActive ? 'Canvas view' : 'Kanban view'}
                         onClick={(e) => {
                           e.stopPropagation() // a tab click switches projects, this flips the view
-                          const vm = useViewMode.getState()
-                          const settings = useSettings.getState().settings
-                          const omni = isOmniKanbanEnabled(settings)
-                          const asDefault = settings.omniKanbanAsDefault === true
-                          // Closing: the global overlay is exclusive, so any board toggle while
-                          // it is open closes it.
-                          if (vm.globalKanban) {
-                            vm.toggleGlobalKanban()
-                            return
-                          }
-                          if (omni && asDefault) {
-                            vm.toggleGlobalKanban()
-                          } else {
-                            vm.toggle(p.id)
-                          }
+                          // One decision with ⌘⇧B and the menu (state/viewMode.ts): from any board
+                          // to the canvas, from the canvas into the board.
+                          toggleBoardView(p.id)
                         }}
                       >
                         {kanbanActive ? <IconCanvasView /> : <IconKanban />}
@@ -493,6 +528,24 @@ export function TabBar({
             >
               Remote access…
             </button>
+            {menuProject.ssh &&
+              !menuProject.remote &&
+              onShareWithTeam &&
+              (() => {
+                const blocked = shareBlockedReason?.(menuProject.id) ?? null
+                return (
+                  <button
+                    disabled={!!blocked}
+                    title={blocked ?? undefined}
+                    onClick={() => {
+                      onShareWithTeam(menuProject.id)
+                      closeMenu()
+                    }}
+                  >
+                    Share with team…
+                  </button>
+                )
+              })()}
             {menuAccounts.length > 0 && (
               <>
                 <button

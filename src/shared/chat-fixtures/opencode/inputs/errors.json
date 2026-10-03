@@ -1,0 +1,294 @@
+{
+  "info": {
+    "id": "ses_0a1b2c3d4ffeSynthetic000001",
+    "slug": "quiet-harbor",
+    "projectID": "prj_fixture",
+    "directory": "/srv/demo",
+    "path": "",
+    "title": "Fixture session",
+    "agent": "build",
+    "model": {
+      "id": "demo-model",
+      "providerID": "opencode"
+    },
+    "version": "1.18.25",
+    "summary": {
+      "additions": 0,
+      "deletions": 0,
+      "files": 0
+    },
+    "cost": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "time": {
+      "created": 1780000000000,
+      "updated": 1780000000000
+    }
+  },
+  "messages": [
+    {
+      "info": {
+        "role": "user",
+        "time": {
+          "created": 1780000001000
+        },
+        "agent": "build",
+        "model": {
+          "providerID": "opencode",
+          "modelID": "demo-model"
+        },
+        "summary": {
+          "diffs": []
+        },
+        "id": "msg_1",
+        "sessionID": "ses_0a1b2c3d4ffeSynthetic000001"
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "Go.",
+          "id": "prt_fixture0039",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        }
+      ]
+    },
+    {
+      "info": {
+        "parentID": "msg_parent",
+        "role": "assistant",
+        "mode": "build",
+        "agent": "build",
+        "path": {
+          "cwd": "/srv/demo",
+          "root": "/srv/demo"
+        },
+        "cost": 0,
+        "tokens": {
+          "total": 20,
+          "input": 12,
+          "output": 8,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "modelID": "demo-model",
+        "providerID": "opencode",
+        "time": {
+          "created": 1780000002000,
+          "completed": 1780000002500
+        },
+        "id": "msg_2",
+        "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+        "error": {
+          "name": "MessageAbortedError",
+          "data": {
+            "message": "The operation was aborted."
+          }
+        }
+      },
+      "parts": [
+        {
+          "type": "step-start",
+          "snapshot": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+          "id": "prt_fixture0040",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        },
+        {
+          "type": "text",
+          "text": "Starting on it",
+          "id": "prt_fixture0041",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        },
+        {
+          "type": "retry",
+          "attempt": 1,
+          "error": {
+            "name": "APIError",
+            "data": {
+              "message": "Overloaded",
+              "isRetryable": true
+            }
+          },
+          "time": {
+            "created": 1780000000000
+          },
+          "id": "prt_fixture0042",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        }
+      ]
+    },
+    {
+      "info": {
+        "parentID": "msg_parent",
+        "role": "assistant",
+        "mode": "build",
+        "agent": "build",
+        "path": {
+          "cwd": "/srv/demo",
+          "root": "/srv/demo"
+        },
+        "cost": 0,
+        "tokens": {
+          "total": 20,
+          "input": 12,
+          "output": 8,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "modelID": "demo-model",
+        "providerID": "opencode",
+        "time": {
+          "created": 1780000003000,
+          "completed": 1780000003500
+        },
+        "finish": "stop",
+        "id": "msg_3",
+        "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+        "error": {
+          "name": "APIError",
+          "data": {
+            "message": "Rate limit exceeded",
+            "statusCode": 429,
+            "isRetryable": true
+          }
+        }
+      },
+      "parts": []
+    },
+    {
+      "info": {
+        "parentID": "msg_parent",
+        "role": "assistant",
+        "mode": "build",
+        "agent": "build",
+        "path": {
+          "cwd": "/srv/demo",
+          "root": "/srv/demo"
+        },
+        "cost": 0,
+        "tokens": {
+          "total": 20,
+          "input": 12,
+          "output": 8,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "modelID": "demo-model",
+        "providerID": "opencode",
+        "time": {
+          "created": 1780000004000,
+          "completed": 1780000004500
+        },
+        "finish": "stop",
+        "id": "msg_4",
+        "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+        "error": {
+          "name": "MessageOutputLengthError",
+          "data": {}
+        }
+      },
+      "parts": []
+    },
+    {
+      "info": {
+        "parentID": "msg_parent",
+        "role": "assistant",
+        "mode": "build",
+        "agent": "build",
+        "path": {
+          "cwd": "/srv/demo",
+          "root": "/srv/demo"
+        },
+        "cost": 0,
+        "tokens": {
+          "total": 20,
+          "input": 12,
+          "output": 8,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "modelID": "demo-model",
+        "providerID": "opencode",
+        "time": {
+          "created": 1780000005000,
+          "completed": 1780000005500
+        },
+        "finish": "stop",
+        "id": "msg_5",
+        "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+        "error": {
+          "name": "ProviderAuthError",
+          "data": {
+            "providerID": "opencode",
+            "message": "  Invalid API key  "
+          }
+        }
+      },
+      "parts": []
+    },
+    {
+      "info": {
+        "parentID": "msg_parent",
+        "role": "assistant",
+        "mode": "build",
+        "agent": "build",
+        "path": {
+          "cwd": "/srv/demo",
+          "root": "/srv/demo"
+        },
+        "cost": 0,
+        "tokens": {
+          "total": 20,
+          "input": 12,
+          "output": 8,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "modelID": "demo-model",
+        "providerID": "opencode",
+        "time": {
+          "created": 1780000006000,
+          "completed": 1780000006500
+        },
+        "finish": "stop",
+        "id": "msg_6",
+        "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+        "error": "not an object"
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "still here",
+          "id": "prt_fixture0043",
+          "sessionID": "ses_0a1b2c3d4ffeSynthetic000001",
+          "messageID": "msg_fixture"
+        }
+      ]
+    }
+  ]
+}

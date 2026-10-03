@@ -57,6 +57,24 @@ describe('nodeTravel', () => {
     expect(nodeTravel(projects, 'active', 'n-gone')).toEqual({ kind: 'blocked' })
   })
 
+  it('a node a closed, handed-off SSH project shares with its open team tab travels to the tab', () => {
+    const shared: TravelProject[] = [
+      { id: 'ssh-1', closed: true, handedOffTo: { at: 1 }, nodes: [{ id: 'n-team' }] },
+      { id: 'team-tab', nodes: [{ id: 'n-team' }] },
+      { id: 'active', nodes: [] }
+    ]
+    expect(nodeTravel(shared, 'active', 'n-team')).toEqual({ kind: 'switch', projectId: 'team-tab' })
+  })
+
+  it('a shared node whose team tab is CLOSED travels to the handed-off SSH project (guarded reopen), never the tab', () => {
+    const shared: TravelProject[] = [
+      { id: 'ssh-1', closed: true, handedOffTo: { at: 1 }, nodes: [{ id: 'n-team' }] },
+      { id: 'team-tab', closed: true, remote: true, nodes: [{ id: 'n-team' }] },
+      { id: 'active', nodes: [] }
+    ]
+    expect(nodeTravel(shared, 'active', 'n-team')).toEqual({ kind: 'reopen', projectId: 'ssh-1' })
+  })
+
   it('does nothing for an unknown node', () => {
     expect(nodeTravel(projects, 'active', 'n-ghost')).toEqual({ kind: 'none' })
   })

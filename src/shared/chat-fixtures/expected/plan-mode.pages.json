@@ -1,0 +1,58 @@
+[
+  {
+    "before": null,
+    "maxBytes": 262144,
+    "grownMaxBytes": 262144,
+    "start": 0,
+    "parse": {
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Plan how to add a chat view to the phone. Do not write code yet."
+            }
+          ],
+          "at": 1790362800000,
+          "key": 0
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Here is my plan."
+            },
+            {
+              "kind": "tool",
+              "name": "ExitPlanMode",
+              "arg": "",
+              "body": "# Plan: add a chat view to the phone\n\n1. **Core** — export `readChatTranscript` and report `model` / `effort`.\n2. **Fixtures** — golden files the Swift port is locked to.\n\n```ts\nconst page = await readChatTranscript(q, { maxBytes: 262144 }, deps)\n```\n\n- Risks: a line larger than the window (grow ×4).",
+              "id": "toolu_plan_01",
+              "result": "User has approved your plan. You can now start coding. Start with updating your todo list if applicable"
+            }
+          ],
+          "at": 1790362801000,
+          "key": 313
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Starting with step 1."
+            }
+          ],
+          "at": 1790362803000,
+          "key": 1545
+        }
+      ],
+      "olderCursor": null,
+      "unmatchedResults": [],
+      "model": "claude-opus-5-5",
+      "effort": "xhigh",
+      "noCompleteLine": false
+    }
+  }
+]

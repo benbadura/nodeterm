@@ -1,8 +1,30 @@
+import { useEffect, useState } from 'react'
 import { useSettings } from '../../../state/settings'
+import { useWallpaperBackgroundFor } from '../../../state/wallpaper'
+import { isLiquidGlass } from '@renderer/lib/appTheme'
+import {
+  GLASS_READABLE_TICK,
+  keepGlassBlurWhileMoving,
+  resolveGlassSlider
+} from '@renderer/lib/glassContrast'
+import { useGlassA11y } from '@renderer/lib/useGlassA11y'
+import { showCanvasDots } from '@renderer/lib/canvasDots'
+import {
+  defaultWallpaper,
+  GRADIENT_WALLPAPERS,
+  NO_WALLPAPER,
+  normalizeWallpaper,
+  recentWallpaperImage,
+  wallpaperChoice,
+  sameWallpaper,
+  type DesktopWallpaper,
+  type WallpaperStill
+} from '@shared/wallpaper'
 import { SYSTEM_NODE_COLOR_SWATCHES } from '@shared/node-colors'
 import { SettingsSection } from '../SettingsSection'
 import { SearchableRow } from '../SearchableRow'
 import { FieldRow } from '../FieldRow'
+import { GlassSlider } from '../GlassSlider'
 import { Switch } from '@renderer/ui/Switch'
 import { SegmentedPill } from '@renderer/ui/SegmentedPill'
 import {
@@ -28,7 +50,7 @@ import { APPEARANCE_RESET_KEYS } from '@renderer/lib/settingsReset'
 const ROWS = {
   appTheme: {
     title: 'Appearance',
-    keywords: ['appearance', 'theme', 'light', 'dark', 'mode', 'colour', 'color', 'chrome']
+    keywords: ['appearance', 'theme', 'light', 'dark', 'mode', 'colour', 'color', 'chrome', 'liquid', 'glass', 'blur', 'translucent', 'frosted']
   },
   uiScale: {
     title: 'UI scale',
@@ -39,6 +61,10 @@ const ROWS = {
     keywords: ['tab', 'bar', 'height', 'strip', 'top', 'title bar', 'thickness', 'compact', 'dense']
   },
   accent: { title: 'Accent', keywords: ['accent', 'color', 'theme', 'appearance'] },
+  wallpaper: {
+    title: 'Desktop wallpaper',
+    keywords: ['wallpaper', 'background', 'desktop', 'image', 'picture', 'gradient', 'sonoma', 'canvas']
+  },
   windowTitle: {
     title: 'Window title',
     keywords: [
@@ -52,6 +78,18 @@ const ROWS = {
       'focused',
       'native'
     ]
+  },
+  glassTint: {
+    title: 'Glass',
+    keywords: ['glass', 'liquid', 'transparency', 'clear', 'tinted', 'frosted', 'blur', 'opacity']
+  },
+  glassBlurWhileMoving: {
+    title: 'Keep blur while moving',
+    keywords: ['glass', 'blur', 'pan', 'zoom', 'moving', 'gpu', 'performance', 'refraction']
+  },
+  canvasDots: {
+    title: 'Show grid dots',
+    keywords: ['grid', 'dots', 'dot', 'canvas', 'background', 'pattern']
   },
   resumeCard: {
     title: 'Resume card',
@@ -193,14 +231,175 @@ function TabBarHeightRow(): React.JSX.Element {
   )
 }
 
+/** One picker tile. The selected tile gets the text-coloured ring, like the accent swatches. */
+function WallpaperTile({
+  label,
+  selected,
+  background,
+  onClick,
+  children
+}: {
+  label: string
+  selected: boolean
+  background?: string
+  onClick: () => void
+  children?: React.ReactNode
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      aria-label={`Wallpaper ${label}`}
+      aria-pressed={selected}
+      title={label}
+      onClick={onClick}
+      style={background ? { background } : undefined}
+      className={cn(
+        'relative flex h-14 w-24 items-center justify-center overflow-hidden rounded-md border-2 text-[11px] text-muted',
+        selected ? 'border-text' : 'border-border'
+      )}
+    >
+      {children}
+      {/* The ring alone was the only sign of the choice (visual QA L5); a check badge says it
+          without relying on the ring's contrast against the picture. White on a picture in both
+          themes, like the macOS wallpaper picker. */}
+      {selected && (
+        <span
+          aria-hidden
+          className="absolute right-1 top-1 flex size-4 items-center justify-center rounded-full bg-white text-[10px] font-bold leading-none text-black shadow"
+        >
+          ✓
+        </span>
+      )}
+    </button>
+  )
+}
+
+/**
+ * None, the macOS stills found on the machine that owns the files, the gradient presets, and
+ * "Choose image…". The stills list comes from core and is empty off macOS (and on a relay tab);
+ * "Choose image…" is hidden in the Server Edition, where a native file picker would browse the
+ * SERVER's disk rather than the viewer's.
+ */
+function WallpaperPicker(): React.JSX.Element {
+  const value = normalizeWallpaper(useSettings((s) => s.settings.desktopWallpaper))
+  const recent = recentWallpaperImage(useSettings((s) => s.settings.recentWallpaperImage))
+  // The tile offers the current image, else the last one imported (kept when a preset is chosen).
+  const yourImage = value.kind === 'image' ? value : recent
+  // Its own picture, like every preset tile (visual QA round 2, N7). Imports have no cached
+  // thumbnail, so this is the wallpaper itself — the one already loaded when it is the current one.
+  const yourImageBg = useWallpaperBackgroundFor(yourImage)
+  const update = useSettings((s) => s.update)
+  const [stills, setStills] = useState<WallpaperStill[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    let live = true
+    window.nodeTerminal.wallpaper
+      .listStills()
+      .then((list) => live && setStills(list))
+      .catch(() => live && setStills([]))
+    return () => {
+      live = false
+    }
+  }, [])
+  const pick = (w: DesktopWallpaper): void => {
+    setError(null)
+    update(wallpaperChoice(value, w))
+  }
+  const chooseImage = async (): Promise<void> => {
+    setError(null)
+    const picked = await window.nodeTerminal.dialog.selectFile().catch(() => null)
+    if (!picked) return
+    try {
+      pick(await window.nodeTerminal.wallpaper.importImage(picked))
+    } catch (e) {
+      // Electron prefixes a handler's error with "Error invoking remote method …: Error: ".
+      setError(String((e as Error)?.message ?? e).replace(/^.*Error: /, ''))
+    }
+  }
+  const is = (w: DesktopWallpaper): boolean => sameWallpaper(value, w)
+  return (
+    <div>
+      <h4 className="text-[13px] font-medium text-text">Desktop wallpaper</h4>
+      <p className="mt-1 text-[13px] leading-relaxed text-muted">
+        A picture behind the whole window. It stays put while you pan and zoom, and the Liquid
+        Glass appearance above frosts the interface over it.
+      </p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <WallpaperTile label="None" selected={is(NO_WALLPAPER)} onClick={() => pick(NO_WALLPAPER)}>
+          None
+        </WallpaperTile>
+        {stills === null && <span className="self-center text-[12px] text-muted">Loading stills…</span>}
+        {stills?.map((s) => (
+          <WallpaperTile
+            key={s.id}
+            label={s.label}
+            selected={is({ kind: 'preset', id: s.id })}
+            background={s.thumb ? `center / cover no-repeat url("${s.thumb}")` : undefined}
+            onClick={() => pick({ kind: 'preset', id: s.id })}
+          >
+            {s.thumb ? null : s.label}
+          </WallpaperTile>
+        ))}
+        {GRADIENT_WALLPAPERS.map((g) => (
+          <WallpaperTile
+            key={g.id}
+            label={g.label}
+            selected={is({ kind: 'preset', id: g.id })}
+            background={g.css}
+            onClick={() => pick({ kind: 'preset', id: g.id })}
+          />
+        ))}
+        {yourImage && (
+          <WallpaperTile
+            label="Your image"
+            selected={is(yourImage)}
+            background={yourImageBg ? `center / cover no-repeat ${yourImageBg}` : undefined}
+            onClick={() => pick(yourImage)}
+          >
+            {yourImageBg ? null : 'Your image'}
+          </WallpaperTile>
+        )}
+        {!isBrowserRuntime() && (
+          <WallpaperTile label="Choose image…" selected={false} onClick={() => void chooseImage()}>
+            Choose image…
+          </WallpaperTile>
+        )}
+      </div>
+      {error && <p className="mt-2 text-[12px] text-danger">{error}</p>}
+    </div>
+  )
+}
+
 export function AppearanceSection({ isActive }: { isActive: boolean }): React.JSX.Element {
   const appTheme = useSettings((s) => s.settings.appTheme)
   const accent = useSettings((s) => s.settings.accent)
   const hiddenNodeMenuItems = useSettings((s) => s.settings.hiddenNodeMenuItems)
   const hiddenHeaderButtons = useSettings((s) => s.settings.hiddenHeaderButtons)
   const showResumeCard = useSettings((s) => s.settings.showResumeCard)
+  const canvasDots = useSettings((s) => s.settings.canvasDots)
+  const glassSlider = resolveGlassSlider(useSettings((s) => s.settings.glassTint))
+  const glassA11y = useGlassA11y()
+  const glassLocked = glassA11y.reduceTransparency || glassA11y.moreContrast
+  const glassBlurWhileMoving = keepGlassBlurWhileMoving(
+    useSettings((s) => s.settings.glassBlurWhileMoving)
+  )
   const windowTitleActiveSession = useSettings((s) => s.settings.windowTitleActiveSession)
   const update = useSettings((s) => s.update)
+  // Glass over plain black reads as a dark theme with smudges, so choosing Liquid Glass with no
+  // wallpaper also picks one. Only when there is none: a wallpaper the user chose is never
+  // replaced, and re-checked after the (possibly slow, first-run thumbnail) stills listing.
+  const chooseAppTheme = async (v: typeof appTheme): Promise<void> => {
+    update({ appTheme: v })
+    if (!isLiquidGlass(v)) return
+    const hasWallpaper = () =>
+      normalizeWallpaper(useSettings.getState().settings.desktopWallpaper).kind !== 'none'
+    if (hasWallpaper()) return
+    const stills = await window.nodeTerminal.wallpaper.listStills().catch(() => [])
+    // The stills listing can take a while (first-run thumbnails): only pick a wallpaper if Liquid
+    // Glass is still the choice when it answers.
+    if (!hasWallpaper() && isLiquidGlass(useSettings.getState().settings.appTheme))
+      update({ desktopWallpaper: defaultWallpaper(stills) })
+  }
   return (
     <SettingsSection
       id="appearance"
@@ -211,21 +410,65 @@ export function AppearanceSection({ isActive }: { isActive: boolean }): React.JS
       <SearchableRow {...ROWS.appTheme}>
         <FieldRow
           label="Appearance"
-          description="Follow terminal theme uses the colour theme you picked in Settings → Terminal, so a light terminal isn't framed by a dark window."
+          description={
+            'Follow terminal matches the theme picked in Settings → Terminal. Liquid Glass does too, and frosts the whole interface over the desktop wallpaper, without window colour accents.' +
+            (isLiquidGlass(appTheme)
+              ? ' Regular text keeps 4.5:1 contrast on glass; secondary text and coloured output can fade over bright wallpaper.'
+              : '')
+          }
           control={
             <SegmentedPill
               value={appTheme}
               options={[
                 { value: 'auto', label: 'Follow terminal' },
                 { value: 'dark', label: 'Dark' },
-                { value: 'light', label: 'Light' }
+                { value: 'light', label: 'Light' },
+                { value: 'liquid-glass', label: 'Liquid Glass' }
               ]}
-              onChange={(v) => update({ appTheme: v })}
+              onChange={(v) => void chooseAppTheme(v)}
               ariaLabel="Appearance"
             />
           }
         />
       </SearchableRow>
+      {isLiquidGlass(appTheme) && (
+        <SearchableRow {...ROWS.glassTint}>
+          <FieldRow
+            label="Glass"
+            description={
+              glassA11y.reduceTransparency
+                ? 'Reduce Transparency is on in your system settings, so glass is opaque. Turn it off there to use this slider.'
+                : glassA11y.moreContrast
+                ? 'Increase Contrast is on in your system settings, so glass stays at Tinted with stronger edges.'
+                : glassSlider < GLASS_READABLE_TICK
+                ? 'Clearer than Readable: text can fade over bright parts of the wallpaper.'
+                : 'Regular text keeps 4.5:1 contrast over any wallpaper.'
+            }
+            control={
+              <GlassSlider
+                value={glassSlider}
+                disabled={glassLocked}
+                onChange={(v) => update({ glassTint: v })}
+              />
+            }
+          />
+        </SearchableRow>
+      )}
+      {isLiquidGlass(appTheme) && (
+        <SearchableRow {...ROWS.glassBlurWhileMoving}>
+          <FieldRow
+            label="Keep blur while moving"
+            description="Uses more GPU while panning and zooming."
+            control={
+              <Switch
+                checked={glassBlurWhileMoving}
+                onChange={(v) => update({ glassBlurWhileMoving: v })}
+                ariaLabel="Keep blur while moving"
+              />
+            }
+          />
+        </SearchableRow>
+      )}
       <SearchableRow {...ROWS.uiScale}>
         <UiScaleRow />
       </SearchableRow>
@@ -246,6 +489,7 @@ export function AppearanceSection({ isActive }: { isActive: boolean }): React.JS
                 type="button"
                 aria-label={`Accent ${label}`}
                 title={label}
+                aria-pressed={accent === c}
                 onClick={() => update({ accent: c })}
                 style={{ background: c }}
                 className={cn(
@@ -256,6 +500,9 @@ export function AppearanceSection({ isActive }: { isActive: boolean }): React.JS
             ))}
           </div>
         </div>
+      </SearchableRow>
+      <SearchableRow {...ROWS.wallpaper}>
+        <WallpaperPicker />
       </SearchableRow>
       <SearchableRow {...ROWS.windowTitle}>
         <FieldRow
@@ -271,6 +518,19 @@ export function AppearanceSection({ isActive }: { isActive: boolean }): React.JS
               checked={windowTitleActiveSession}
               onChange={(v) => update({ windowTitleActiveSession: v })}
               ariaLabel="Show the active session in the window title"
+            />
+          }
+        />
+      </SearchableRow>
+      <SearchableRow {...ROWS.canvasDots}>
+        <FieldRow
+          label="Show grid dots"
+          description="Draw the dot grid on the canvas. Only the dots: snapping and align to grid work the same either way."
+          control={
+            <Switch
+              checked={showCanvasDots(canvasDots)}
+              onChange={(v) => update({ canvasDots: v })}
+              ariaLabel="Show grid dots"
             />
           }
         />

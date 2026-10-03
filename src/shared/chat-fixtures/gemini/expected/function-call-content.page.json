@@ -1,0 +1,48 @@
+{
+  "page": {
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "read it"
+          }
+        ],
+        "at": 1790589601000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Reading."
+          },
+          {
+            "kind": "tool",
+            "name": "read_file",
+            "arg": "x.ts",
+            "result": "export const x = 1"
+          }
+        ],
+        "at": 1790589602000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "tool",
+            "name": "glob",
+            "arg": "*.ts",
+            "result": "x.ts"
+          }
+        ],
+        "at": 1790589604000
+      }
+    ],
+    "found": true,
+    "olderCursor": null,
+    "unmatchedResults": []
+  },
+  "skipped": 0
+}

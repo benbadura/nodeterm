@@ -1,0 +1,145 @@
+{
+  "sessionId": "ses_0a1b2c3d4ffeSynthetic000001",
+  "parse": {
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Go."
+          }
+        ],
+        "at": 1780000001000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Starting on it"
+          },
+          {
+            "kind": "text",
+            "text": "[MessageAbortedError] The operation was aborted."
+          }
+        ],
+        "at": 1780000002000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "[APIError] Rate limit exceeded"
+          }
+        ],
+        "at": 1780000003000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "[MessageOutputLengthError]"
+          }
+        ],
+        "at": 1780000004000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "[ProviderAuthError] Invalid API key"
+          }
+        ],
+        "at": 1780000005000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "still here"
+          }
+        ],
+        "at": 1780000006000
+      }
+    ],
+    "skipped": 1,
+    "model": "demo-model"
+  },
+  "page": {
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Go."
+          }
+        ],
+        "at": 1780000001000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Starting on it"
+          },
+          {
+            "kind": "text",
+            "text": "[MessageAbortedError] The operation was aborted."
+          }
+        ],
+        "at": 1780000002000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "[APIError] Rate limit exceeded"
+          }
+        ],
+        "at": 1780000003000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "[MessageOutputLengthError]"
+          }
+        ],
+        "at": 1780000004000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "[ProviderAuthError] Invalid API key"
+          }
+        ],
+        "at": 1780000005000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "still here"
+          }
+        ],
+        "at": 1780000006000
+      }
+    ],
+    "found": true,
+    "olderCursor": null,
+    "unmatchedResults": [],
+    "model": "demo-model"
+  }
+}

@@ -3,6 +3,8 @@ import { IconClose } from './icons'
 import type { ProjectIcon } from '@shared/project-icon'
 import { filterClosedProjects } from '../lib/closedHistory'
 import { ProjectGlyph } from './ProjectGlyph'
+import type { RecentConversation } from '@shared/recent-conversations'
+import { RecentConversations } from './RecentConversations'
 
 /**
  * Rows before the "Recently closed" filter box appears (issue #506). `.welcome__recent-list` is
@@ -40,6 +42,11 @@ interface WelcomeScreenProps {
    * nothing appeared. No effect on the canvas, where the welcome screen already sits on top.
    */
   overBoard?: boolean
+  /** "Open recent": past agent conversations from this machine's CLI histories. Absent = not read
+   *  (or the read failed) — the section is simply not drawn, never "no conversations". */
+  recentConversations?: readonly RecentConversation[]
+  recentActionFor?: (conv: RecentConversation) => { label: string; disabled?: string }
+  onResumeRecent?: (conv: RecentConversation) => void
 }
 
 /** Start screen with quick actions — shown when there are no projects, or on demand via "+". */
@@ -53,7 +60,10 @@ export function WelcomeScreen({
   onReopen,
   onDeleteClosed,
   onClose,
-  overBoard
+  overBoard,
+  recentConversations,
+  recentActionFor,
+  onResumeRecent
 }: WelcomeScreenProps) {
   const [query, setQuery] = useState('')
   const visibleClosed = useMemo(
@@ -158,81 +168,95 @@ export function WelcomeScreen({
         </button>
       </div>
 
-      {closedProjects.length > 0 && (
-        <div className="welcome__recent">
-          <div className="welcome__recent-title">Recently closed</div>
-          {/* Shown only past the visible-row cap: with three closed projects a filter box is
-              in the way, and past six the list is already scrolling. */}
-          {closedProjects.length > RECENT_FILTER_THRESHOLD && (
-            <input
-              className="welcome__recent-filter"
-              placeholder="Filter by name or folder…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                // Esc clears the box before it reaches the screen's own close handler; on an
-                // empty box it falls through and still closes the screen.
-                if (e.key !== 'Escape' || query === '') return
-                e.preventDefault()
-                e.stopPropagation()
-                setQuery('')
-              }}
-            />
-          )}
-          <div className="welcome__recent-list">
-            {visibleClosed.length === 0 && (
-              <div className="welcome__recent-empty">No closed projects match “{query.trim()}”.</div>
-            )}
-            {visibleClosed.map((p) => (
-              <div
-                key={p.id}
-                className="welcome__recent-item"
-                role="button"
-                tabIndex={0}
-                title={p.cwd || p.name}
-                onClick={() => onReopen?.(p.id)}
+      {/* One container exactly as wide as the card row, centered with it: Recent conversations on
+          the left, Recently closed on the right, stacked below the breakpoint. A section that is
+          not drawn leaves the other one the full width (`:only-child` in styles.css), never a
+          half-width column on one side. */}
+      <div className="welcome__lists">
+        {recentConversations && recentActionFor && onResumeRecent && (
+          <RecentConversations
+            items={recentConversations}
+            actionFor={recentActionFor}
+            onResume={onResumeRecent}
+          />
+        )}
+
+        {closedProjects.length > 0 && (
+          <div className="welcome__recent welcome__recent--closed">
+            <div className="welcome__recent-title">Recently closed</div>
+            {/* Shown only past the visible-row cap: with three closed projects a filter box is
+                in the way, and past six the list is already scrolling. */}
+            {closedProjects.length > RECENT_FILTER_THRESHOLD && (
+              <input
+                className="welcome__recent-filter"
+                placeholder="Filter by name or folder…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') onReopen?.(p.id)
+                  // Esc clears the box before it reaches the screen's own close handler; on an
+                  // empty box it falls through and still closes the screen.
+                  if (e.key !== 'Escape' || query === '') return
+                  e.preventDefault()
+                  e.stopPropagation()
+                  setQuery('')
                 }}
-              >
-                <ProjectGlyph
-                  icon={p.icon}
-                  color={p.color}
-                  name={p.name}
-                  variant="monogram"
-                  size={15}
-                  className="welcome__recent-mark"
-                />
-                <span className="welcome__recent-name">{p.name}</span>
-                {p.cwd && <span className="welcome__recent-path">{p.cwd}</span>}
-                {(sessionCounts?.[p.id] ?? 0) > 0 && (
-                  <span
-                    className="welcome__recent-sessions"
-                    title={`${sessionCounts![p.id]} tmux session${
-                      sessionCounts![p.id] === 1 ? ' from this project is' : 's from this project are'
-                    } still running on this machine. Reopen the project to pick them up, or × to delete it and end them.`}
-                  >
-                    {sessionCounts![p.id]} running
-                  </span>
-                )}
-                {onDeleteClosed && (
-                  <button
-                    className="welcome__recent-del"
-                    title="Delete permanently (ends its sessions)"
-                    aria-label="Delete permanently"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onDeleteClosed(p.id)
-                    }}
-                  >
-                    <IconClose />
-                  </button>
-                )}
-              </div>
-            ))}
+              />
+            )}
+            <div className="welcome__recent-list">
+              {visibleClosed.length === 0 && (
+                <div className="welcome__recent-empty">No closed projects match “{query.trim()}”.</div>
+              )}
+              {visibleClosed.map((p) => (
+                <div
+                  key={p.id}
+                  className="welcome__recent-item"
+                  role="button"
+                  tabIndex={0}
+                  title={p.cwd || p.name}
+                  onClick={() => onReopen?.(p.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') onReopen?.(p.id)
+                  }}
+                >
+                  <ProjectGlyph
+                    icon={p.icon}
+                    color={p.color}
+                    name={p.name}
+                    variant="monogram"
+                    size={15}
+                    className="welcome__recent-mark"
+                  />
+                  <span className="welcome__recent-name" title={p.name}>{p.name}</span>
+                  {p.cwd && <span className="welcome__recent-path">{p.cwd}</span>}
+                  {(sessionCounts?.[p.id] ?? 0) > 0 && (
+                    <span
+                      className="welcome__recent-sessions"
+                      title={`${sessionCounts![p.id]} tmux session${
+                        sessionCounts![p.id] === 1 ? ' from this project is' : 's from this project are'
+                      } still running on this machine. Reopen the project to pick them up, or × to delete it and end them.`}
+                    >
+                      {sessionCounts![p.id]} running
+                    </span>
+                  )}
+                  {onDeleteClosed && (
+                    <button
+                      className="welcome__recent-del"
+                      title="Delete permanently (ends its sessions)"
+                      aria-label="Delete permanently"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onDeleteClosed(p.id)
+                      }}
+                    >
+                      <IconClose />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   )
 }

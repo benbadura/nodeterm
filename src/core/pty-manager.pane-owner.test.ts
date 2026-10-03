@@ -439,6 +439,30 @@ describe('PtyManager.terminateForeground — identity gate', () => {
     expect(killed).toEqual([-2503294])
   })
 
+  it('verifies a BLANK-command custom agent by its builtin base (claude), and kills', async () => {
+    script.answer = claudeForeground
+    const mgr = await killManager({
+      customAgents: [{ id: 'custom:proxy', label: 'Proxy', launchCmd: '', baseAgent: 'claude' }]
+    })
+    expect(await mgr.terminateForeground(NODE, 'custom:proxy')).toBe(true)
+    expect(killed).toEqual([-2503294])
+  })
+
+  it('REFUSES a blank-command claude-base custom agent when a shell owns the pane', async () => {
+    script.answer = (file, args) => {
+      if (args.includes(PANE_OWNER_FMT)) return { stdout: `2485382|${TTY}|bash|%3\n` }
+      if (args.join(' ').includes('#{pane_pid}')) return { stdout: '2485382|bash' }
+      if (args.includes('tpgid=')) return { stdout: '2485382' }
+      if (file === 'ps') return { stdout: '2485382 2485382 Ss+  -bash' }
+      return { stdout: '' }
+    }
+    const mgr = await killManager({
+      customAgents: [{ id: 'custom:proxy', label: 'Proxy', launchCmd: '', baseAgent: 'claude' }]
+    })
+    expect(await mgr.terminateForeground(NODE, 'custom:proxy')).toBe(false)
+    expect(killed).toEqual([])
+  })
+
   it('with no expected id, keeps the legacy shell-only guard (kills a non-shell foreground)', async () => {
     script.answer = claudeForeground
     const mgr = await killManager()

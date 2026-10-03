@@ -170,7 +170,9 @@ export function DiffNode({ id, data, selected }: NodeProps<CanvasNode>) {
           </div>
         </div>
       ) : (
-        <div className="editor-node__body nodrag nowheel" ref={bodyRef} />
+        // `nokey`: keeps React Flow's key handling (arrow-key node move, key-press hooks) out of
+        // Monaco, whose EditContext input React Flow does not recognise as one (#930).
+        <div className="editor-node__body nodrag nowheel nokey" ref={bodyRef} />
       )}
     </div>
   )

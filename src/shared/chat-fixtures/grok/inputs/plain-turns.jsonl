@@ -1,0 +1,7 @@
+{"type":"system","content":"You are a synthetic coding agent. Follow the rules.\n\n# Rules\n- be brief"}
+{"type":"user","content":[{"type":"text","text":"Explain the **plan**:\n\n1. read\n2. write"}],"prompt_index":0}
+{"type":"assistant","content":"## Plan\n\n- Read `a.ts`\n- Then write\n\n```ts\nconst x = 1\n```\n\n> quoted","model_id":"grok-4.6-build","model_fingerprint":"fp_0000000000synthetic","reasoning_effort":"xhigh"}
+{"type":"user","content":[{"type":"text","text":"first half"},{"type":"text","text":"second half"}],"prompt_index":1}
+{"type":"user","content":"a string-content prompt","prompt_index":2}
+{"type":"user","content":[{"type":"text","text":"Türkçe karakterler: ğüşiöç — 中文 — emoji 🧪"}],"prompt_index":3}
+{"type":"assistant","content":"Tamam ✓ 🧪","model_id":"grok-4.6-build","model_fingerprint":"fp_0000000000synthetic","reasoning_effort":"xhigh"}

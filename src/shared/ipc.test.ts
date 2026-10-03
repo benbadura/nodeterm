@@ -48,4 +48,33 @@ describe('IPC channels', () => {
     expect(IPC.relayClientFrame('abc')).toBe('relay:client:frame:abc')
     expect(IPC.relayClientClosed('abc')).toBe('relay:client:closed:abc')
   })
+
+  it('exposes the desktop-local hosted-team bookmark channels', () => {
+    expect(IPC.relayHostedBookmarks).toBe('relay:hosted:bookmarks')
+    expect(IPC.relayHostedBookmarkRemove).toBe('relay:hosted:bookmark-remove')
+  })
+
+  it('exposes the desktop-local share-team channels', () => {
+    expect([
+      IPC.shareTeamProbe,
+      IPC.shareTeamInstall,
+      IPC.shareTeamCancelInstall,
+      IPC.shareTeamInstallOutput,
+      IPC.shareTeamFlushMirror,
+      IPC.shareTeamBootstrap,
+      IPC.shareTeamKillSessions,
+      IPC.shareTeamResume,
+      IPC.shareTeamSeedBookmark
+    ]).toEqual([
+      'share-team:probe',
+      'share-team:install',
+      'share-team:cancel-install',
+      'share-team:install-output',
+      'share-team:flush-mirror',
+      'share-team:bootstrap',
+      'share-team:kill-sessions',
+      'share-team:resume',
+      'share-team:seed-bookmark'
+    ])
+  })
 })

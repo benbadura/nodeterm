@@ -21,6 +21,7 @@ import { defaultScmScope, type ScmScope } from '@shared/scm-scope'
 import { chipFor, effectiveBindings } from '../lib/keybindingOverrides'
 import { matchesShortcut } from '@shared/shortcut'
 import { isMacPlatform } from '@shared/platform-utils'
+import { gitStatusColor } from '../lib/gitStatusColors'
 
 export interface SourceControlPanelProps {
   onClose: () => void
@@ -43,14 +44,6 @@ const AUTO_FETCH_MS = 180_000
 
 /** Which physical modifier the registry's abstract `Cmd` resolves to for the commit chord. */
 const isMac = isMacPlatform()
-
-const STATUS_COLOR: Record<string, string> = {
-  M: '#ffd60a',
-  A: '#32d74b',
-  D: '#ff453a',
-  R: '#bf5af2',
-  U: '#6ac4dc'
-}
 
 function DiffStat({ added, deleted }: { added: number; deleted: number }) {
   if (!added && !deleted) return null
@@ -294,7 +287,7 @@ export function SourceControlPanel({
             setFileMenu({ x: e.clientX, y: e.clientY, path: f.path })
           }}
         >
-          <span className="scm-letter" style={{ color: STATUS_COLOR[f.status] ?? 'rgba(255,255,255,0.85)' }}>
+          <span className="scm-letter" style={{ color: gitStatusColor(f.status) }}>
             {f.status}
           </span>
           <button

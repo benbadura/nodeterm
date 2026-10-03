@@ -41,6 +41,14 @@ describe('preload sshProject passphrase wiring', () => {
     expect(h.invoke).toHaveBeenCalledWith(IPC.ptyTerminateForeground, 'node-1', 'claude')
   })
 
+  // #925: the request travels as ONE object, verbatim — main fills release/requirePersistent and
+  // strips the SSH fields itself, so the preload must neither add nor drop anything.
+  it('routes pty.launchHeadless through request IPC with the request object verbatim', async () => {
+    const req = { ptyOptions: { persistKey: 'node-1', cols: 80, rows: 24 }, command: 'claude' }
+    await api.pty.launchHeadless(req)
+    expect(h.invoke).toHaveBeenCalledWith(IPC.ptyLaunchHeadless, req)
+  })
+
   it('exposes GitHub issue data and host-control namespaces on their exact channels', async () => {
     await api.githubIssues.query({ projectId: 'p1', columnId: null, pageSize: 50 })
     await api.githubControl.saveToken('write-only-secret')
@@ -126,5 +134,18 @@ describe('preload sshProject passphrase wiring', () => {
     expect(got).toEqual([{ requestId: 'r7' }])
     off()
     expect(h.removeListener).toHaveBeenCalledWith(IPC.sshPassphraseDismiss, handler)
+  })
+})
+
+describe('preload canvasAuthority (the desktop governs nothing)', () => {
+  it('answers no project, never assumes any, and never asks main', async () => {
+    h.invoke.mockClear()
+    h.on.mockClear()
+    expect(api.canvasAuthority.assumeAllUntilAnswered).toBe(false)
+    expect(await api.canvasAuthority.governed()).toEqual([])
+    const off = api.canvasAuthority.onChanged(() => {})
+    expect(() => off()).not.toThrow()
+    expect(h.invoke).not.toHaveBeenCalled()
+    expect(h.on).not.toHaveBeenCalled()
   })
 })

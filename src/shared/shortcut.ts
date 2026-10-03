@@ -57,8 +57,11 @@ const KEY_ALIASES: Record<string, string> = { COMMA: ',', SLASH: '/', PERIOD: '.
 const MODIFIER_KEYS = new Set(['META', 'CONTROL', 'CTRL', 'SHIFT', 'ALT', 'ALTGRAPH', 'OS'])
 
 /** `"d"` / `"D"` / `"Escape"` / `"F5"` -> the uppercased canonical key token; a punctuation alias
- *  (`"Comma"`) -> the character `e.key` actually reports (`","`). */
+ *  (`"Comma"`) -> the character `e.key` actually reports (`","`); the space bar (`" "`) -> `SPACE`. */
 function normalizeKey(key: string): string {
+  // The DOM reports the space bar as a literal ' '; the canonical token is `SPACE` (a `Space`
+  // binding could never match otherwise, and a captured space serialized as a trailing blank).
+  if (key === ' ') return 'SPACE'
   const upper = key.toUpperCase()
   return KEY_ALIASES[upper] ?? upper
 }
@@ -285,6 +288,18 @@ export function captureToShortcut(e: ShortcutKeyEvent, isMac: boolean): string |
   if (e.shiftKey) parts.push('Shift')
   parts.push(key)
   return parts.join('+')
+}
+
+/**
+ * A captured keydown with NO modifier held, as its canonical key token (`"j"` -> `"J"`, `" "` ->
+ * `"SPACE"`), or null when a modifier is held or the key is itself a modifier. Only for commands
+ * whose flags permit a bare binding (the board's keys, the bare-key canvas commands); the caller
+ * still validates the result through `normalizeBindingForCommand`.
+ */
+export function captureBareKey(e: ShortcutKeyEvent): string | null {
+  if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return null
+  const key = normalizeKey(e.key)
+  return MODIFIER_KEYS.has(key) ? null : key
 }
 
 /** The modifier state observed while capturing a would-be hold-to-talk chord (see

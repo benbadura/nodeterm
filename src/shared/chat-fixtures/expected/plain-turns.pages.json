@@ -1,0 +1,87 @@
+[
+  {
+    "before": null,
+    "maxBytes": 262144,
+    "grownMaxBytes": 262144,
+    "start": 0,
+    "parse": {
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "How do I list the files in a directory, sorted by size?"
+            }
+          ],
+          "at": 1790362801000,
+          "key": 289
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "## Sorted by size\n\nUse `ls` with **-S**:\n\n```sh\nls -lS\n```\n\n- `-l` long format\n- `-S` sort by size, largest first\n\n> Add `-r` to reverse."
+            }
+          ],
+          "at": 1790362802000,
+          "key": 593
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "And recursively?"
+            }
+          ],
+          "at": 1790362803000,
+          "key": 1124
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Use `find` with `du`:"
+            },
+            {
+              "kind": "text",
+              "text": "```sh\nfind . -type f -exec du -h {} + | sort -rh | head\n```"
+            }
+          ],
+          "at": 1790362804000,
+          "key": 1414
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "thanks — çok iyi 👍"
+            }
+          ],
+          "at": 1790362806000,
+          "key": 2176
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Rica ederim! 🎉"
+            }
+          ],
+          "at": 1790362807000,
+          "key": 2449
+        }
+      ],
+      "olderCursor": null,
+      "unmatchedResults": [],
+      "model": "claude-opus-5-5",
+      "effort": "medium",
+      "noCompleteLine": false
+    }
+  }
+]

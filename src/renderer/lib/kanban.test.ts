@@ -6,7 +6,8 @@ import {
   setCardDue, setCardPriority, toggleAssignee, unassigned,
   boardLabels, cardMatchesLabelFilter, createLabel, deleteLabel, labelColor, labelsForCard,
   recolorLabel, renameLabel, reorderLabels, toggleCardLabel,
-  autoLabelColor, migrateProjectTags, migrateTagsToLabels, setCardLabels, resolveColumnRef
+  autoLabelColor, migrateProjectTags, migrateTagsToLabels, setCardLabels, resolveColumnRef,
+  setColumnCategory, AT_COLUMN_END
 } from './kanban'
 import type { Project } from '@shared/types'
 
@@ -24,10 +25,17 @@ const board = (): ProjectKanban => ({
 
 describe('defaultKanban', () => {
   it('makes To Do / In Progress / Done with unique ids and no assignments', () => {
-    const k = defaultKanban()
+    const k = defaultKanban('p')
     expect(k.columns.map((c) => c.title)).toEqual(['To Do', 'In Progress', 'Done'])
+    expect(k.columns.map((c) => c.category)).toEqual(['unstarted', 'started', 'done'])
     expect(new Set(k.columns.map((c) => c.id)).size).toBe(3)
     expect(k.assignments).toEqual([])
+  })
+  // Every client renders this board until the first edit; two clients' concurrent first edits must
+  // land on the same three columns (spec §11 amendment 5).
+  it('is the same board, ids included, for one project — and a different one for another', () => {
+    expect(defaultKanban('p1')).toEqual(defaultKanban('p1'))
+    expect(defaultKanban('p1').columns.map((c) => c.id)).not.toEqual(defaultKanban('p2').columns.map((c) => c.id))
   })
 })
 
@@ -52,6 +60,21 @@ describe('columns', () => {
     const k = recolorColumn(renameColumn(board(), 'b', 'WIP'), 'b', '#fff')
     expect(k.columns[1]).toMatchObject({ id: 'b', title: 'WIP', color: '#fff' })
     expect(k.columns[0]).toEqual(board().columns[0])
+  })
+  it('setColumnCategory sets, changes and clears ONLY the target column', () => {
+    const set = setColumnCategory(board(), 'b', 'done')
+    expect(set.columns[1]).toEqual({ id: 'b', title: 'Doing', color: '#ffd60a', category: 'done' })
+    expect(set.columns[0]).toEqual(board().columns[0])
+    const cleared = setColumnCategory(set, 'b', undefined)
+    expect(cleared.columns[1]).toEqual(board().columns[1])
+    expect('category' in cleared.columns[1]).toBe(false)
+  })
+  it('setColumnCategory: unknown column or unchanged value returns the SAME board (no persist)', () => {
+    const k = board()
+    expect(setColumnCategory(k, 'nope', 'done')).toBe(k)
+    expect(setColumnCategory(k, 'a', undefined)).toBe(k)
+    const set = setColumnCategory(k, 'a', 'started')
+    expect(setColumnCategory(set, 'a', 'started')).toBe(set)
   })
   it('moveColumn before a target and to the end (null)', () => {
     expect(moveColumn(board(), 'b', 'a').columns.map((c) => c.id)).toEqual(['b', 'a'])
@@ -105,9 +128,21 @@ describe('assignments', () => {
     expect(unassigned(k, ['n1', 'n2'])).toEqual(['n1', 'n2'])
     expect(assignedTo(k, 'a')).toEqual([])
   })
-  it('assignNode into a column at the end (null) and before a target', () => {
-    const atEnd = assignNode(board(), 'n9', 'b', null)
+  // An UNANCHORED move lands at the TOP of its column: a card an agent just moved into a long
+  // "Done" column used to append at the bottom and read as "it disappeared".
+  it('assignNode with no anchor (null) lands at the TOP of the destination', () => {
+    const atTop = assignNode(board(), 'n9', 'b', null)
+    expect(assignedTo(atTop, 'b')).toEqual(['n9', 'n2'])
+    const moved = assignNode(board(), 'n3', 'a', null)
+    expect(assignedTo(moved, 'a')).toEqual(['n3', 'n1'])
+  })
+  it('assignNode at the column END only when asked for it explicitly (a drop below the last card)', () => {
+    const atEnd = assignNode(board(), 'n9', 'b', AT_COLUMN_END)
     expect(assignedTo(atEnd, 'b')).toEqual(['n2', 'n9'])
+    const moved = assignNode(board(), 'n1', 'a', AT_COLUMN_END)
+    expect(assignedTo(moved, 'a')).toEqual(['n3', 'n1'])
+  })
+  it('assignNode before a target card in the column', () => {
     const before = assignNode(board(), 'n2', 'a', 'n3')
     expect(assignedTo(before, 'a')).toEqual(['n1', 'n2', 'n3'])
     expect(assignedTo(before, 'b')).toEqual([])
@@ -116,9 +151,9 @@ describe('assignments', () => {
     const k = assignNode(board(), 'n1', null, null)
     expect(k.assignments.map((a) => a.nodeId)).toEqual(['n2', 'n3'])
   })
-  it('assignNode: beforeNode in a different column ⇒ end; unknown column ⇒ no-op; self-before ⇒ no-op', () => {
+  it('assignNode: beforeNode in a different column is no anchor ⇒ top; unknown column ⇒ no-op; self-before ⇒ no-op', () => {
     const k = assignNode(board(), 'n1', 'b', 'n3')
-    expect(assignedTo(k, 'b')).toEqual(['n2', 'n1'])
+    expect(assignedTo(k, 'b')).toEqual(['n1', 'n2'])
     expect(assignNode(board(), 'n1', 'nope', null)).toEqual(board())
     expect(assignNode(board(), 'n1', 'a', 'n1')).toEqual(board())
   })
@@ -223,6 +258,15 @@ describe('board labels', () => {
     k = recolorLabel(renameLabel(k, idA, 'Acil'), idA, 'orange')
     expect(boardLabels(k)[0]).toMatchObject({ id: idA, name: 'Acil', color: 'orange' })
     expect(boardLabels(k)[1]).toMatchObject({ id: idB, name: 'B', color: 'green' })
+  })
+
+  // D7: a hand-edited file can carry a non-list `labels`; the toggle reads it as none instead of
+  // throwing (`.includes` of a string or an object) out of a click handler.
+  it('toggleCardLabel treats a non-list labels field as no labels', () => {
+    const k = { columns: [], assignments: [], meta: [{ nodeId: 'n1', labels: 'bug' as never, priority: 'high' as const }] }
+    expect(toggleCardLabel(k, 'n1', 'l1').meta).toEqual([{ nodeId: 'n1', priority: 'high', labels: ['l1'] }])
+    const obj = { columns: [], assignments: [], meta: [{ nodeId: 'n1', labels: { 0: 'x' } as never }] }
+    expect(toggleCardLabel(obj, 'n1', 'l1').meta).toEqual([{ nodeId: 'n1', labels: ['l1'] }])
   })
 
   it('toggleCardLabel adds then removes; labelsForCard resolves in palette order and drops dangling', () => {
@@ -365,8 +409,10 @@ describe('tag → label migration', () => {
     // no kanban → a default board (3 columns) is seeded so the board is never column-less
     const m = migrateProjectTags(proj([{ id: 'n1', tags: ['x'] }]))
     expect(m.kanban!.columns).toHaveLength(3)
+    // …and it is THIS project's lazy default, so the ids match what every other client shows
+    expect(m.kanban!.columns.map((c) => c.id)).toEqual(defaultKanban('p').columns.map((c) => c.id))
     // an existing label of the same name is reused, not duplicated
-    const existing = createLabel(defaultKanban(), 'x', 'red').k
+    const existing = createLabel(defaultKanban('p'), 'x', 'red').k
     const m2 = migrateProjectTags(proj([{ id: 'n1', tags: ['x'] }], existing))
     expect(boardLabels(m2.kanban!)).toHaveLength(1)
     expect(labelsForCard(m2.kanban!, 'n1')[0]).toMatchObject({ name: 'x', color: 'red' })

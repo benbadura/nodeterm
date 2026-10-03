@@ -39,6 +39,18 @@ describe('SettingsStore nested-default merge', () => {
     expect(s.fontSize).toBe(15)
   })
 
+  it.each([
+    ['true over auto becomes Liquid Glass', { glassTerminals: true }, 'liquid-glass'],
+    ['true over an explicit dark keeps dark', { glassTerminals: true, appTheme: 'dark' }, 'dark'],
+    ['false changes nothing', { glassTerminals: false }, 'auto']
+  ] as const)('pre-release glassTerminals: %s, and the key is dropped', (_name, saved, theme) => {
+    writeFileSync(path.join(dir, 'settings.json'), JSON.stringify(saved), 'utf-8')
+    const store = new SettingsStore()
+    store.init()
+    expect(store.get().appTheme).toBe(theme)
+    expect('glassTerminals' in store.get()).toBe(false)
+  })
+
   it('turns pty shadow clients ON for an existing settings.json that predates the flag', () => {
     writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ tmuxEnabled: true }), 'utf-8')
     const store = new SettingsStore()

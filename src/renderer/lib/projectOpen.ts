@@ -3,6 +3,7 @@
 // calls and the reply — so every decision that does not need React is unit-testable here, the
 // same reasoning as controlRouting.ts / pendingLaunch.ts.
 import { oneLine } from '@shared/one-line'
+import { sourceIsControlCapable } from './controlRouting'
 
 /** The little these helpers need to know about a project. */
 export interface ProjectForOpen {
@@ -82,11 +83,88 @@ export function clearAttachConsentForTests(): void {
  * is red-capable (review #363 I-2) — the dispatch only relays the answer; an empty-string value
  * counts as "not passed" (the shim always sends a value for a bare flag).
  */
-export function projectTargetFlagRefusal(args: { group?: string; after?: string }): string | null {
-  if (args.group || args.after) {
-    return 'project-target-flag-unsupported: --group/--after cannot be combined with --project'
+export function projectTargetFlagRefusal(args: {
+  group?: string
+  after?: string
+  'after-success'?: string
+}): string | null {
+  // `--after-success` names station ids exactly as `--after` does, so it is excluded for the same
+  // reason (and it is folded into `after` before this runs, so either field refuses it).
+  if (args.group || args.after || args['after-success']) {
+    return 'project-target-flag-unsupported: --group/--after/--after-success cannot be combined with --project'
   }
   return null
+}
+
+/** What `resolveProjectTarget` needs to know about a project (a structural subset of `Project`). */
+export interface ProjectTargetProject {
+  id: string
+  ssh?: unknown
+  remote?: boolean
+  nodes: readonly { id: string; agentId?: unknown }[]
+}
+
+export type ProjectTargetResolution<P> =
+  /** The target IS the caller's own project: fall through to the legacy path (B3a). */
+  | { kind: 'own' }
+  | { kind: 'refused'; error: string }
+  | { kind: 'target'; project: P }
+
+/**
+ * The renderer's `--project` belt, ONE definition for every verb that takes the flag
+ * (`open-terminal`/`open-claude`/`open-agent` and `run`, #925). Main's `gateProjectTarget` already
+ * enforced own-or-granted before forwarding, so none of this is the boundary — but it is the
+ * cross-project reach's second line, and two hand-copies of it are how one of them drifts.
+ *
+ * Order matters and is the dispatch's historical one: the caller's own project first (it is not a
+ * cross-project call at all, so nothing below applies to it), then the source checks, then the
+ * target checks.
+ * - The caller's project is the ACTIVE one when the source is on the live canvas, else the one
+ *   whose serialized nodes hold it.
+ * - The unknown-target refusal is worded TRANSIENT: main refused every stranger id with one
+ *   byte-identical sentence (no existence oracle), so this only fires for a target main
+ *   authorized that the renderer's store cannot see yet (mid-hydration).
+ * - The SSH/relay refusal is belt for an invariant main already holds: grants are minted only by
+ *   local open-project, so a granted SSH id cannot exist; if that ever breaks, the target is still
+ *   refused, never acted on. A relay tab is another machine's project entirely. `sshVerbWord` is
+ *   the one word the verbs differ in; with `opening` the sentence is byte-identical to core's
+ *   `PROJECT_TARGET_SSH_UNSUPPORTED`.
+ */
+export function resolveProjectTarget<P extends ProjectTargetProject>(input: {
+  targetId: string
+  sourceNodeId: string
+  /** React Flow's nodes — the ACTIVE project's. */
+  liveNodes: readonly { id: string; data: { agentId?: unknown } }[]
+  projects: readonly P[]
+  activeProjectId: string
+  sshVerbWord: 'opening' | 'starting'
+}): ProjectTargetResolution<P> {
+  const liveSrc = input.liveNodes.find((n) => n.id === input.sourceNodeId)
+  const storedSrc = input.projects
+    .flatMap((p) => p.nodes.map((n) => ({ node: n, projectId: p.id })))
+    .find((x) => x.node.id === input.sourceNodeId)
+  const callerProjectId = liveSrc ? input.activeProjectId : storedSrc?.projectId
+  if (input.targetId === callerProjectId) return { kind: 'own' }
+  if (!liveSrc && !storedSrc) {
+    return { kind: 'refused', error: 'source node is not in any open project' }
+  }
+  if (!sourceIsControlCapable(liveSrc?.data.agentId ?? storedSrc?.node.agentId)) {
+    return { kind: 'refused', error: 'source node is not a control-capable agent' }
+  }
+  const project = input.projects.find((p) => p.id === input.targetId)
+  if (!project) {
+    return {
+      kind: 'refused',
+      error: 'project-target-refused: the target project is not available here — try again'
+    }
+  }
+  if (project.ssh || project.remote) {
+    return {
+      kind: 'refused',
+      error: `project-target-ssh-unsupported: ${input.sshVerbWord} sessions into an SSH project is not supported — do not retry`
+    }
+  }
+  return { kind: 'target', project }
 }
 
 export type OpenProjectPlan =

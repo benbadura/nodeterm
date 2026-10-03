@@ -1,0 +1,32 @@
+{
+  "session_id": "5f0c2a9e-3b7d-4e61-9a24-7c1d8e0f4b32",
+  "transcript_path": "/home/demo/.claude/projects/-srv-demo/5f0c2a9e-3b7d-4e61-9a24-7c1d8e0f4b32.jsonl",
+  "cwd": "/srv/demo",
+  "permission_mode": "default",
+  "hook_event_name": "PermissionRequest",
+  "tool_name": "AskUserQuestion",
+  "tool_input": {
+    "questions": [
+      {
+        "question": "Which surfaces should get it?",
+        "header": "Surfaces",
+        "multiSelect": true,
+        "options": [
+          {
+            "label": "Desktop",
+            "description": "Electron"
+          },
+          {
+            "label": "Server Edition",
+            "description": "Browser"
+          },
+          {
+            "label": "Mobile",
+            "description": "iOS"
+          }
+        ]
+      }
+    ]
+  },
+  "permission_suggestions": []
+}

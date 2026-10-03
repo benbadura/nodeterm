@@ -83,7 +83,7 @@ export function GitHistoryPanel({
         </button>
         <button title="Refresh commits" onClick={onRefresh}>{loading ? '…' : '⟳'}</button>
       </div>
-      {!collapsed && error && !result && <div className="scm-history__msg" style={{ color: '#ff453a' }}>{error}</div>}
+      {!collapsed && error && !result && <div className="scm-history__msg" style={{ color: 'var(--danger)' }}>{error}</div>}
       {!collapsed && !result && !error && <div className="scm-history__msg">Loading graph…</div>}
       {!collapsed && result && viewModels.length === 0 && <div className="scm-history__msg">No commits yet</div>}
       {!collapsed && viewModels.length > 0 && (

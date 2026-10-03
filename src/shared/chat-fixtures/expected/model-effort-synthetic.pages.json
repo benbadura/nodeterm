@@ -1,0 +1,39 @@
+[
+  {
+    "before": null,
+    "maxBytes": 262144,
+    "grownMaxBytes": 262144,
+    "start": 0,
+    "parse": {
+      "messages": [
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "a"
+            }
+          ],
+          "at": 1790362800000,
+          "key": 0
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "API Error: Request was aborted."
+            }
+          ],
+          "at": 1790362801000,
+          "key": 385
+        }
+      ],
+      "olderCursor": null,
+      "unmatchedResults": [],
+      "model": "claude-opus-5-5",
+      "effort": "xhigh",
+      "noCompleteLine": false
+    }
+  }
+]

@@ -3,6 +3,7 @@ import { canChat, createdAgentId } from '@shared/agents/config'
 import { flowToNodeStates, type CanvasNode } from '@renderer/state/workspace'
 import { snapshotNode, type ReopenNodeSnapshot, type RestorableNodeKind } from './reopenNode'
 import { absolutePosition, type FocusableNode } from './nodeFocus'
+import { normalizeNodeIcon } from '@shared/node-icon'
 
 /**
  * Builds one `ClosedSessionEntry` per node in `deletedIds` that `snapshotNode` would also accept
@@ -136,6 +137,9 @@ export function stateToReopenSnapshot(entry: ClosedSessionEntry): ReopenNodeSnap
       tags: n.tags,
       collapsed: n.collapsed,
       hideFanout: n.hideFanout,
+      // Re-validated, not copied: this entry was read from hand-editable workspace.json.
+      icon: normalizeNodeIcon(n.icon),
+      terminalFontSize: n.terminalFontSize,
       shell: n.shell,
       cwd: n.cwd,
       text: n.text,
@@ -172,7 +176,7 @@ export type ClosedHistoryRow =
  * sentinel — never `NaN` from subtracting `undefined`.
  */
 /**
- * The start screen's "Recently closed" list: closed, AVAILABLE projects, newest-closed first
+ * The start screen's "Recently closed" list: closed, AVAILABLE, local projects, newest-closed first
  * (issue #506).
  *
  * The heading promises recency and the list did not deliver it — it was
@@ -187,12 +191,35 @@ export type ClosedHistoryRow =
  * those sort last rather than becoming `NaN`.
  */
 export function recentlyClosedProjects<
-  T extends { closed?: boolean; unavailable?: boolean; closedAt?: number }
+  T extends { closed?: boolean; unavailable?: boolean; closedAt?: number; remote?: boolean }
 >(projects: readonly T[]): T[] {
   return projects
-    .filter((p) => p.closed && !p.unavailable)
+    .filter(isReopenableClosedProject)
     .sort((a, b) => (b.closedAt ?? -1) - (a.closedAt ?? -1))
 }
+
+/**
+ * A closed project that "Recently closed" may offer. Not an `unavailable` one (see above), and not a
+ * relay tab (`remote`, a hosted team's project): its nodes are the HOST's sessions, and reopening it
+ * from here would mount them on this machine's core. A team tab comes back through the team.
+ */
+export function isReopenableClosedProject(p: { closed?: boolean; unavailable?: boolean; remote?: boolean }): boolean {
+  return !!p.closed && !p.unavailable && !p.remote
+}
+
+/** A relay tab (a hosted team's project) the user closed on this computer. Its relay session is
+ *  gone, so anything that reopened it (or restored a node into it) would mount the HOST's node ids
+ *  on this machine's core: local shells, and an agent cold-resume. Nothing reopens one. */
+export function isClosedTeamTab(p: { closed?: boolean; remote?: boolean } | undefined): boolean {
+  return !!p?.remote && !!p.closed
+}
+
+/** Said instead of reopening a closed team tab. A closed tab stays dismissed while its project
+ *  stays shared (even across a reconnect of the team's other tabs); what brings it back is joining
+ *  the team again once none of its tabs is open, or the team unsharing the project and sharing it
+ *  again (`lib/hostedTeamTabs.ts`). */
+export const CLOSED_TEAM_TAB_NOTICE =
+  'This team tab was closed on this computer. It opens again when you join the team again (close its other tabs first), or when the team stops sharing the project and shares it again.'
 
 /**
  * Narrows the "Recently closed" list by name or folder — both already rendered on the row, and
@@ -210,7 +237,10 @@ export function filterClosedProjects<T extends { name: string; cwd?: string }>(
 export function mergeClosedHistory(projects: readonly Project[]): ClosedHistoryRow[] {
   const rows: ClosedHistoryRow[] = []
   for (const p of projects) {
-    if (p.closed && !p.unavailable) {
+    // A closed team tab offers neither itself nor its closed sessions: restoring a session puts the
+    // node back into that project and reopens it.
+    if (isClosedTeamTab(p)) continue
+    if (isReopenableClosedProject(p)) {
       rows.push({ kind: 'project', projectId: p.id, closedAt: p.closedAt ?? -1, project: p })
     }
     for (const entry of p.closedSessions ?? []) {

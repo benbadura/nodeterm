@@ -1,0 +1,68 @@
+{
+  "page": {
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "carried in the header record"
+          }
+        ],
+        "at": 1790589601000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "[info] Switched to fallback model gemini-2.5-flash"
+          }
+        ],
+        "at": 1790589602000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "[warning] Approaching the context limit."
+          }
+        ],
+        "at": 1790589603000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "[error] [API Error: 429 Resource exhausted]"
+          }
+        ],
+        "at": 1790589604000
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "no timestamp at all"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "an unparseable timestamp"
+          }
+        ]
+      }
+    ],
+    "found": true,
+    "olderCursor": null,
+    "unmatchedResults": []
+  },
+  "skipped": 7
+}

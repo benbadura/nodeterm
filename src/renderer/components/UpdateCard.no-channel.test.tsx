@@ -34,7 +34,10 @@ beforeEach(() => {
       onNoChannel: sub('noChannel'),
       getPolicy: () => Promise.resolve({ minSupported: null, mandatory: false }),
       check: () => {},
-      restart: () => {}
+      restart: () => {},
+      prepareInspect: () => Promise.resolve({ kind: 'unsupported' }),
+      prepareShutdownHost: () => Promise.resolve({ kind: 'unsupported' }),
+      prepareQuit: () => {}
     }
   }
   window.open = ((url: string) => {

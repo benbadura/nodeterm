@@ -6,7 +6,7 @@ import {
   detectsResumeMiss,
   resumeSessionMissing
 } from './resume-fallback'
-import { cleanEcho } from './command-delivery'
+import { cleanEcho } from '@shared/command-delivery'
 
 const DEAD = '6c0e1b2a-1111-4222-8333-444455556666'
 /** Verbatim, from `claude --resume <unknown-uuid>` on claude 2.1.266 (exit 1). */

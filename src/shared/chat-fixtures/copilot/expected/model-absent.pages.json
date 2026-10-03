@@ -1,0 +1,48 @@
+[
+  {
+    "before": null,
+    "maxBytes": 262144,
+    "grownMaxBytes": 262144,
+    "start": 0,
+    "parse": {
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "one"
+            }
+          ],
+          "at": 1790627717000,
+          "key": 446
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "first"
+            }
+          ],
+          "at": 1790627718000,
+          "key": 853
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "second, no model stated"
+            }
+          ],
+          "at": 1790627719000,
+          "key": 1162
+        }
+      ],
+      "olderCursor": null,
+      "unmatchedResults": [],
+      "noCompleteLine": false
+    }
+  }
+]

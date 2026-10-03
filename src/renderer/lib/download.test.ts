@@ -1,5 +1,12 @@
-import { describe, it, expect } from 'vitest'
-import { canRevealLocally, canUseLocalShell, downloadRoute } from './download'
+import { describe, it, expect, vi } from 'vitest'
+import {
+  canRevealLocally,
+  canUseLocalShell,
+  downloadRoute,
+  isDownloadablePath,
+  performDownload,
+  type DownloadTransport
+} from './download'
 
 describe('downloadRoute', () => {
   it('pulls an SSH project over scp on the desktop', () => {
@@ -60,5 +67,99 @@ describe('canUseLocalShell', () => {
           expect(canUseLocalShell({ browser, ssh, source })).toBe(
             canRevealLocally({ browser, ssh, source })
           )
+  })
+})
+
+describe('isDownloadablePath', () => {
+  // The same refusal set as core's `safeDownloadBasename`: a path whose basename cannot name a
+  // download. A file manager node can stand on `/`, and the HTTP route would happily tar the
+  // whole server filesystem for it.
+  it('refuses the filesystem root and paths with no nameable basename', () => {
+    for (const p of ['/', '', '//', '~', '/srv/..', '/srv/.', '~/'])
+      expect(isDownloadablePath(p), p).toBe(false)
+  })
+
+  it('accepts an ordinary file or folder, trailing slash or not', () => {
+    for (const p of ['/srv/app/notes.md', '/srv/app/', '~/project', '/.bashrc'])
+      expect(isDownloadablePath(p), p).toBe(true)
+  })
+})
+
+describe('performDownload', () => {
+  const transport = (over: Partial<DownloadTransport> = {}): DownloadTransport & {
+    handed: { url: string; name: string }[]
+  } => {
+    const handed: { url: string; name: string }[] = []
+    return {
+      handed,
+      scp: vi.fn(async () => ({ ok: true as const, localPath: '/Users/me/Downloads/a.txt', dir: false })),
+      ticket: vi.fn(async () => ({ url: '/download?t=abc', name: 'a.txt' })),
+      hand: (url, name) => handed.push({ url, name }),
+      ...over
+    }
+  }
+
+  it('pulls over scp with the project id and the chosen folder, and reports where it landed', async () => {
+    const t = transport()
+    const out = await performDownload('scp', { path: '/srv/a.txt', projectId: 'p1', destDir: '/tmp/x' }, t)
+    expect(t.scp).toHaveBeenCalledWith('p1', '/srv/a.txt', '/tmp/x')
+    expect(out).toEqual({ ok: true, localPath: '/Users/me/Downloads/a.txt' })
+  })
+
+  it('passes an scp failure reason through unchanged', async () => {
+    const t = transport({ scp: async () => ({ ok: false as const, error: 'Not connected.' }) })
+    expect(await performDownload('scp', { path: '/srv/a.txt', projectId: 'p1' }, t)).toEqual({
+      ok: false,
+      error: 'Not connected.'
+    })
+  })
+
+  it('refuses scp without a project instead of sending an undefined id to main', async () => {
+    const t = transport()
+    const out = await performDownload('scp', { path: '/srv/a.txt' }, t)
+    expect(out.ok).toBe(false)
+    expect(t.scp).not.toHaveBeenCalled()
+  })
+
+  it('hands a minted ticket to the browser and never touches scp', async () => {
+    const t = transport()
+    const out = await performDownload('http', { path: '/srv/a.txt', projectId: 'p1' }, t)
+    expect(out).toEqual({ ok: true })
+    expect(t.handed).toEqual([{ url: '/download?t=abc', name: 'a.txt' }])
+    expect(t.scp).not.toHaveBeenCalled()
+  })
+
+  it('reports a null ticket as unavailable rather than handing nothing to the browser', async () => {
+    const t = transport({ ticket: async () => null })
+    const out = await performDownload('http', { path: '/srv/a.txt' }, t)
+    expect(out).toEqual({ ok: false, error: 'Downloading is not available here.' })
+    expect(t.handed).toEqual([])
+  })
+
+  it('turns a rejected transport into a failed outcome, never a throw', async () => {
+    const t = transport({
+      scp: async () => {
+        throw new Error('ipc gone')
+      },
+      ticket: async () => {
+        throw new Error('ws gone')
+      }
+    })
+    expect(await performDownload('scp', { path: '/a', projectId: 'p' }, t)).toEqual({
+      ok: false,
+      error: 'The download could not be started.'
+    })
+    expect(await performDownload('http', { path: '/a' }, t)).toEqual({
+      ok: false,
+      error: 'The download could not be started.'
+    })
+  })
+
+  it('does nothing at all on the none route', async () => {
+    const t = transport()
+    const out = await performDownload('none', { path: '/a', projectId: 'p' }, t)
+    expect(out.ok).toBe(false)
+    expect(t.scp).not.toHaveBeenCalled()
+    expect(t.ticket).not.toHaveBeenCalled()
   })
 })

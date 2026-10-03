@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { NormalizedAgentEvent } from '@shared/agents/normalize'
 import type { NodeStateChange, NodeNowChange, MirrorFile } from '../core/agent-status-mirror'
-import { PROMPT_MAX, firstLine } from '../core/agent-status-mirror'
+import { PROMPT_MAX, firstLine, EXPIRE_MS } from '../core/agent-status-mirror'
 import {
   createHudModel,
   bucketState,
@@ -167,7 +167,45 @@ describe('subagent grouping', () => {
   })
 })
 
+describe('subagent grouping — Claude native cards', () => {
+  const evt = (p: Partial<NormalizedAgentEvent> & { nodeId: string; kind: NormalizedAgentEvent['kind'] }): NormalizedAgentEvent =>
+    ({ agentId: 'claude', ...p } as NormalizedAgentEvent)
+
+  it('a start that supersedes a tool-drawn row replaces it instead of adding a second row', () => {
+    const m = createHudModel()
+    m.applyStateChange(stateChange({ nodeId: 'a', state: 'working', agentId: 'claude' }))
+    m.applyAgentEvent(evt({ nodeId: 'a', kind: 'subagent-start', toolUseId: 'toolu_1', taskLabel: 'do-x' }))
+    m.applyAgentEvent(evt({ nodeId: 'a', kind: 'subagent-start', toolUseId: 'a1', taskLabel: 'do-x', supersedes: 'toolu_1' }))
+    const row = rowFor(m.buildRows(T0, titleOf), 'a')!
+    expect(row.subagents.map((s) => s.id)).toEqual(['a1'])
+  })
+})
+
 describe('prompt / model / context join', () => {
+  it('keeps copied SSH thread ids isolated from each other and legacy local observations', () => {
+    const m = createHudModel()
+    for (const nodeId of ['local', 'a', 'b']) {
+      m.applyStateChange(stateChange({ nodeId, state: 'working', agentId: 'codex', sessionId: 'copied' }))
+    }
+    m.applyContextUpdate({ nodeId: 'a', sessionId: 'copied', cleared: true })
+    m.applyContextUpdate({ nodeId: 'b', sessionId: 'copied', model: 'remote-b', usedPercent: 75 })
+    m.applyContextUpdate({ sessionId: 'copied', model: 'local-model', usedPercent: 10 })
+    let rows = m.buildRows(T0, titleOf)
+    expect(rowFor(rows, 'local')).toMatchObject({ model: 'local-model', contextPercent: 10 })
+    expect(rowFor(rows, 'a')?.model).toBeUndefined()
+    expect(rowFor(rows, 'a')?.contextPercent).toBeUndefined()
+    expect(rowFor(rows, 'b')).toMatchObject({ model: 'remote-b', contextPercent: 75 })
+    m.applyContextUpdate({ nodeId: 'b', sessionId: 'copied', cleared: true })
+    rows = m.buildRows(T0, titleOf)
+    expect(rowFor(rows, 'b')?.model).toBeUndefined()
+    expect(rowFor(rows, 'b')?.contextPercent).toBeUndefined()
+    m.applyContextUpdate({ nodeId: 'b', sessionId: 'new', model: 'next-model', usedPercent: 25 })
+    m.applyStateChange(stateChange({ nodeId: 'b', state: 'working', sessionId: 'new' }))
+    m.applyContextUpdate({ nodeId: 'b', sessionId: 'copied', cleared: true })
+    expect(rowFor(m.buildRows(T0, titleOf), 'b')).toMatchObject({ model: 'next-model', contextPercent: 25 })
+    m.applyStateChange(stateChange({ nodeId: 'b', state: 'working', sessionId: 'another' }))
+    expect(rowFor(m.buildRows(T0, titleOf), 'b')?.model).toBeUndefined()
+  })
   it('joins model by sessionId and context% by now-change', () => {
     const m = createHudModel()
     m.applyStateChange(stateChange({ nodeId: 'a', state: 'working', agentId: 'claude', sessionId: 's1' }))
@@ -200,6 +238,22 @@ describe('6h drop', () => {
     expect(rowFor(rows, 'gone')).toBeUndefined()
     // present node still tracked (done, unseen)
     expect(rowFor(rows, 'present')?.state).toBe('done')
+  })
+
+  it('an IDENTITY-ONLY mirror entry (state expired) does not keep a node present', () => {
+    // Past EXPIRE_MS the mirror keeps a node's agentId/sessionId (the phone needs the session id)
+    // but drops its state. For the HUD that is the same fact the old full drop was: nothing is
+    // known about this node's state, so it must age out exactly as an absent node does.
+    const m = createHudModel()
+    m.applyStateChange(stateChange({ nodeId: 'old', state: 'done', ts: T0 }))
+    const later = T0 + EXPIRE_MS + 1
+    m.applyMirrorFlush({
+      v: 1,
+      updatedAt: later,
+      nodes: { old: { agentId: 'claude', sessionId: 's', updatedAt: T0 } }
+    })
+    expect(m.prune(T0 + HUD_STALE_DROP_MS + 1)).toBe(true)
+    expect(rowFor(m.buildRows(T0 + HUD_STALE_DROP_MS + 1, titleOf), 'old')).toBeUndefined()
   })
 
   it('never drops a LIVE working node', () => {

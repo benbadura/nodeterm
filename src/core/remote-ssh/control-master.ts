@@ -20,6 +20,8 @@ import {
 import { sanitizePasteText } from '../paste-injection'
 import { canControlCanvas } from '../../shared/agents/config'
 import { COMBINED_PANE_MARKER, PANE_OWNER_FMT, PS_FOREGROUND_FLAGS } from '../agents/pane-owner'
+import { VISIBLE_CAPTURE_FORMAT, exactPaneTarget } from '../watch-link/capture-route'
+import { WATCHER_CLIENT_FLAGS, WINDOW_SIZE_FORMAT } from '../watch-link/watcher-client'
 // Dependency-free (no node-pty): safe to import from these pure builders.
 
 /** Dedicated remote tmux socket so an SSH project never collides with the user's own tmux. */
@@ -50,8 +52,25 @@ export function controlPathFor(projectId: string): string {
   return path.join(os.homedir(), '.nodeterm', 'ssh-cm', `${id}.sock`)
 }
 
-function target(conn: SshConnection): string {
+/**
+ * One `user@host` destination argv element, refused when it could be anything else. A leading `-`
+ * makes ssh parse the whole element as an OPTION (`-oProxyCommand=…@host` runs a local command), and
+ * whitespace or a control character is never part of a real user or host name. Every argv this module
+ * builds passes through here, so no caller — a hand-edited project file, a relay peer, a future
+ * dialog — can turn an endpoint into ssh options.
+ */
+export function sshDestination(conn: Pick<SshConnection, 'user' | 'host'>): string {
+  for (const [field, v] of [['user', conn.user], ['host', conn.host]] as const) {
+    // eslint-disable-next-line no-control-regex
+    if (typeof v !== 'string' || (field === 'host' && v === '') || v.startsWith('-') || /[\s\u0000-\u001f\u007f]/.test(v)) {
+      throw new Error(`refusing ssh ${field} ${JSON.stringify(String(v)).slice(0, 80)}: not a valid ${field}`)
+    }
+  }
   return `${conn.user}@${conn.host}`
+}
+
+function target(conn: SshConnection): string {
+  return sshDestination(conn)
 }
 
 function portArgs(conn: SshConnection): string[] {
@@ -222,6 +241,32 @@ export function childArgs(conn: SshConnection, controlPath: string, remote?: str
 
 export function checkMasterArgs(conn: SshConnection, controlPath: string): string[] {
   return ['-O', 'check', '-o', `ControlPath=${controlPath}`, ...portArgs(conn), target(conn)]
+}
+/**
+ * A real round trip over the master: open one session channel and run `true`. This is the
+ * liveness question `-O check` cannot answer. `-O check` is served by the master PROCESS over the
+ * local control socket, so it says "Master running" for a master whose TCP died under a sleep:
+ * measured against a black-holed connection, `-O check` exited 0 while a mux'd command hung until
+ * ServerAlive gave up ~74 s later. A channel open has to reach sshd and come back, so a
+ * half-dead master cannot answer it. The caller bounds it with a timeout; a TIMEOUT is the only
+ * verdict that means dead (see `SshProjectManager.revalidateAll`).
+ *
+ * `ControlMaster=no`: if the socket is gone this must not become a fresh master (which would
+ * answer on the new connection and say nothing about the old one). `BatchMode=yes`: if ssh falls
+ * back to a direct connection it must never park on a prompt with no one to answer it.
+ */
+export function masterRoundTripArgs(conn: SshConnection, controlPath: string): string[] {
+  return [
+    '-o',
+    'ControlMaster=no',
+    '-o',
+    `ControlPath=${controlPath}`,
+    '-o',
+    'BatchMode=yes',
+    ...portArgs(conn),
+    target(conn),
+    'true'
+  ]
 }
 export function exitMasterArgs(conn: SshConnection, controlPath: string): string[] {
   return ['-O', 'exit', '-o', `ControlPath=${controlPath}`, ...portArgs(conn), target(conn)]
@@ -476,6 +521,61 @@ export function remoteCapturePaneArgs(conn: SshConnection, controlPath: string, 
   )
 }
 /**
+ * The VISIBLE screen of a remote session, with SGR, and nothing above it — a live link's keyframe
+ * must never carry history, and `remoteCapturePaneArgs` always adds `-S`. The cursor line rides the
+ * SAME tmux invocation (see `watch-link/capture-route.ts` for why, and for the measured exact-target
+ * spelling). Every piece that the REMOTE shell would otherwise read is single-quoted: tmux's `;`
+ * separator (bare, it would end the tmux command and run `display-message` as a shell command), the
+ * `=name:` target and the `#{…}` format. Proven under a real /bin/sh in capture-visible.realsh.test.ts.
+ */
+export function remoteCaptureVisibleArgs(conn: SshConnection, controlPath: string, sessionId: string): string[] {
+  const target = posixQuote(exactPaneTarget(sessionId))
+  return childArgs(
+    conn,
+    controlPath,
+    tmuxCmd(
+      `tmux -L ${RMT_TMUX_SOCKET} capture-pane -p -e -t ${target} ';' ` +
+        `display-message -p -t ${target} ${posixQuote(VISIBLE_CAPTURE_FORMAT)}`
+    )
+  )
+}
+/**
+ * A live link watcher's OWN client on the host, for a node no Session is held for: a tty-allocating
+ * ssh child (`-t`, like `remoteTmuxPtyArgs`) running `attach-session -E -f ignore-size,read-only` on
+ * the exact target — never creating, never touching the session env, and out of the window's sizing
+ * while an unflagged client is attached anywhere on the server (tmux honours `ignore-size` only then;
+ * the caller spawns it at the window's current size and keeps it synced — `watch-link/watcher-client.ts`). Deliberately NOT wrapped like the owner's
+ * interactive command: a host without tmux gets a failed command, never a plain login shell — a
+ * watcher must not get a shell. An old remote tmux (< 3.2) rejects `-f` with a usage error: the
+ * command fails and nothing attaches. Proven under a real /bin/sh in watcher-attach.realsh.test.ts
+ * and on a real tty in watcher-client.realtty.test.ts.
+ */
+export function remoteTmuxWatcherArgs(conn: SshConnection, controlPath: string, sessionId: string): string[] {
+  return [
+    '-t',
+    ...childArgs(
+      conn,
+      controlPath,
+      tmuxCmd(
+        `tmux -L ${RMT_TMUX_SOCKET} attach-session -E -f ${posixQuote(WATCHER_CLIENT_FLAGS)} ` +
+          `-t ${posixQuote(exactPaneTarget(sessionId))}`
+      )
+    )
+  ]
+}
+
+/** The REMOTE window size of exactly this session, so a watcher's client is spawned at it. */
+export function remoteWindowSizeArgs(conn: SshConnection, controlPath: string, sessionId: string): string[] {
+  return childArgs(
+    conn,
+    controlPath,
+    tmuxCmd(
+      `tmux -L ${RMT_TMUX_SOCKET} display-message -p -t ${posixQuote(exactPaneTarget(sessionId))} ` +
+        posixQuote(WINDOW_SIZE_FORMAT)
+    )
+  )
+}
+/**
  * Ask the REMOTE tmux when a node's session was created, AND what the host's clock says now — in
  * one round trip, because the caller wants an AGE and the two clocks are not the same clock.
  *
@@ -529,6 +629,15 @@ export function remotePaneCommandArgs(conn: SshConnection, controlPath: string, 
     conn,
     controlPath,
     tmuxCmd(`tmux -L ${RMT_TMUX_SOCKET} display-message -p -t ${sessionId} '#{pane_current_command}'`)
+  )
+}
+
+/** The remote counterpart of `PtyManager.paneCwd`'s local `display-message` path. */
+export function remotePaneCwdArgs(conn: SshConnection, controlPath: string, sessionId: string): string[] {
+  return childArgs(
+    conn,
+    controlPath,
+    tmuxCmd(`tmux -L ${RMT_TMUX_SOCKET} display-message -p -t ${sessionId} '#{pane_current_path}'`)
   )
 }
 
@@ -717,6 +826,42 @@ export function hookForwardArgs(conn: SshConnection, controlPath: string, remote
 }
 export function hookForwardCancelArgs(conn: SshConnection, controlPath: string, remoteSock: string, hookPort: number): string[] {
   return ['-O', 'cancel', '-R', fwdSpec(remoteSock, hookPort), '-o', `ControlPath=${controlPath}`, ...portArgs(conn), target(conn)]
+}
+/**
+ * A dev-server LOCAL forward over the existing master (`ssh -O forward -L`): this machine's
+ * `127.0.0.1:<localPort>` → the host's `<target>:<remotePort>`. The local side binds loopback ONLY
+ * — never `*` or a LAN address, which would publish someone's unfinished app to the network the
+ * laptop is on. An IPv6 target is bracketed, which is how ssh's `-L` grammar takes it.
+ * `toAddr` must already be a validated IP literal (core/dev-ports.ts `forwardTarget`).
+ */
+function localFwdSpec(localPort: number, toAddr: string, remotePort: number): string {
+  // Re-validated HERE, at the argv site (CLAUDE.md rule 13), not only by the caller: the address
+  // came off another machine's command output. A throw is caught by the registry as a failed
+  // forward, never an ssh argument.
+  const okPort = (n: number): boolean => Number.isInteger(n) && n >= 1 && n <= 65535
+  const okAddr = /^\d{1,3}(\.\d{1,3}){3}$/.test(toAddr) || (/^[0-9A-Fa-f:]+$/.test(toAddr) && toAddr.includes(':'))
+  if (!okPort(localPort) || !okPort(remotePort) || !okAddr) throw new Error('invalid forward spec')
+  const host = toAddr.includes(':') ? `[${toAddr}]` : toAddr
+  return `127.0.0.1:${localPort}:${host}:${remotePort}`
+}
+export function localForwardArgs(
+  conn: SshConnection,
+  controlPath: string,
+  localPort: number,
+  toAddr: string,
+  remotePort: number
+): string[] {
+  return ['-O', 'forward', '-L', localFwdSpec(localPort, toAddr, remotePort), '-o', `ControlPath=${controlPath}`, ...portArgs(conn), target(conn)]
+}
+/** The exact spec `localForwardArgs` opened — ssh matches a cancel against it verbatim. */
+export function localForwardCancelArgs(
+  conn: SshConnection,
+  controlPath: string,
+  localPort: number,
+  toAddr: string,
+  remotePort: number
+): string[] {
+  return ['-O', 'cancel', '-L', localFwdSpec(localPort, toAddr, remotePort), '-o', `ControlPath=${controlPath}`, ...portArgs(conn), target(conn)]
 }
 /**
  * tmux `-e KEY=VALUE` pairs injecting the remote hook endpoint file + node id + protocol version,

@@ -93,7 +93,8 @@ export function SettingsSidebar({
                   onClick={() => onSelect(s.id)}
                   aria-current={isActive ? 'page' : undefined}
                   className={cn(
-                    'group flex w-full items-center gap-2.5 rounded-lg border-0 px-3 py-2 text-left text-[13px] outline-none transition-colors',
+                    // settings-nav-row: Liquid Glass restyles the row fills (styles.css glass block).
+                    'settings-nav-row group flex w-full items-center gap-2.5 rounded-lg border-0 px-3 py-2 text-left text-[13px] outline-none transition-colors',
                     isActive
                       ? 'bg-white/[0.09] font-medium text-text ring-1 ring-inset ring-white/10'
                       : 'bg-panel text-muted hover:bg-white/[0.05] hover:text-text',

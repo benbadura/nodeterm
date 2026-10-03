@@ -46,6 +46,7 @@
  */
 import {
   buildModifierChord,
+  captureBareKey,
   captureToShortcut,
   formatShortcut,
   isModifierEventKey,
@@ -74,6 +75,9 @@ export interface RecordingOptions {
   /** The command's `allowHoldChord`. When false, a modifier-only gesture can never commit — it
    *  only previews the requirement, and the user must go on to press a real key. */
   allowHold: boolean
+  /** The command may be bound to a bare key (a board key, a bare-key canvas command): an
+   *  unmodified press commits as itself. Optional so every existing caller keeps its behavior. */
+  allowBare?: boolean
 }
 
 /** Non-mac Meta (Super/Win): unspellable in this grammar, in both the keyed and hold paths. */
@@ -119,6 +123,10 @@ export function recordingKeydown(
     }
   }
 
+  if (opts.allowBare) {
+    const bare = captureBareKey(e)
+    if (bare) return { kind: 'commit', combo: bare }
+  }
   const combo = captureToShortcut(e, isMac)
   if (combo) return { kind: 'commit', combo }
   // Refused: either the primary modifier is missing, or (off-mac) Super is held. Keep whatever

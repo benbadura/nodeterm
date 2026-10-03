@@ -182,6 +182,55 @@ describe('binariesFor', () => {
   it('treats an unrecognised NON-custom id as its own command, mirroring resolveAgent', () => {
     expect(binariesFor('aider')).toEqual(['aider'])
   })
+
+  it('a BLANK launch command with a base harness runs the base binary, mirroring resolveAgentConfig', () => {
+    // `resolveAgentConfig`: blank launchCmd + baseAgent ⇒ the base's command (`claude`). The pane
+    // therefore runs `claude`, and the predicate must be able to say so — else the common proxy
+    // shape (base claude, env-only config) is unverifiable on every surface.
+    const list = [
+      { id: 'custom:proxy', launchCmd: '   ', baseAgent: 'claude' },
+      { id: 'custom:gproxy', launchCmd: '', baseAgent: 'gemini' },
+      { id: 'custom:own', launchCmd: 'my-wrapper --x', baseAgent: 'claude' },
+      { id: 'custom:bogus', launchCmd: '', baseAgent: 'not-a-harness' },
+      { id: 'custom:none', launchCmd: '' }
+    ]
+    expect(binariesFor('custom:proxy', list)).toEqual(['claude'])
+    expect(binariesFor('custom:gproxy', list)).toEqual(['gemini'])
+    // An explicit command still wins over the base — it is what actually runs.
+    expect(binariesFor('custom:own', list)).toEqual(['my-wrapper'])
+    // No (valid) base and no command: nothing honest to name.
+    expect(binariesFor('custom:bogus', list)).toBeNull()
+    expect(binariesFor('custom:none', list)).toBeNull()
+  })
+
+  it('never resolves a prototype key as a builtin, and skips null/non-object records', () => {
+    expect(binariesFor('constructor')).toEqual(['constructor'])
+    expect(binariesFor('__proto__')).toEqual(['__proto__'])
+    expect(binariesFor('toString')).toEqual(['toString'])
+    const list = [null, 7, 'x', { id: 'custom:ok', launchCmd: 'ok-agent' }] as unknown as {
+      id: string
+      launchCmd: string
+    }[]
+    expect(binariesFor('custom:ok', list)).toEqual(['ok-agent'])
+    expect(binariesFor('custom:missing', list)).toBeNull()
+  })
+
+  it('never throws on a hand-edited non-string launch command — blank, same as the mirror builder', () => {
+    const list = [
+      { id: 'custom:num', launchCmd: 42, baseAgent: 'claude' },
+      { id: 'custom:nul', launchCmd: null }
+    ] as unknown as { id: string; launchCmd: string; baseAgent?: string }[]
+    expect(binariesFor('custom:num', list)).toEqual(['claude'])
+    expect(binariesFor('custom:nul', list)).toBeNull()
+  })
+
+  it('consumer level: a blank-command claude-base custom node verifies a claude pane, refuses a shell', () => {
+    const list = [{ id: 'custom:proxy', launchCmd: '', baseAgent: 'claude' }]
+    const b = binariesFor('custom:proxy', list)
+    expect(isAgentPane(owner(['-bash', 'node /usr/local/bin/claude --resume x']), 'custom:proxy', b)).toBe('agent')
+    expect(isAgentPane(owner(['-bash'], 'bash'), 'custom:proxy', b)).toBe('not-agent')
+    expect(isAgentPane(owner(['-bash', 'codex']), 'custom:proxy', b)).toBe('not-agent')
+  })
 })
 
 

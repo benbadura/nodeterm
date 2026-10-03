@@ -136,6 +136,9 @@ export function describeContextError(error: unknown): string {
       )
     case 'project-not-found':
       return 'report-no-project: that project is not open here. Do not retry.'
+    // The credential check itself was rate-limited. Not a sign-in problem (see ./failure.ts).
+    case 'rate-limited':
+      return 'report-rate-limited: GitHub is rate-limiting this token. Try again later, once.'
     default:
       return `report-failed: could not reach GitHub (${code}). Tell the user rather than retrying.`
   }

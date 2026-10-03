@@ -49,3 +49,19 @@ describe('SshProjectManager.remoteCodexAuthPresent', () => {
     expect(await makeMgr({ code: 0, stdout: 'yes' }).mgr.remoteCodexAuthPresent('p1', 'acct1')).toBeNull()
   })
 })
+
+
+it('changes metric connection identity after reconnect even when the socket path is reused', async () => {
+  const { mgr } = makeMgr({ code: 0, stdout: '' })
+  expect(mgr.connectionKeyFor('p1')).toBeUndefined()
+  await mgr.connect('p1', conn, '/srv')
+  const key = mgr.connectionKeyFor('p1')
+  const ref = mgr.refForProject('p1')!
+  expect(key).toBeTruthy()
+  expect(mgr.connectionKeyForControlPath(ref.controlPath)).toBe(key)
+  await mgr.disconnect('p1')
+  expect(mgr.connectionKeyFor('p1')).toBeUndefined()
+  await mgr.connect('p1', conn, '/srv')
+  expect(mgr.connectionKeyFor('p1')).not.toBe(key)
+  await mgr.disconnect('p1')
+})

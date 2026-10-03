@@ -181,6 +181,19 @@ describe('shortcutKeyParts', () => {
 describe('matchesShortcut', () => {
   const base = { metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, key: 'd' }
 
+  // The DOM reports the space bar as `e.key === ' '`, while the canonical token is `Space`. Without
+  // mapping one onto the other, no `Space` binding could ever fire.
+  it('matches the space bar against a Space binding', () => {
+    expect(matchesShortcut({ ...base, key: ' ' }, 'Space', true)).toBe(true)
+    expect(matchesShortcut({ ...base, key: ' ', metaKey: true }, 'Cmd+Space', true)).toBe(true)
+    expect(matchesShortcut({ ...base, key: 'a' }, 'Space', true)).toBe(false)
+  })
+
+  it('captures the space bar as the canonical Space token', () => {
+    expect(captureToShortcut({ ...base, key: ' ', metaKey: true }, true)).toBe('Cmd+SPACE')
+    expect(parseShortcut(captureToShortcut({ ...base, key: ' ', metaKey: true }, true)!).key).toBe('SPACE')
+  })
+
   it('matches on mac with metaKey as the primary modifier', () => {
     expect(matchesShortcut({ ...base, metaKey: true, shiftKey: true }, 'Cmd+Shift+D', true)).toBe(
       true

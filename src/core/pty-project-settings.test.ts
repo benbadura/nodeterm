@@ -8,6 +8,7 @@
 //  - and every miss path (no ownerProjectId, no reader, a reader that throws, a reader that HANGS)
 //    spawns exactly the session it spawned before this feature existed.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import path from 'path'
 import { initPlatform, resetPlatformForTests } from './platform'
 import { fakePlatform, type FakePlatform } from './platform-fake'
 import { setRemoteSessionEnvWriter } from './remote-ssh/session-env'
@@ -51,6 +52,14 @@ vi.mock('node-pty', () => ({
   }
 }))
 
+// The fake pty never prints, so a slot on the process-wide remote spawn gate is only freed by its
+// 5 s settle timer; every spawn after the 4th on one ControlMaster waited it out. Pacing is not
+// under test here (pty-spawn-gate.test.ts covers it).
+vi.mock('./remote-ssh/pty-spawn-gate', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./remote-ssh/pty-spawn-gate')>()
+  return { ...actual, remotePtySpawnGate: new actual.PtySpawnGate(Infinity) }
+})
+
 // Never let the developer's own pty pressure refuse a spawn (see pty-typing.test.ts).
 vi.mock('./pty-devices', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./pty-devices')>()),
@@ -62,6 +71,14 @@ vi.mock('./exec-path', async (importOriginal) => ({
   findExecutableSync: (bin: string) => (bin === 'ssh' ? '/usr/bin/ssh' : null),
   shellPathNow: () => '/usr/bin:/bin',
   resolveShellPath: async () => '/usr/bin:/bin'
+}))
+
+const fakeAgy = vi.hoisted(() =>
+  process.platform === 'win32' ? 'C:\\vendor\\agy\\bin\\agy.exe' : '/vendor/agy/bin/agy'
+)
+vi.mock('./agents/hooks/antigravity', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./agents/hooks/antigravity')>()),
+  findAgy: () => fakeAgy
 }))
 
 // Every tmux/ssh side-call (the freshness probe, `set-option`) answers "fine" without a subprocess.
@@ -118,6 +135,18 @@ describe('project settings at the spawn — LOCAL leg', () => {
     expect(spawns[0].env.PROJECT_TOKEN).toBe('abc')
   })
 
+  it('puts the detected agy directory on only an Antigravity session PATH', async () => {
+    await manager(null)
+    await create({ persistKey: 'antigravity-node', agentId: 'antigravity' })
+    await create({ persistKey: 'plain-node' })
+
+    // APPENDED, never ahead of the user's own entries (see pathWithAgyDir).
+    expect(spawns[0].env.PATH?.split(path.delimiter).at(-1)).toBe(path.dirname(fakeAgy))
+    expect(spawns[0].env.PATH?.split(path.delimiter)[0]).toBe('/usr/bin')
+    expect(Object.keys(spawns[0].env).filter((key) => key.toUpperCase() === 'PATH')).toEqual(['PATH'])
+    expect(spawns[1].env.PATH).toBe('/usr/bin:/bin')
+  })
+
   it('asks the reader with the OWNING project id, once per spawn', async () => {
     const seen: string[] = []
     await manager(async (id) => {
@@ -126,6 +155,34 @@ describe('project settings at the spawn — LOCAL leg', () => {
     })
     await create({ persistKey: NODE, ownerProjectId: PROJECT })
     expect(seen).toEqual([PROJECT])
+  })
+
+  it('a burst of spawns for one project shares ONE in-flight read, and each gets its own copy', async () => {
+    // A project switch mounts every node at once; on an SSH project each read is an ssh round trip,
+    // and 41 of them spread the terminals over ~1.3 s (measured). Joining the in-flight read fixes it.
+    let calls = 0
+    let release!: (v: ProjectSpawnOverrides | null) => void
+    await manager(() => {
+      calls++
+      return new Promise((r) => (release = r))
+    })
+    const burst = ['n-a', 'n-b', 'n-c'].map((k) => create({ persistKey: k, ownerProjectId: PROJECT }))
+    await new Promise((r) => setTimeout(r, 0))
+    release({ env: { PROJECT_TOKEN: 'abc' } })
+    await Promise.all(burst)
+    expect(calls).toBe(1)
+    expect(spawns.map((s) => s.env.PROJECT_TOKEN)).toEqual(['abc', 'abc', 'abc'])
+  })
+
+  it('is not a cache: a spawn after the read settled reads again', async () => {
+    let calls = 0
+    await manager(async () => {
+      calls++
+      return null
+    })
+    await create({ persistKey: 'n-a', ownerProjectId: PROJECT })
+    await create({ persistKey: 'n-b', ownerProjectId: PROJECT })
+    expect(calls).toBe(2)
   })
 
   it('never asks — and changes nothing — when the pane has no proven owner', async () => {

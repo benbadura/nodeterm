@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { DRY_RUN_VERBS, dryRunRequested, dryRunRefusal } from './control-verbs'
+import { DRY_RUN_VERBS, dryRunRequested, dryRunRefusal, runNowRequested } from './control-verbs'
 
 describe('dryRunRequested', () => {
   it('absent means no dry run', () => {
@@ -47,5 +47,17 @@ describe('dryRunRefusal', () => {
     expect(msg).toContain('close')
     for (const v of DRY_RUN_VERBS) expect(msg).toContain(v)
     expect(msg).toContain('Nothing was done')
+  })
+})
+
+describe('runNowRequested (#925)', () => {
+  it('reads presence as on, like --dry-run', () => {
+    expect(runNowRequested({})).toBe(false)
+    expect(runNowRequested({ 'run-now': '' })).toBe(true)
+    expect(runNowRequested({ 'run-now': '1' })).toBe(true)
+    expect(runNowRequested({ 'run-now': 'yes' })).toBe(true)
+  })
+  it('only an explicit false|no|0 turns it off', () => {
+    for (const v of ['false', 'NO', '0', ' 0 ']) expect(runNowRequested({ 'run-now': v })).toBe(false)
   })
 })

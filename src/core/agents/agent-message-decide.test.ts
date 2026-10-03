@@ -111,6 +111,21 @@ describe('decideDelivery — one case per refusal', () => {
     expect((o as { reason: string }).reason).toMatch(/restored from disk/i)
   })
 
+  it('an IDENTITY-ONLY entry (state expired past 6 h) is judged like a never-posted node, never as a stale script', () => {
+    // The mirror keeps agentId/sessionId after EXPIRE_MS so the phone can find the transcript, but
+    // strips every piece of state evidence. Without the `stateExpired` exemption the identity gate
+    // would read it as "observed this run with no clientRevision" and accuse the node's hook script.
+    const expired: MirrorEntry = { agentId: 'claude', sessionId: 's', updatedAt: 1, stateExpired: true }
+    expect(decideDelivery(ready({ target: expired, tokenFilePresent: true })).kind).toBe('targetStatusStale')
+    expect(decideDelivery(ready({ target: expired, tokenFilePresent: false })).kind).toBe(
+      'targetStatusUnverified'
+    )
+    const verifiedExpired = { ...expired, stateVerified: true }
+    const o = decideDelivery(ready({ target: verifiedExpired }))
+    expect(o.kind).toBe('targetNotIdleUnknown')
+    expect((o as { reason: string }).reason).toMatch(/expired/i)
+  })
+
   it('targetNotIdleUnknown for a `done` inferred from idle_prompt', () => {
     // A node blocked on an approval is ALSO idle at its prompt. Canvas.tsx already discards the
     // idle rescue for an `undefined` node; messaging must not be the one consumer that trusts it.
@@ -323,7 +338,7 @@ describe('RETRYABLE', () => {
   it('answers for every outcome kind the union declares', () => {
     // Runtime half. The compile-time half is below and is enforced by `npm run typecheck`.
     const kinds = Object.keys(RETRYABLE) as AgentMessageOutcomeKind[]
-    expect(kinds.length).toBe(17)
+    expect(kinds.length).toBe(18)
     for (const k of kinds) expect(typeof RETRYABLE[k]).toBe('boolean')
   })
 

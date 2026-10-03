@@ -2,12 +2,13 @@
 // No native/electron imports, so this module is safe to import from unit tests.
 import { randomBytes } from 'crypto'
 import { sanitizePasteText } from './paste-injection'
+import { nodeSessionName } from '../shared/session-name'
 
 export const TMUX_SOCKET = 'node-terminal'
 
 /** Per-node tmux session name. Must stay stable — it is the persistence key. */
 export function sessionName(persistKey: string): string {
-  return `nt-${persistKey.replace(/[^a-zA-Z0-9_-]/g, '_')}`
+  return nodeSessionName(persistKey)
 }
 
 /**

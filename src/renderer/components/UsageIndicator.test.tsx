@@ -87,8 +87,33 @@ describe('Claude usage failure readout', () => {
   it('still attributes the Claude failure when another provider has data', async () => {
     await open(snapshot('error'), undefined, [{ provider: 'codex', account: null, status: 'ok', limits: [limit], updatedAt: 0 }])
     expect(host.querySelector('.usage-popover__empty')?.textContent).toBe('Could not read usage.')
-    expect(host.querySelector('.usage-popover__body > .usage-account__label')?.textContent).toBe('Claude')
+    expect(host.querySelector('.usage-claude > .usage-account__label')?.textContent).toBe('Claude')
     expect(host.querySelectorAll('.usage-row')).toHaveLength(1)
+  })
+
+  it('names a rate limit instead of the generic failure, for system and managed rows', async () => {
+    await open({ ...snapshot('error'), rateLimited: true }, { ...snapshot('error'), rateLimited: true })
+    const rows = host.querySelectorAll('.usage-popover__empty')
+    expect(rows).toHaveLength(2)
+    for (const row of rows) {
+      expect(row.textContent).toBe('Rate limited by the usage endpoint (HTTP 429) — try again in a few minutes.')
+    }
+  })
+
+  it('says why kept bars are old, and how old', async () => {
+    const kept = { ...snapshot('error', [limit]), rateLimited: true, updatedAt: Date.now() - 12 * 60_000 }
+    await open(kept, kept)
+    expect(host.querySelectorAll('.usage-row')).toHaveLength(2)
+    const notes = host.querySelectorAll('.usage-popover__held')
+    expect(notes).toHaveLength(2)
+    for (const note of notes) {
+      expect(note.textContent).toBe('Latest read was rate limited (HTTP 429) — showing numbers from 12m ago.')
+    }
+  })
+
+  it('carries no held note on a good read', async () => {
+    await open(snapshot('ok', [limit]))
+    expect(host.querySelector('.usage-popover__held')).toBeNull()
   })
 
   it('preserves stale bars in the single-account view', async () => {

@@ -30,6 +30,8 @@ import {
   terminalLineHeight,
   xtermOptionsFromSettings,
   RESYNC_NOTICE,
+  CO_ATTACH_ALT_SCREEN_SEQ,
+  CO_ATTACH_MOUSE_SEQ,
   SHIFT_ENTER_SEQ,
   TERMINAL_LETTER_SPACING_MAX,
   TERMINAL_LETTER_SPACING_MIN,
@@ -804,6 +806,29 @@ describe('repaintResync', () => {
     ])
   })
 
+  // `reset()` drops a tmux client out of the alternate buffer and clears its mouse tracking, and
+  // tmux re-sends neither — so a streaming terminal that was resynced would pile its output into
+  // the normal buffer's scrollback and lose wheel scrolling for good.
+  it('re-enters the alt buffer and re-enables the mouse for a tmux client, between reset and paint', () => {
+    const term = fakeTerm()
+    repaintResync(term, 'FRESH', () => true, true)
+    term.parse()
+    expect(term.ops).toEqual([
+      'write:',
+      'reset',
+      `write:${CO_ATTACH_ALT_SCREEN_SEQ}${CO_ATTACH_MOUSE_SEQ}`,
+      'write:FRESH',
+      `write:${RESYNC_NOTICE}`
+    ])
+  })
+
+  it('re-applies nothing for a non-tmux session (a plain shell keeps its normal-buffer history)', () => {
+    const term = fakeTerm()
+    repaintResync(term, 'FRESH', () => true, false)
+    term.parse()
+    expect(term.ops).toEqual(['write:', 'reset', 'write:FRESH', `write:${RESYNC_NOTICE}`])
+  })
+
   it('coalescing is per terminal and per round (a later, separate resync still paints)', () => {
     const term = fakeTerm()
     repaintResync(term, 'ONE')
@@ -928,6 +953,23 @@ describe('applyLiveOptions', () => {
     // xterm's `options` is a setter proxy: an unchanged write still fires its change handling,
     // and terminals are re-optioned on every settings keystroke.
     expect(term.writes).toEqual([])
+  })
+
+  it('glass toggles live: transparent background + allowTransparency on, and back off', () => {
+    const s = visual()
+    const term = fakeTerm(s)
+    const on = applyLiveOptions(term, s, true)
+    expect(on).toEqual({ metricsChanged: false, themeChanged: true })
+    expect(term.options.allowTransparency).toBe(true)
+    expect(term.options.theme?.background).toBe('#1e1e1e00')
+    // Theme identity is stable while glass stays on, so a re-option is a no-op.
+    term.writes.length = 0
+    expect(applyLiveOptions(term, s, true).themeChanged).toBe(false)
+    expect(term.writes).toEqual([])
+    const off = applyLiveOptions(term, s, false)
+    expect(off.themeChanged).toBe(true)
+    expect(term.options.allowTransparency).toBe(false)
+    expect(term.options.theme?.background).toBe('#1e1e1e')
   })
 
   it('applies a font size change and reports metricsChanged', () => {

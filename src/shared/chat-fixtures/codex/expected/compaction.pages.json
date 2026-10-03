@@ -1,0 +1,59 @@
+[
+  {
+    "before": null,
+    "maxBytes": 262144,
+    "grownMaxBytes": 262144,
+    "start": 0,
+    "parse": {
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "First question"
+            }
+          ],
+          "at": 1790240400000,
+          "key": 0
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "First answer."
+            }
+          ],
+          "at": 1790240401000,
+          "key": 397
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "After compaction"
+            }
+          ],
+          "at": 1790240404000,
+          "key": 1458
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Still here."
+            }
+          ],
+          "at": 1790240405000,
+          "key": 1857
+        }
+      ],
+      "olderCursor": null,
+      "unmatchedResults": [],
+      "noCompleteLine": false
+    }
+  }
+]

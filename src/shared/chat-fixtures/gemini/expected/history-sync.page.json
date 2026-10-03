@@ -1,0 +1,71 @@
+{
+  "page": {
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "first question"
+          }
+        ],
+        "at": 1790589601000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "first answer"
+          }
+        ],
+        "at": 1790589602000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "[info] Chat history compressed from 91200 to 12400 tokens."
+          }
+        ],
+        "at": 1790589603000
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "a prompt I cancelled"
+          }
+        ],
+        "at": 1790589604000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "[info] Request cancelled."
+          }
+        ],
+        "at": 1790589605000
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "after all that"
+          }
+        ],
+        "at": 1790589606000
+      }
+    ],
+    "found": true,
+    "olderCursor": null,
+    "unmatchedResults": [],
+    "model": "gemini-3.5-flash"
+  },
+  "skipped": 0
+}

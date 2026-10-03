@@ -15,7 +15,7 @@ vi.mock('os', async (orig) => {
 })
 
 import { installHooksInto, removeHooksFrom } from './install-helper'
-import { CLAUDE_HOOK_EVENTS } from '@shared/agents/hook-events'
+import { CLAUDE_HOOK_EVENTS, managedEventName } from '@shared/agents/hook-events'
 
 const WIN_CMD =
   "if [ -r 'C:\\Users\\u\\.nodeterm\\agent-hooks\\claude.sh' ]; then sh 'C:\\Users\\u\\.nodeterm\\agent-hooks\\claude.sh'; else cat >/dev/null 2>&1 || :; fi"
@@ -42,19 +42,19 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }))
 describe('installHooksInto — heals an already-broken settings.json (issue #558)', () => {
   it('collapses 9 accumulated duplicates per event to 1 and keeps the user`s own hooks', () => {
     const hooks: Record<string, unknown[]> = { PreCompact: [FOREIGN] }
-    for (const ev of CLAUDE_HOOK_EVENTS) {
-      hooks[ev as string] = [FOREIGN, ...Array.from({ length: 9 }, () => ({ hooks: [{ type: 'command', command: WIN_CMD }] }))]
+    for (const ev of CLAUDE_HOOK_EVENTS.map(managedEventName)) {
+      hooks[ev] = [FOREIGN, ...Array.from({ length: 9 }, () => ({ hooks: [{ type: 'command', command: WIN_CMD }] }))]
     }
     writeFileSync(configPath(), JSON.stringify({ model: 'opus', hooks }, null, 2), 'utf8')
 
     install()
 
     const after = readConfig()
-    for (const ev of CLAUDE_HOOK_EVENTS) {
-      const defs = after.hooks[ev as string]
-      expect(defs, ev as string).toHaveLength(2)
-      expect(defs[0], ev as string).toEqual(FOREIGN)
-      expect(defs[1].hooks[0].command, ev as string).toContain('agent-hooks')
+    for (const ev of CLAUDE_HOOK_EVENTS.map(managedEventName)) {
+      const defs = after.hooks[ev]
+      expect(defs, ev).toHaveLength(2)
+      expect(defs[0], ev).toEqual(FOREIGN)
+      expect(defs[1].hooks[0].command, ev).toContain('agent-hooks')
     }
     // An event we do not manage keeps the foreign hook untouched, and unrelated settings survive.
     expect(after.hooks.PreCompact).toEqual([FOREIGN])

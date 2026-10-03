@@ -25,7 +25,7 @@ hidden tabs.
 
 <a href="https://trendshift.io/repositories/103825?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-103825" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/103825" alt="eneskirca%2Fnodeterm | Trendshift" width="250" height="55"/></a>
 
-[Download](#-download) · [Docs](https://nodeterm.dev/docs) · [Features](#-features) · [Build from source](#-build-from-source) · [Architecture](#-architecture) · [License](#-license)
+[Download](#-download) · [Docs](https://nodeterm.dev/docs) · [Features](#-features) · [Build from source](#-build-from-source) · [Architecture](#-architecture) · [Sponsor](#sponsor) · [License](#-license)
 
 </div>
 
@@ -33,7 +33,7 @@ hidden tabs.
 
 <div align="center">
   <a href="docs/assets/hero-tour.mp4">
-    <img src="docs/assets/hero-tour.webp" alt="nodeterm in 30 seconds — canvas, agents, kanban board, three surfaces" width="900" />
+    <img src="docs/assets/hero-tour.webp" alt="nodeterm in 30 seconds — the canvas, sessions that survive a restart, agents and the notch, the kanban board, dictation, the iPhone" width="900" />
   </a>
   <br/>
   <sub>▶ <a href="docs/assets/hero-tour.mp4">Watch the 30-second tour with sound</a></sub>
@@ -66,7 +66,7 @@ persistent tmux session, next to **sticky notes** (link one to feed an agent con
 map. Quit the app, even **restart the machine** — every session comes back.
 
 </td>
-<td><img src="docs/assets/canvas-tour.webp" alt="The canvas — terminals, agents, notes, editors and diffs as nodes; sessions survive a full restart" /></td>
+<td><img src="docs/assets/canvas-tour.webp" alt="The canvas — right-click to add Claude Code, a terminal, a sticky note, an editor and a diff; link the note to Claude; restart, and every session comes back" /></td>
 </tr>
 <tr>
 <td width="42%" valign="middle">
@@ -79,7 +79,7 @@ notifications. Click the ping, answer the permission prompt right in the node, a
 told the moment the turn is **done**. On a MacBook, agents live in the **notch** too.
 
 </td>
-<td><img src="docs/assets/agents-tour.webp" alt="Agent status — NEEDS YOU flip, notification, answering a permission prompt, subagent fan-out" /></td>
+<td><img src="docs/assets/agents-tour.webp" alt="Agent status — subagent fan-out with a context meter; a permission prompt lights the notch and posts a macOS notification; Go jumps to the node; ✓ Approve in its header" /></td>
 </tr>
 <tr>
 <td width="42%" valign="middle">
@@ -93,7 +93,7 @@ assign teammates. Toggle with `⌘⇧B`.
 <br/><sub>▶ <a href="docs/assets/kanban-launch.mp4">Watch the board video with sound</a></sub>
 
 </td>
-<td><img src="docs/assets/kanban-launch.webp" alt="The kanban board — live session cards, drag between columns, the card modal with a live Claude Code session" /></td>
+<td><img src="docs/assets/kanban-launch.webp" alt="The kanban board — ⌘⇧B turns the canvas into cards, drag one to Done while it keeps running, the card modal with the live Claude Code session and comments" /></td>
 </tr>
 <tr>
 <td width="42%" valign="middle">
@@ -105,25 +105,26 @@ live session continues in your pocket**, E2E encrypted **over the relay, not jus
 LAN**. The same canvas also runs self-hosted in any browser (Server Edition).
 
 </td>
-<td><img src="docs/assets/remote-tour.webp" alt="Pair your phone — scan the QR, the same live session continues on the iPhone" /></td>
+<td><img src="docs/assets/remote-tour.webp" alt="Pair your phone — scan the QR, every session is one tap away, the real Claude Code on the iPhone, answer its permission prompt from there" /></td>
 </tr>
 <tr>
 <td width="42%" valign="middle">
 
 ### Talk to your terminal
 
-Hold `⌘⌥` and say it. On-device **Whisper** transcribes locally — review the text,
-then **Send** (nothing auto-submits). Your voice never leaves the machine.
+Hold `⌘⌥`, say it, let go. On-device **Whisper** transcribes it locally and types the
+text into the terminal's prompt — **you** press Enter (nothing auto-submits). Your voice
+never leaves the machine.
 
 </td>
-<td><img src="docs/assets/dictation-tour.webp" alt="Dictation — hold ⌘⌥, speak, review, send into the terminal" /></td>
+<td><img src="docs/assets/dictation-tour.webp" alt="Dictation — hold ⌘⌥ and speak, let go, local Whisper types the words into Claude Code's prompt, you press Enter" /></td>
 </tr>
 </table>
 
 ### Node kinds
 
-🖥 **Terminal** (xterm + tmux, AI naming) · 🤖 **Agent** (Claude Code / Codex / Gemini /
-GitHub Copilot / opencode / Grok / custom) · 📝 **Sticky note** (link to an agent as context) · 🗂 **Group**
+🖥 **Terminal** (xterm + tmux, AI naming) · 🤖 **Agent** (Claude Code / Codex / Antigravity /
+Gemini / GitHub Copilot / opencode / Grok / custom) · 📝 **Sticky note** (link to an agent as context) · 🗂 **Group**
 (bind to a **git worktree** for agent-per-branch) · ✏️ **Editor** (Monaco, ⌘S) ·
 🔀 **Diff** · 🌐 **Web / Video**
 
@@ -243,6 +244,43 @@ curl -fsSL https://raw.githubusercontent.com/eneskirca/nodeterm/main/scripts/uni
 The full inventory of what nodeterm writes where (and what the script keeps, like the
 `.nodeterm/` canvas folders inside your own repos) is documented in
 [docs/uninstall.md](docs/uninstall.md).
+
+## Sponsor
+
+nodeterm is an indie project, built with Claude across several Claude accounts — about
+**$2,000 a month** to keep running. There are **10 Founding Sponsor spots** at $200/month:
+your logo goes in this grid and on [nodeterm.dev](https://nodeterm.dev), and your feature
+requests go first.
+
+<p align="center">
+  <b>0 of 10 spots taken</b> · <a href="https://buy.stripe.com/3cI6oJfveehDeIL90w7EQ04">Become a Founding Sponsor →</a>
+</p>
+
+<!-- Taking a spot: replace one open cell (in order, top-left first) with
+       <td align="center" width="20%"><a href="SPONSOR_URL"><img src="docs/assets/sponsors/SPONSOR.svg" alt="SPONSOR NAME" width="136" /></a></td>
+     The logo needs a transparent background that reads on GitHub's light AND dark themes (or wrap it in a <picture>
+     with a prefers-color-scheme: dark <source>). Bump the "N of 10 spots taken" line in the same edit. The spots are sold through a Stripe
+     payment link limited to 10 payments: it deactivates itself when the tenth is taken (existing subscriptions keep
+     renewing). If a sponsor cancels, raise the limit by one to reopen their spot. -->
+<table>
+  <tr>
+    <td align="center" width="20%"><a href="https://buy.stripe.com/3cI6oJfveehDeIL90w7EQ04"><img src="docs/assets/sponsors/open-spot.svg" alt="Open Founding Sponsor spot" width="136" /></a></td>
+    <td align="center" width="20%"><a href="https://buy.stripe.com/3cI6oJfveehDeIL90w7EQ04"><img src="docs/assets/sponsors/open-spot.svg" alt="Open Founding Sponsor spot" width="136" /></a></td>
+    <td align="center" width="20%"><a href="https://buy.stripe.com/3cI6oJfveehDeIL90w7EQ04"><img src="docs/assets/sponsors/open-spot.svg" alt="Open Founding Sponsor spot" width="136" /></a></td>
+    <td align="center" width="20%"><a href="https://buy.stripe.com/3cI6oJfveehDeIL90w7EQ04"><img src="docs/assets/sponsors/open-spot.svg" alt="Open Founding Sponsor spot" width="136" /></a></td>
+    <td align="center" width="20%"><a href="https://buy.stripe.com/3cI6oJfveehDeIL90w7EQ04"><img src="docs/assets/sponsors/open-spot.svg" alt="Open Founding Sponsor spot" width="136" /></a></td>
+  </tr>
+  <tr>
+    <td align="center" width="20%"><a href="https://buy.stripe.com/3cI6oJfveehDeIL90w7EQ04"><img src="docs/assets/sponsors/open-spot.svg" alt="Open Founding Sponsor spot" width="136" /></a></td>
+    <td align="center" width="20%"><a href="https://buy.stripe.com/3cI6oJfveehDeIL90w7EQ04"><img src="docs/assets/sponsors/open-spot.svg" alt="Open Founding Sponsor spot" width="136" /></a></td>
+    <td align="center" width="20%"><a href="https://buy.stripe.com/3cI6oJfveehDeIL90w7EQ04"><img src="docs/assets/sponsors/open-spot.svg" alt="Open Founding Sponsor spot" width="136" /></a></td>
+    <td align="center" width="20%"><a href="https://buy.stripe.com/3cI6oJfveehDeIL90w7EQ04"><img src="docs/assets/sponsors/open-spot.svg" alt="Open Founding Sponsor spot" width="136" /></a></td>
+    <td align="center" width="20%"><a href="https://buy.stripe.com/3cI6oJfveehDeIL90w7EQ04"><img src="docs/assets/sponsors/open-spot.svg" alt="Open Founding Sponsor spot" width="136" /></a></td>
+  </tr>
+</table>
+
+Prefer a smaller amount, need an invoice, or want a different arrangement? Write to
+support@nodeterm.dev — and a ⭐ helps too.
 
 ## 🛠 Build from source
 

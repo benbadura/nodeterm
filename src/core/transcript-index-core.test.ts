@@ -33,6 +33,11 @@ describe('extractEntryFields', () => {
     expect(f.text.length).toBeLessThanOrEqual(INDEX_TEXT_CAP_BYTES)
   })
 
+  it('a paste in the first prompt adds no code fences to the title', () => {
+    const r = JSON.stringify({ type: 'user', cwd: '/c', message: { content: 'see <pasted_content id="ab12">\nboom\n</pasted_content id="ab12">' } })
+    expect(extractEntryFields(r).title).not.toContain('```')
+  })
+
   it('returns empty fields for unparseable input', () => {
     expect(extractEntryFields('garbage\n{bad json')).toEqual({ cwd: '', title: '', text: '' })
   })
@@ -65,6 +70,12 @@ describe('searchEntries', () => {
 
   it('respects the limit', () => {
     expect(searchEntries(entries, 'tmux', 1)).toHaveLength(1)
+  })
+
+  it('names the account whose root holds a hit, so its resume runs under that login', () => {
+    const hits = searchEntries(entries, 'tmux', 20, (p) => (p === '/p/s1.jsonl' ? 'work' : undefined))
+    expect(hits.find((h) => h.sessionId === 's1')?.accountId).toBe('work')
+    expect('accountId' in hits.find((h) => h.sessionId === 's2')!).toBe(false)
   })
 })
 

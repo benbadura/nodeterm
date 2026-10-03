@@ -193,3 +193,32 @@ describe('dispatchGlobalKeydown', () => {
     expect(captured).toEqual([])
   })
 })
+
+// The board's bare keys ride the same one dispatcher. What makes a bare `j` safe is the resolver's
+// refusals, so they are pinned here at the level a real keydown goes through.
+describe('dispatchGlobalKeydown — board keys', () => {
+  const textarea = (): ContextElement => ({ tagName: 'TEXTAREA', classList: { contains: () => false } })
+
+  it('a bare j on an open board reaches board.nextCard and is claimed', () => {
+    const next = vi.fn(() => true)
+    const e = ev({ key: 'j' })
+    expect(dispatchGlobalKeydown(e, deps({ kanbanOpen: () => true, handlers: { 'board.nextCard': next } }))).toBe(true)
+    expect(next).toHaveBeenCalled()
+    expect(e.defaultPrevented).toBe(true)
+  })
+
+  it('never on the canvas, never in the comment box, never in the modal terminal', () => {
+    const next = vi.fn(() => true)
+    const handlers = { 'board.nextCard': next }
+    expect(dispatchGlobalKeydown(ev({ key: 'j' }), deps({ handlers }))).toBe(false)
+    expect(dispatchGlobalKeydown(ev({ key: 'j' }), deps({ kanbanOpen: () => true, activeElement: textarea, handlers }))).toBe(false)
+    expect(dispatchGlobalKeydown(ev({ key: 'j' }), deps({ kanbanOpen: () => true, activeElement: xtermEl, handlers }))).toBe(false)
+    expect(next).not.toHaveBeenCalled()
+  })
+
+  it('a board that declines (nothing to move to) leaves the key to the platform', () => {
+    const e = ev({ key: ' ' })
+    expect(dispatchGlobalKeydown(e, deps({ kanbanOpen: () => true, handlers: { 'board.openCard': () => false } }))).toBe(false)
+    expect(e.defaultPrevented).toBe(false)
+  })
+})

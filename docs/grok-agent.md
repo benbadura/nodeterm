@@ -385,7 +385,7 @@ ai-name / comments).
 | In-place restart + cold-restore resume | yes | yes | N/A |
 | Canvas control | yes, via `~/.claude/skills` + the sh+curl shim. The discovery premise is no longer inferred: `grok inspect --json` on grok 1.0.13 lists `get-linked-context` with `vendor: claude` and `compatibilityStatus: enabled`, and `externalCompat.cells` reports `{surface: 'skills', enabled: true, source: 'default'}` — grok reads `~/.claude/skills` **by default**, without a config edit (§8.7) | **not wired at all** — `agent:control` has no server handler; pre-existing, unchanged by grok | N/A — no canvas |
 | Context links | **yes** — `locateGrok` resolves the linked node's `chat_history.jsonl` and `linesFromGrok` renders it. The whole leaf is in core (`core/handoff/locate.ts`, `core/context-link.ts`, `core/grok-session.ts`, `core/claude-accounts-core.ts`); the renderer only asks the pure `canContextLink`, so **no `window.nodeTerminal` member was added** and nothing new crosses the preload bridge | **yes, for free** — the row's old claim that `initContextLink` is never called from `src/server` is stale: `src/server/context-link.ts` calls it, driven off the persisted `bridges[]` instead of the renderer's live edges. Both shells feed the same `sessionId → dir` map from their raw hook listeners (`src/main/index.ts`, `src/server/agent-status.ts`) and both pass `grokHomeDir()` into the path jail — invariant 11 | **N/A** — linking is a canvas gesture and the phone has no canvas (`~/projects/nodeterm-ios`). The transcript it would read is the same file, so this is a surface gap, not a capability one |
-| ⌘M chat panel | **yes** — `chatMessagesFromGrok`, reached through the agent-routed `chat:read-transcript`. The panel is the same component; what is new is that the channel asks WHICH agent before it picks a reader | **yes, for free** — the channel is registered through the CorePlatform seam, so both shells serve it and both route the same way | the phone has no ⌘M panel |
+| ⌘M chat panel | **yes** — `parseGrokChat`, reached through the agent-routed `chat:read-transcript` (by `capabilityAgentId`, so custom agents built on grok too). Paged requests also carry the newest record's `model`/`effort`; there is no paging (the file is rewritten in place). **SSH-project nodes are read on the host** (`core/remote-grok-chat.ts`); a failure there is terminal, never a local read. The composer's model/effort labels stay claude-only (grok's pickers are unmeasured) | **yes, for free** — the channel is registered through the CorePlatform seam, so both shells serve it and both route the same way (the server has no SSH projects, so no remote leg) | **yes** — the relay `chat.page` verb reads through the desktop's same deps, local and remote; golden fixtures for the Swift port in `src/shared/chat-fixtures/grok/` |
 | Cross-agent transfer (grok as SOURCE) | **yes** — `renderGrokTranscript` | **N/A** — `buildHandoff` lives in `src/main`; the Server Edition has no transfer path at all, pre-existing and unchanged by grok | N/A |
 | Context meter | **yes** — a third tail, on `signals.json` rather than on a transcript, tracked from the session directory the hooks let us derive (there is no hook field pointing at it) | **yes** — both shells create the same tail the same way, with the same `wholeFile` flag. Invariant 11: a tail added in one shell only is a meter the Server Edition silently lacks | the phone reads the mirror, which is agent-agnostic, so the numbers arrive with no phone-side work |
 | Session-id minting | **yes** — probed at boot (`ensureGrokCliCaps`), minted at node creation, checked against the ids already on disk for that cwd | **yes** — `registerGrokCliIpc` runs in this shell too, so the browser gets the same answer over WS-RPC. A probe registered in one shell only is minting that silently works on the desktop and not in the browser | N/A — the phone launches nothing (see §8) |
@@ -403,6 +403,17 @@ ai-name / comments).
 ## 8. Known gaps and follow-ups
 
 **Verified corrections to the original assumptions:**
+
+0. **The answer to a permission dialog is in `events.jsonl`, not in a hook** (measured 2026-09-30 on
+   1.0.13 against a local fake model; fixture `src/shared/agents/__fixtures__/grok/permission-events.json`).
+   Approve: no hook until the approved tool finishes. Dismiss (Ctrl+C): no hook at all — the badge
+   stayed NEEDS YOU until the next prompt. Reject: `permission_denied`, then the turn is cancelled
+   with no Stop. `<session dir>/events.jsonl` records `permission_requested`, `permission_resolved`
+   (`decision`: `allow`/`deny`/`cancelled`) and `turn_ended` (`outcome: cancelled`), so the hook
+   server's grok permission gate (`core/agents/grok-permission-gate.ts`) publishes from it. A
+   subagent's prompt carries the PARENT's `sessionId` while its request is in the CHILD's file — see
+   the gate's header. Remote (SSH) nodes: not read yet (the file is on the host); they behave as
+   before.
 
 1. **The `Notification` vocabulary is published and closed** — it was previously written up here as
    UNVERIFIED and able to fail in BOTH directions: silence (NEEDS YOU never lighting, since grok

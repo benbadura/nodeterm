@@ -319,7 +319,7 @@ export function SpeechSection({
                           {downloading ? ` · downloading ${pct}%` : ''}
                         </p>
                         {rowError[m.id] ? (
-                          <p className="text-[12px]" style={{ color: '#ff9f0a' }}>
+                          <p className="text-[12px]" style={{ color: 'var(--warn)' }}>
                             {rowError[m.id]}
                           </p>
                         ) : null}

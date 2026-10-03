@@ -4,9 +4,13 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { GitHubAuthStatus, GitHubControlView } from '@shared/github-issues'
 import { useProjects } from '../../../state/projects'
+import { useSettings } from '../../../state/settings'
+import { DEFAULT_SETTINGS } from '@shared/types'
+import { dispatchBinding } from '@shared/board-dispatch'
 import { registerWorkspaceDirty } from '../../../state/workspaceDirty'
 import { SettingsSearchContext } from '../context'
-import { GitHubIssuesSection } from './GitHubIssuesSection'
+import { GitHubIssuesSection, STATUS_AFTER_EDIT_MS } from './GitHubIssuesSection'
+import { SAVE_DEBOUNCE_MS } from '../../../lib/savePersistence'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -112,9 +116,132 @@ describe('GitHubIssuesSection', () => {
   })
 
   afterEach(() => {
+    useSettings.setState({ settings: { ...DEFAULT_SETTINGS } })
     act(() => root.unmount())
     host.remove()
     unregisterDirty()
+  })
+
+  // #1090: `dispatchStale` is computed during render and reads `repository` through
+  // `dispatchBindingFor`. While that `const` was declared below the early returns, any render with a
+  // dispatch entry for the active project threw a TDZ ReferenceError and blanked all of Settings.
+  const withDispatch = (binding: string): void => {
+    useSettings.setState({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        boardDispatch: {
+          paused: false,
+          projects: { p1: { columnId: 'todo', agentId: 'claude', maxConcurrent: 1, binding } }
+        }
+      }
+    })
+  }
+
+  it('renders with dispatch switched on for the active project (#1090)', async () => {
+    withDispatch(dispatchBinding('owner/repo', 'Todo', 'status:todo')!)
+    stub(viewWith({}, true))
+    await mount()
+    expect(host.textContent).toContain('Dispatch agents')
+    expect(host.textContent).not.toContain('Nothing dispatches until you confirm it again')
+  })
+
+  it('still flags a dispatch binding that no longer matches the column (#1090)', async () => {
+    withDispatch(dispatchBinding('owner/repo', 'Renamed', 'status:todo')!)
+    stub(viewWith({}, true))
+    await mount()
+    expect(host.textContent).toContain('Nothing dispatches until you confirm it again')
+  })
+
+  it('does not call a dispatch binding stale before the repository is known (#1090)', async () => {
+    withDispatch(dispatchBinding('owner/repo', 'Todo', 'status:todo')!)
+    status = vi.fn(() => new Promise<GitHubControlView>(() => {}))
+    ;(window as unknown as { nodeTerminal: any }).nodeTerminal.githubControl.status = status
+    await mount()
+    expect(host.textContent).toContain('Dispatch agents')
+    expect(host.textContent).not.toContain('Nothing dispatches until you confirm it again')
+  })
+
+  it('says until when sync is held, and how much of the GitHub budget is left', async () => {
+    stub({
+      ...viewWith({}, true),
+      rate: { resource: 'core', limit: 5_000, remaining: 12, resetAt: Date.UTC(2026, 8, 28, 21, 0), observedAt: 1 },
+      throttle: { until: Date.UTC(2026, 8, 28, 21, 0), kind: 'low-budget' }
+    })
+    await mount()
+    expect(host.textContent).toContain('Background sync paused until')
+    expect(host.textContent).toContain('12 of 5,000 GitHub requests left')
+  })
+
+  it('says GitHub could not be reached — never "not signed in" — when the sign-in could not be checked', async () => {
+    stub(viewWith({
+      activeProvider: null, ghAuthenticated: false, tokenPresent: false, login: undefined,
+      unreachable: { reason: 'unreachable' }
+    }, true))
+    await mount()
+    expect(host.textContent).toContain('GitHub could not be reached to check the sign-in.')
+    expect(host.textContent).not.toContain('not signed in')
+    expect(host.textContent).not.toContain('Authentication is still needed')
+  })
+
+  it('keeps the last confirmed sign-in on screen through a rate limit, and says it is the last one', async () => {
+    stub(viewWith({
+      activeProvider: 'gh', ghAuthenticated: true, login: 'octocat',
+      unreachable: { reason: 'rate-limited' }
+    }, true))
+    await mount()
+    expect(host.textContent).toContain('✓ Signed in via GitHub CLI as @octocat')
+    expect(host.textContent).toContain('GitHub’s rate limit was reached, so the sign-in could not be checked')
+    expect(host.textContent).toContain('the last one GitHub confirmed')
+  })
+
+  it('names a rate limit or an outage instead of a generic failure', async () => {
+    stub(viewWith({}, true))
+    ;(window as unknown as { nodeTerminal: any }).nodeTerminal.githubIssues.refresh =
+      vi.fn(async () => { throw new Error("Error invoking remote method 'github-issues:refresh': Error: rate-limited") })
+    await mount()
+    const refresh = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Refresh now')!
+    await act(async () => { refresh.click() })
+    expect(host.textContent).toContain('GitHub’s rate limit was reached. Try again later.')
+
+    ;(window as unknown as { nodeTerminal: any }).nodeTerminal.githubIssues.refresh =
+      vi.fn(async () => { throw new Error("Error invoking remote method 'github-issues:refresh': Error: github-unreachable") })
+    await act(async () => { refresh.click() })
+    expect(host.textContent).toContain('GitHub could not be reached. Nothing was changed')
+  })
+
+  it('asks to approve a changed column mapping before the board may change issues again', async () => {
+    const approve = vi.fn(async () => viewWith({}, true))
+    ;(window as unknown as { nodeTerminal: any }).nodeTerminal.githubControl.approve = approve
+    const view = viewWith({}, true)
+    stub({ ...view, project: { ...view.project!, mappingApproved: false } })
+    await mount()
+    expect(host.textContent).toContain('The column labels changed since this machine approved them')
+    expect(host.textContent).not.toContain('Ready as')
+    const button = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Approve column labels')!
+    await act(async () => { button.click() })
+    expect(approve).toHaveBeenCalledWith({ projectId: 'p1', repository: 'owner/repo', expectedRevision: 0 })
+  })
+
+  it('re-reads the status once a label edit has had time to save, instead of keeping "Ready as"', async () => {
+    stub(viewWith({}, true))
+    await mount()
+    const before = status.mock.calls.length
+    vi.useFakeTimers()
+    try {
+      const input = host.querySelector<HTMLInputElement>('#github-label-todo')!
+      await act(async () => {
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+        setter.call(input, 'workflow:ready')
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+      // Not before the edit can have reached the project file the host reads.
+      await act(async () => { vi.advanceTimersByTime(SAVE_DEBOUNCE_MS) })
+      expect(status.mock.calls.length).toBe(before)
+      await act(async () => { vi.advanceTimersByTime(STATUS_AFTER_EDIT_MS - SAVE_DEBOUNCE_MS) })
+      expect(status.mock.calls.length).toBeGreaterThan(before)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('clears the write-only token field after Save and never renders the stored token', async () => {
@@ -168,6 +295,30 @@ describe('GitHubIssuesSection', () => {
   })
 
 
+
+  // Before lifecycle categories the default was simply the LAST column; a board with an archive
+  // column after Done would then close issues into the archive.
+  it('defaults the completion column to the board\'s Done-category column, not merely the last one', async () => {
+    useProjects.setState({
+      activeProjectId: 'p1',
+      projects: [{
+        id: 'p1', name: 'Project', color: '#8b5cf6', viewport: { x: 0, y: 0, zoom: 1 },
+        nodes: [], cwd: '/repo',
+        kanban: {
+          columns: [
+            { id: 'todo', title: 'Todo', color: '#2563eb', category: 'unstarted' },
+            { id: 'shipped', title: 'Shipped', color: '#16a34a', category: 'done' },
+            { id: 'archive', title: 'Archive', color: '#8e8e93', category: 'closed' }
+          ],
+          assignments: []
+        }
+      }]
+    })
+    await mount()
+    const toggle = host.querySelector<HTMLElement>('[aria-label="Include GitHub issues"]')!
+    await act(async () => { toggle.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(useProjects.getState().getProject('p1')?.kanban?.github?.completionColumnId).toBe('shipped')
+  })
 
   it('reports an Approve failure beside the Approve button, not three rows below it', async () => {
     ;(window as unknown as { nodeTerminal: any }).nodeTerminal.githubControl.approve =

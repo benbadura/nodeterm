@@ -1,0 +1,107 @@
+{
+  "page": {
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "look around"
+          }
+        ],
+        "at": 1790589601000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Let me look."
+          },
+          {
+            "kind": "tool",
+            "name": "run_shell_command",
+            "arg": "ls -la",
+            "result": "total 2 a.txt b.txt"
+          }
+        ],
+        "at": 1790589602000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "tool",
+            "name": "read_file",
+            "arg": "src/app.ts",
+            "result": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          },
+          {
+            "kind": "tool",
+            "name": "list_directory",
+            "arg": "src",
+            "result": "app.ts"
+          },
+          {
+            "kind": "tool",
+            "name": "glob",
+            "arg": "**/*.md",
+            "result": "Found 2 matching file(s)"
+          },
+          {
+            "kind": "tool",
+            "name": "grep_search",
+            "arg": "TODO"
+          },
+          {
+            "kind": "tool",
+            "name": "google_web_search",
+            "arg": "gemini cli release notes"
+          },
+          {
+            "kind": "tool",
+            "name": "web_fetch",
+            "arg": "summarize https://example.com"
+          },
+          {
+            "kind": "tool",
+            "name": "activate_skill",
+            "arg": "pdf"
+          },
+          {
+            "kind": "tool",
+            "name": "update_topic",
+            "arg": "Reading the repo"
+          },
+          {
+            "kind": "tool",
+            "name": "write_todos",
+            "arg": "Set 3 todo(s)"
+          },
+          {
+            "kind": "tool",
+            "name": "replace",
+            "arg": "src/app.ts",
+            "result": "Failed to edit: 0 occurrences found"
+          },
+          {
+            "kind": "tool",
+            "name": "run_shell_command",
+            "arg": "echo yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+          },
+          {
+            "kind": "tool",
+            "name": "tool",
+            "arg": ""
+          }
+        ],
+        "at": 1790589604000
+      }
+    ],
+    "found": true,
+    "olderCursor": null,
+    "unmatchedResults": [],
+    "model": "gemini-3.5-flash"
+  },
+  "skipped": 2
+}

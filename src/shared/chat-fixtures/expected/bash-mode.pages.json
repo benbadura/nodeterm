@@ -1,0 +1,65 @@
+[
+  {
+    "before": null,
+    "maxBytes": 262144,
+    "grownMaxBytes": 262144,
+    "start": 0,
+    "parse": {
+      "messages": [
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool",
+              "name": "!",
+              "arg": "ls /srv/demo",
+              "result": "a.txt b.txt ls: warning: demo"
+            }
+          ],
+          "at": 1790362801000,
+          "key": 508
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool",
+              "name": "!",
+              "arg": "cat missing.txt",
+              "result": "cat: missing.txt: No such file or directory"
+            }
+          ],
+          "at": 1790362804000,
+          "key": 1636
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "What was in a.txt?"
+            }
+          ],
+          "at": 1790362806000,
+          "key": 2271
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Twelve bytes of demo text."
+            }
+          ],
+          "at": 1790362807000,
+          "key": 2538
+        }
+      ],
+      "olderCursor": null,
+      "unmatchedResults": [],
+      "model": "claude-opus-5-5",
+      "effort": "high",
+      "noCompleteLine": false
+    }
+  }
+]

@@ -23,11 +23,47 @@ export const XTERM_INPUT_CLASS = 'xterm-helper-textarea'
 export interface ContextElement {
   tagName: string
   isContentEditable?: boolean
+  /** The element's attached EditContext (`HTMLElement.editContext`); null/absent when it has none. */
+  editContext?: unknown
   classList?: { contains(name: string): boolean }
+  /** DOM ancestry, when the element has it (a real Element does); absent = no ancestry answer. */
+  closest?(selector: string): unknown
+}
+
+/** The ⌘M chat composer's box (nodes/ChatComposer.tsx carries this attribute). Matched
+ *  STRUCTURALLY, never by a class: a class-keyed rule once matched the plan "Revise…" textarea and
+ *  the question "Other" input (ChatAnswerControls, OUTSIDE the box), and dictation fired there went
+ *  to the hidden pane showing that very dialog. */
+export const CHAT_COMPOSER_BOX_SELECTOR = '[data-chat-composer-id]'
+
+/** Focus inside the ⌘M composer box: a TYPING target like any other, with one exception the
+ *  dispatcher makes — keyed dictation is allowed there, because the composer is the one text
+ *  field dictation fills (lib/chatComposerDictation.ts). */
+export function isChatComposerTarget(el: ContextElement | null): boolean {
+  return !!el?.closest?.(CHAT_COMPOSER_BOX_SELECTOR)
 }
 
 export function isTerminalTarget(el: ContextElement | null): boolean {
   return el?.classList?.contains(XTERM_INPUT_CLASS) === true
+}
+
+/**
+ * Does this element take text through the EditContext API? Issue #930.
+ *
+ * The third kind of text surface, next to a field and a contentEditable, and the one every
+ * `tagName` check misses: an element with an EditContext attached is a plain `<div>` that the
+ * browser feeds text input to directly. Monaco 0.56 switched to it BY DEFAULT wherever the API
+ * exists (`editContext: true`, gated on `typeof EditContext === 'function'`, which Electron's
+ * Chromium passes), so a focused editor node is no longer Monaco's old hidden `<textarea>` but a
+ * `div.native-edit-context` with `isContentEditable === false`. Space-to-pan took every space
+ * typed there, and the canvas shortcuts stopped standing down inside the editor.
+ *
+ * Asked of the web-platform property rather than Monaco's class name on purpose: the property is
+ * what makes the element a text surface, so any other EditContext-based input is covered too.
+ * `keyContext.test.ts` pins that the installed Monaco still attaches one.
+ */
+export function hasEditContext(el: ContextElement | null): boolean {
+  return el?.editContext != null
 }
 
 /** True when the keystroke belongs to text the user is editing. The xterm textarea is
@@ -36,7 +72,7 @@ export function isTerminalTarget(el: ContextElement | null): boolean {
 export function isTypingTarget(el: ContextElement | null): boolean {
   if (!el || isTerminalTarget(el)) return false
   if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') return true
-  return el.isContentEditable === true
+  return el.isContentEditable === true || hasEditContext(el)
 }
 
 /** `terminalFirst` is REQUIRED, not defaulted: it is a user policy, and a default here would let

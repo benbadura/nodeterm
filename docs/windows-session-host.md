@@ -14,14 +14,17 @@ the release gate and the remaining native agent-launch work.
 Selected automatically for legacy/non-profile sessions in this order:
 
 ```
-real tmux found on this machine  →  tmux (unchanged, every platform)
-no tmux found, tmuxEnabled       →  session host (this document)
-neither                          →  plain shell (no persistence, as before)
+Windows + tmuxEnabled            →  session host (this document)
+POSIX + real tmux found          →  tmux (unchanged)
+POSIX + no tmux, tmuxEnabled     →  session host (this document)
+tmuxEnabled off                 →  plain shell (no persistence)
 ```
 
-Stock Windows provides no native tmux, so the session host is the normal persistence backend
-there. New Windows profile sessions explicitly use the session host when persistence is enabled;
-warm sessions keep their existing backend. On macOS/Linux, an installed tmux remains preferred.
+Stock Windows provides no native tmux, and Windows tmux-compatible binaries do not implement the
+Unix tmux control and console semantics this application relies on. The session host is therefore
+the authoritative Windows persistence backend even when a `tmux.exe` appears on `PATH`.
+New Windows profile sessions explicitly use the session host when persistence is enabled;
+warm sessions keep their existing backend. On macOS/Linux nothing changes: a real tmux installation remains preferred there.
 
 ## Why not just port tmux's approach
 
@@ -139,7 +142,7 @@ long-lived connection (no positional-FIFO fragility, unlike this app's tmux cont
 | `attach`                         | `new-session -A` / `attach-session`     | full, plus a screen the tmux path never needed (see below) |
 | `hasSession`                     | `has-session -t <name>`                 | full (implemented; not on the hot create path — see below) |
 | `write`                          | raw bytes on an attached client's stdin | full |
-| `resize`                         | ConPTY/pty resize + `refresh-client -C` | full; each view claims a size and the effective grid is the componentwise minimum |
+| `resize`                         | ConPTY/pty resize + `refresh-client -C` | full; each view claims a size, the app's grid follows its most recently active view (issue #914) |
 | `pause` / `resume`               | node-pty `pause()`/`resume()`           | full; per-viewer in core and per-connection in the host (first pause / last resume) |
 | `sendKeys`                       | `send-keys -l -- <text>` (+ `Enter`)    | full — works with no attached client, exactly like tmux |
 | `paneCommand`                    | `display-message -p '#{pane_current_command}'` | approximated — see `process-tree.ts` |
@@ -261,8 +264,42 @@ pause and geometry owner even though all of them share one `SessionHostClient` s
 sends a pause only on the local 0→1 edge and a resume only on 1→0; the host then combines that one
 connection-level ticket with other process sockets. Geometry follows the same shape: the client
 reduces its live view claims, the host reduces all socket claims componentwise, and it resizes the
-PTY and headless terminal before serializing a warm screen. Detaching a smaller viewer recomputes
-the grid so remaining viewers can grow.
+PTY and headless terminal before serializing a warm screen. Detaching a viewer recomputes the grid.
+
+**The client's reduction is "most recently active", not "smallest" (issue #914).** Under tmux a
+phone mirroring a node is its own tmux client, and tmux's default `window-size latest` gives the
+window to whichever client was active last — so a phone that dismissed its keyboard got its rows
+back. Here the phone (a relay-served `SessionHostPty`) and the desktop node share ONE client
+socket, and the old componentwise minimum held the phone to the desktop node's rows with nothing on
+screen saying why. `latestClaimSize` (`core/pty-size.ts`) now picks the claim with the highest
+recency: an attach, a claim that CHANGES (a re-fit to the same size does not count, or every fit
+would steal the session), and a write that is not a terminal report (`core/terminal-reports.ts` —
+every attached xterm answers a DA/CPR/OSC query, and counting those would hand the session to
+whoever answered last). Three rules come with it:
+
+- **A viewer that cannot adapt is a ceiling.** Every renderer view renders the size it is told
+  (`pty:size`: letterbox a smaller grid, clip a larger one, as a tmux client does). A pty wider than
+  the phone's screen would wrap into garbage there, or — rendered at the pty's size — be clipped to
+  its left ~45 columns, so a relay sink is `bounding` unless `pty.attach` carried
+  `resizedFrames: true`, and the chosen size is clamped componentwise to every bounding claim. The
+  iOS app keeps it that way on purpose: it reads `OP.Resized` only to explain the empty band
+  ("Sized to another screen") and to offer "Fit this screen", which re-claims the size with a
+  rows+1 → rows wiggle (an unchanged claim is not activity). Because the phone clears that hint
+  every time it sends a size, the host ANSWERS every sink report, unchanged or not — the sink's
+  `sinkShown` is forgotten on each report.
+- **The pty's real size flows back to every viewer.** `SessionHostPty.onSize` → `PtyManager`
+  `applyBackendSize` → `pty:size` to each view whose xterm is not already at it, and `OP.Resized`
+  (payload = `OP.Resize`'s, 2× uint16 LE) to the relay sink. A session-host `Session` only VOTES in
+  `applySize`; its views are corrected from the backend's answer, which the client sends after every
+  vote, changed or not.
+- **The host's `geometry` push is negotiated at hello, never assumed.** `hello` carries
+  `features: ['geometry']`; the host answers with the subset it speaks and pushes `geometry` frames
+  (and adds `geometry` to attach replies) ONLY on connections that asked. This is not caution: an
+  older client treats every push frame that is not `data` as an EXIT, so a geometry frame sent to it
+  retires a live session on the first resize (`session-host/geometry-host.test.ts` pins it against
+  the real bundled host). Against a host without the feature the client reports its own applied size,
+  which is exact while it is the host's only connection. Across connections (two apps on one host)
+  the HOST still takes the componentwise minimum.
 
 The same name is also a generation boundary. Data and exit events contain a session name but no
 generation id, so an exiting `HostSession` remains registered until its queued output, final exit
@@ -365,11 +402,91 @@ confirmed `{ok:true}` host responses, while a transport/request rejection remain
 propagated. That propagation is what lets the periodic snapshot keep its dirty bit for a retry and
 what prevents a delete from claiming a persistent process is gone when the host never confirmed it.
 
+## Staged host runtime (issue #829, step 3)
+
+A host launched as a hard link of `nodeterm.exe` inside the install directory maps the installed
+executable, its DLLs and `resources.pak`, so the installer cannot replace them while it runs. On
+macOS/Linux the sessions live in tmux, a separate binary, and survive an update; the staged runtime
+gives Windows the same property.
+
+**What happens.** In a packaged Windows build, before the app spawns a host it stages
+(`src/core/session-host-runtime.ts`) a private copy of the runtime into
+
+    %LOCALAPPDATA%\nodeterm\session-host\<app version>-<fingerprint>\
+        nodeterm-sessionhost-v2.exe          (nodeterm.exe, renamed)
+        *.dll, icudtl.dat, resources.pak, snapshot_blob.bin, v8_context_snapshot.bin, locales\
+        resources\session-host\host.cjs + node_modules\node-pty\…
+        nodeterm-runtime.json                (marker: file list, sizes, SHA-256)
+
+and launches the host from there. The fingerprint hashes every source file's path, size and mtime,
+so a reinstall of the same version with different bytes gets its own directory. `app.asar` is not
+copied (the host never reads it).
+
+**The file set is not measured.** It was written on Linux and is the conservative set an
+`ELECTRON_RUN_AS_NODE` process can plausibly touch: `icudtl.dat` is required (Node's ICU data);
+`resources.pak` was measured open by a running host in #829; the DLLs cover load-time and delayed
+imports; `locales\` covers resource-bundle initialisation. The per-machine proof is the smoke run
+below. Device checklist item 1 measures the real set so it can be pruned.
+
+**Never a half-staged directory.** Files are copied into `.staging-<uuid>` beside the target, each
+copy is re-read and compared by SHA-256 to what was read from the install directory, and the copy is
+smoke-run once: `nodeterm-sessionhost-v2.exe -e …` with `ELECTRON_RUN_AS_NODE=1` must load,
+`require` its own node-pty and exit `42`. Only then is the marker written, and the directory is
+published by one `renameAtomic`. A directory without a valid marker (or whose files no longer have
+their recorded sizes) is moved aside and restaged, never launched. Two app processes staging the
+same version at once both succeed: the second rename loses and adopts the first one's directory.
+
+**A new image name.** Uninstallers already in the field match `nodeterm.exe` and
+`nodeterm-session-host.exe` machine-wide by name; the staged host runs as
+`nodeterm-sessionhost-v2.exe` so none of them mistakes it for something that blocks them.
+
+**Fail-safe.** Every staging failure (no `%LOCALAPPDATA%`, a missing required file, disk full, a
+failed hash, a smoke run that does not answer 42 within 60 s — STATUS_DLL_NOT_FOUND, an AppLocker or
+WDAC policy blocking executables under the profile) falls back to the legacy launch: the hard link
+in the install directory, then `nodeterm.exe` itself. A staged host that dies within 10 s with an
+exit code other than the host's own `0`/`1` also falls back, and staging is not offered again for
+the rest of the app run. The legacy host still blocks the installer, so the preflight below still
+protects the install. The first launch of a new version waits at most 45 s for staging (copy,
+hashing, smoke run; usually a few seconds, longer behind an antivirus scan); past that the host is
+launched the legacy way and the finished copy serves the next launch. Staging progress and failures
+are appended to `<userData>\session-host.log` with an `[app]` tag.
+
+**Old copies.** After staging, copies other than the current one are collected — fail-closed: only
+when a Win32_Process query SUCCEEDS, no `nodeterm-sessionhost-v2.exe` process has an unreadable
+path, nothing runs from under that directory, the directory is older than 10 minutes, and renaming
+it aside succeeds (Windows refuses while an image inside is mapped). A failed query deletes nothing.
+A host started by an older version therefore keeps its copy for as long as it runs; once it exits
+(30 s after its last session), the next app launch removes that copy. Disk use: about 250 MB per
+version, normally one or two versions.
+
+**Versions talk to each other.** There is one host per user-data directory, whichever runtime
+started it. A newer app connects to a host started by an older staged runtime through the existing
+negotiation: the state file's protocol version (v1 or v2 accepted) and the `hello` feature list
+(`SESSION_HOST_FEATURES`, e.g. `geometry`). New sessions go to that host as long as it is
+compatible; it exits by itself once it empties, and the next host is launched from the current
+version's copy. The rule for every future change: **the host protocol is additive-only** — a new
+command or push frame is negotiated at `hello`, never assumed. An operation an older host cannot
+perform is refused with `SessionHostProtocolCompatibilityError`, which tells the user why. A host
+whose protocol version the app does not accept at all is left running and the connect fails with
+that reason — an app never kills a host to replace it.
+
+**Not covered.** A dev checkout (`electron-vite dev`) and an asar-resolved bundle keep the legacy
+launch. Server Edition and macOS/Linux are unaffected (tmux).
+
 ## Windows updates and uninstalls
 
-A running host maps the installed Electron executable and its DLLs. Its separate hard-link name
-makes it identifiable; it does **not** make the install directory safe to replace. Closing the app
-alone deliberately leaves the host and its sessions running (#829).
+A host launched the legacy way (a hard link inside the install directory, or `nodeterm.exe` itself)
+maps the installed Electron executable and its DLLs. Its separate hard-link name makes it
+identifiable; it does **not** make the install directory safe to replace. Closing the app alone
+deliberately leaves the host and its sessions running (#829). A host running from its staged
+runtime (above) maps nothing in the install directory and does not block an update or an
+uninstall: the preflight matches it neither by name nor by path, and the old version's uninstaller
+does not know its name. Updating from a version that predates the staged runtime still meets that
+version's legacy host once.
+
+The uninstaller leaves `%LOCALAPPDATA%\nodeterm\session-host` in place, because a staged host may
+still be running from it and the uninstaller never stops a host. `docs/uninstall.md` says how to
+remove it afterwards.
 
 The NSIS install/uninstall preflight now refuses to proceed while the app or host is running from
 any installation, or a process runs under the installation path prefix. It replaces electron-builder's
@@ -385,7 +502,28 @@ path prefix without a directory boundary. Another installation (even a sibling d
 name begins with this installation's name) can therefore block an update. The new preflight must
 cover those legacy targets before invoking the old executable; it never stops them on your behalf.
 
-To update while keeping your saved canvas:
+**The in-app way (nodeterm with the `shutdown` host feature):** open the command palette
+(Ctrl+K) → **Prepare for update…**, or the button on the update card. It:
+
+1. lists every session the host holds — every project, closed ones too — and waits while any agent
+   is working or waiting for your answer (each listed with a **Go** button; **Check again** when
+   it is done);
+2. asks each idle agent whose terminal is open on the canvas to exit normally (`/exit`, `/quit`;
+   Gemini's bare `/quit`, never `--delete`) so its conversation is saved, and reports any that did
+   not;
+3. shows what will still stop — shells and anything running in them (unsaved work there is lost),
+   agents it could not exit — and asks you to confirm (Cancel is the default);
+4. sends the host its `shutdown` command: the host ends every session with its ordinary kill path,
+   replies, removes its state files and exits. nodeterm confirms the process is gone, then quits
+   (optionally opening the download page).
+
+Canvas nodes are kept; on the next launch every terminal cold-starts and agents resume with
+`--resume` where their CLI and saved history allow. If the host cannot end a session it says which
+and keeps running — nothing is quit. A host started by an older nodeterm does not have the
+command; the dialog then shows the manual steps below. nodeterm never kills the host process
+itself. The installer's own refusal is unchanged.
+
+To update by hand (older host, or the in-app flow did not finish), while keeping your saved canvas:
 
 1. Cancel the installer and reopen nodeterm if you already quit it. Save work in every local
    terminal and agent, including closed/other projects and sessions accessed from a phone.
@@ -431,6 +569,9 @@ Mirrors tmux's server lifetime rule as closely as a different OS allows:
 
 - **Spawned detached, unref'd, `stdio: 'ignore'`, `windowsHide: true`**
   (`session-host-launcher.ts`) — survives the spawning app process exiting entirely.
+- In a packaged Windows build the binary is the **staged runtime's**
+  `nodeterm-sessionhost-v2.exe` outside the install directory (see "Staged host runtime"), so a
+  host also outlives an update of the app; the legacy hard link is the fallback.
 - In a **packaged** app, `process.execPath` is the Electron binary itself (there is no separate
   `node` executable to shell out to), so the child is spawned with `ELECTRON_RUN_AS_NODE=1`,
   which tells Electron to run as a plain Node process with no Chromium/BrowserWindow machinery.
@@ -662,6 +803,44 @@ and atomic state publication are now additionally behaviour-tested with adversar
 injected sharing violations. That source/runtime evidence does not replace the packaged check.
 
 ## Packaged verification still owed
+
+### Staged host runtime (#829 step 3) — device checklist
+
+Written and unit-tested on Linux; nothing below has run on Windows yet.
+
+1. **Measure the file set.** On a packaged build, run Process Monitor filtered to
+   `nodeterm-sessionhost-v2.exe` during host start and an attach; record every file opened under
+   the staged directory. Prune `RUNTIME_*` in `session-host-runtime.ts` to that set (expect
+   `locales\` and most DLLs to be unnecessary) and re-run the smoke check.
+2. **Smoke run passes.** Fresh install of the new build, open a terminal: `session-host.log`
+   shows `[app] staged runtime: published <key>`, and Task Manager → Details shows
+   `nodeterm-sessionhost-v2.exe` with a path under `%LOCALAPPDATA%\nodeterm\session-host`.
+3. **Update 0.3.x → new build with live sessions.** On a release with the legacy host, the first
+   update still meets the legacy host (expected: prepare as before). Then, with the new build's
+   staged host holding live shells/agents, install the NEXT build with the app closed: the installer
+   must not prompt, must complete, and after reopening every session re-attaches **warm** (log:
+   `attach (warm)`, same host pid as before the update).
+4. **Same, with the app open** during the install: the preflight prompts for the app only; after
+   closing it the install completes and sessions stay warm.
+5. **Old uninstaller during update.** Confirm the previous version's uninstaller (both a pre-#868
+   stock one and a #868 one) completes with the staged host running.
+6. **Compatibility.** With a staged host from build N running, launch build N+1: new terminals go
+   to the old host; after the last session closes and 30 s pass, the next terminal starts a host
+   from N+1's copy and N's directory is removed on the following launch.
+7. **GC fail-closed.** With a staged host of an old version running, launch the new app: that old
+   directory is kept. With PowerShell blocked by policy: nothing is removed.
+8. **Defender / AV.** First staging with real-time protection on: time it (log timestamps), check
+   for quarantine or SmartScreen prompts, and that a scan holding the new exe does not fail the
+   publish rename. Repeat with a third-party AV and with AppLocker/WDAC denying executables in the
+   profile (expected: smoke run fails, legacy launch, installer still protects the install).
+9. **Disk usage.** Size of one staged version directory; confirm only the current (plus running)
+   versions remain after a few updates.
+10. **Uninstall** with a staged host running: completes, host and sessions keep running, the
+    staged folder remains; after the host exits the folder can be deleted.
+11. **Two users / all-users install.** Each user stages their own copy; one user's host does not
+    block another user's update.
+
+### Earlier items
 
 The real Windows x64 installer must still be exercised through the required cheap headless route:
 create every available profile, verify input/output/resize/Unicode/copy/cwd and labels, relaunch

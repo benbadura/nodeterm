@@ -4,8 +4,11 @@ import type {
   GitHubConfigResult,
   NormalisedProjectKanbanGitHub
 } from '../../shared/github-issues'
+import { GITHUB_OWNER_PATTERN } from '../../shared/github-issue-ref'
 
-const OWNER = '[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?'
+// The shared login grammar, so a slug the board accepts is exactly one an issue reference accepts
+// (`github-issue-ref.config-agreement.test.ts`).
+const OWNER = GITHUB_OWNER_PATTERN
 const REPOSITORY = '[A-Za-z0-9_.-]+'
 const REPOSITORY_PATH = new RegExp(`^(${OWNER})/(${REPOSITORY})$`)
 
@@ -101,4 +104,23 @@ export function normaliseProjectKanbanGitHub(
     revision: createHash('sha256').update(JSON.stringify(canonical)).digest('hex')
   }
   return { ok: true, value: normalised }
+}
+
+/**
+ * What a local approval must cover beyond the repository: everything that decides what a board
+ * WRITE does on GitHub — which label a column applies, and which column closes an issue.
+ *
+ * Those live in `.nodeterm/project.json`, which is git-shared: a pulled commit could otherwise
+ * repoint "Done" at a label that triggers someone's automation, or make an innocent column close
+ * issues, under an approval the user gave to something else. Column ORDER and titles are left out on
+ * purpose — they change nothing GitHub sees, and `config.revision` (which does include order) would
+ * make every column drag silently revoke writes.
+ */
+export function githubMappingDigest(repository: string, config: NormalisedProjectKanbanGitHub): string {
+  const mappings = config.columnMappings
+    .map((item) => [item.columnId, item.label] as const)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  return createHash('sha256')
+    .update(JSON.stringify([repository, config.completionColumnId ?? null, mappings]))
+    .digest('hex')
 }

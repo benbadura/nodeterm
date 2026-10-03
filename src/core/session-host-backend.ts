@@ -5,12 +5,17 @@ import type { TextDeliveryResult } from '../shared/text-delivery'
 // sites need a session-host equivalent for. Nothing here is tmux-specific or Electron-specific;
 // see docs/windows-session-host.md for how each of these maps onto the underlying protocol.
 
+import fs from 'fs'
+import path from 'path'
 import { platform } from './platform'
 import {
   SessionHostClient,
-  SessionHostProtocolCompatibilityError
+  SessionHostProtocolCompatibilityError,
+  type HostShutdownOutcome,
+  type HostUpdateInspection
 } from './session-host-client'
 import { SessionHostPty } from './session-host-pty'
+import { ensureStagedHostRuntime } from './session-host-runtime'
 import type { ExecuteLaunchResult, SessionHostSpawnOptions } from '../session-host/protocol'
 import type { PreparedAgentLaunch } from './agent-launch'
 import type { PaneOwner } from '../shared/agents/pane-owner-predicate'
@@ -41,7 +46,31 @@ function getClient(): SessionHostClient {
       appPath: platform().appPath,
       // Dev-mode fallback, mirroring `findTmux`'s own `process.cwd()` use: under `electron-vite
       // dev` the cwd is the repo root, which is where `npm run host:build` writes its bundle.
-      repoRoot: process.cwd()
+      repoRoot: process.cwd(),
+      // Windows: run the host from a private copy of its runtime under %LOCALAPPDATA%, so the
+      // installer can replace the install directory while sessions keep running (issue #829).
+      // Packaged builds only — a dev checkout's host runs from the repo as before.
+      stageRuntime:
+        process.platform === 'win32' && platform().isPackaged
+          ? (script) =>
+              ensureStagedHostRuntime({
+                platform: process.platform,
+                execPath: process.execPath,
+                resourcesPath: platform().resourcesPath,
+                script,
+                appVersion: platform().appVersion,
+                localAppData: process.env.LOCALAPPDATA,
+                // Into the host's own log, so a device report carries why a host ran from where.
+                log: (line) => {
+                  void fs.promises
+                    .appendFile(
+                      path.join(platform().userDataDir, 'session-host.log'),
+                      `${new Date().toISOString()} [app] ${line}\n`
+                    )
+                    .catch(() => undefined)
+                }
+              })
+          : undefined
     })
   }
   return client
@@ -139,4 +168,14 @@ export async function sessionHostHasSession(name: string): Promise<boolean> {
  *  (`listNodetermSessions` — the relay host's session browser). */
 export async function sessionHostListSessions(): Promise<string[]> {
   return getClient().listSessions()
+}
+
+/** Prepare-for-update (issue #829): what the running host holds, without ever launching one. */
+export async function sessionHostInspectForUpdate(): Promise<HostUpdateInspection> {
+  return getClient().inspectForUpdate()
+}
+
+/** Prepare-for-update (issue #829): ask the running host to end every session and exit. */
+export async function sessionHostShutdownForUpdate(): Promise<HostShutdownOutcome> {
+  return getClient().shutdownForUpdate()
 }

@@ -1,0 +1,17 @@
+{"type":"session.start","data":{"sessionId":"7c1d8e0f-4b32-4e61-9a24-5f0c2a9e3b7d","version":1,"producer":"copilot-agent","copilotVersion":"1.0.88","startTime":"2026-09-28T20:35:15.853Z","selectedModel":"gpt-5.5","contextTier":null,"context":{"cwd":"/srv/demo","gitRoot":"/srv/demo","branch":"main"},"alreadyInUse":false,"remoteSteerable":false},"id":"00000000-0000-4000-8000-000000000000","timestamp":"2026-09-28T20:35:16.000Z","parentId":null}
+{"type":"user.message","data":{"content":"before the junk","transformedContent":"<current_datetime>2026-09-28T23:35:16.459+03:00</current_datetime>\n\nbefore the junk","messageId":"msg-user-291","supportedNativeDocumentMimeTypes":[],"delivery":"idle","interactionId":"interaction-1","turnId":"0"},"id":"00000000-0000-4000-8000-000000000001","timestamp":"2026-09-28T20:35:17.000Z","parentId":"00000000-0000-4000-8000-000000000000"}
+{broken json
+null
+42
+[]
+"a string"
+{"data":{}}
+{"type":"user.message"}
+{"type":"user.message","data":[]}
+{"type":"user.message","data":{"content":7}}
+{"type":"assistant.message","data":{"content":"x","toolRequests":{"not":"an array"}}}
+{"type":"assistant.message","data":{"content":"kept","toolRequests":[{"toolCallId":"no-name"},"junk",{"toolCallId":"ok","name":"view","arguments":{"path":"/p"},"type":"function"}]}}
+{"type":"tool.execution_complete","data":{"success":true,"result":{"content":"no call id"}}}
+{"type":"session.error","data":{"errorType":"x"}}
+{"type":"tool.user_requested","data":{"toolName":"bash"}}
+{"type":"assistant.message","data":{"messageId":"msg-asst-292","model":"gpt-5.5","content":"after the junk","toolRequests":[],"interactionId":"interaction-1","turnId":"0","rte":false},"id":"00000000-0000-4000-8000-000000000002","timestamp":"2026-09-28T20:35:18.000Z","parentId":"00000000-0000-4000-8000-000000000001"}

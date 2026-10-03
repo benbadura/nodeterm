@@ -2,12 +2,39 @@ import { describe, it, expect } from 'vitest'
 import {
   createVideoNode,
   createWebNode,
+  fileViewerKind,
+  isHtmlFile,
   isVideoFile,
   nodeStatesToFlow,
   flowToNodeStates
 } from './workspace'
 
 describe('video/web nodes', () => {
+  it('isHtmlFile matches local page extensions only', () => {
+    expect(isHtmlFile('/a/b/report.html')).toBe(true)
+    expect(isHtmlFile('/a/b/REPORT.HTM')).toBe(true)
+    expect(isHtmlFile('/a/b/readme.md')).toBe(false)
+    expect(isHtmlFile('/a/b/report.pdf')).toBe(false)
+  })
+
+  it('routes generated documents to their built-in canvas viewers', () => {
+    const view = { renderHtml: true }
+    expect(fileViewerKind('/tmp/page.html', view)).toBe('web')
+    expect(fileViewerKind('/tmp/page.htm', view)).toBe('web')
+    expect(fileViewerKind('/tmp/interview.mp3', view)).toBe('video')
+    expect(fileViewerKind('/tmp/notes.md', view)).toBe('editor')
+    expect(fileViewerKind('/tmp/report.pdf', view)).toBe('editor')
+    expect(fileViewerKind('/tmp/screenshot.png', view)).toBe('editor')
+  })
+
+  it('keeps .html in the editor unless a LOCAL view was asked for', () => {
+    // Explorer / ⌘K / files node: .html means "edit the source".
+    expect(fileViewerKind('/tmp/page.html')).toBe('editor')
+    expect(fileViewerKind('/tmp/interview.mp3')).toBe('video')
+    // An SSH project's page lives on the host; a WebNode can only serve this machine's disk.
+    expect(fileViewerKind('/tmp/page.html', { renderHtml: true, sshFs: true })).toBe('editor')
+  })
+
   it('isVideoFile matches common video extensions, not images', () => {
     expect(isVideoFile('/a/b/clip.mp4')).toBe(true)
     expect(isVideoFile('/a/b/CLIP.WEBM')).toBe(true)

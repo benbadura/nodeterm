@@ -1,14 +1,23 @@
 import { useEffect, useRef, useState } from 'react'
-import { useContextWindow } from '../state/contextWindow'
+import { useContextUsage } from '../state/contextWindow'
 import { useSettings } from '../state/settings'
+import { capabilityAgentId } from '@shared/agents/config'
 import { barFillPercent, contextFillColor, contextPillText, formatModelLabel, formatTimeAgo, formatTokensShort, percentText } from '../lib/usageFormat'
 
 /**
  * Per-Claude-node context-window meter. A small header pill (mini-bar + "NN%") that toggles
  * a popover with token figures and model. Renders nothing until the session has usage data.
  */
-export function ContextMeter({ sessionId }: { sessionId: string | null }): JSX.Element | null {
-  const usage = useContextWindow((s) => (sessionId ? s.bySessionId[sessionId] : undefined))
+export function ContextMeter({ sessionId, nodeId, remote = false, agentId }: {
+  sessionId: string | null
+  nodeId?: string
+  remote?: boolean
+  agentId?: string
+}): JSX.Element | null {
+  const scoped = remote && !!agentId && capabilityAgentId(agentId) === 'codex'
+  // A copied rollout has the same session id on two hosts. SSH Codex observations belong
+  // to the node that requested them; never fall back to a local/session-only snapshot.
+  const usage = useContextUsage({ sessionId, nodeId, scoped })
   const percentMode = useSettings((s) => s.settings.usagePercentMode)
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)

@@ -18,13 +18,20 @@ const host: Process = {
   Name: 'nodeterm-session-host.exe',
   ExecutablePath: 'C:\\Apps\\nodeterm\\nodeterm-session-host.exe'
 }
+const staged: Process = {
+  Name: 'nodeterm-sessionhost-v2.exe',
+  ExecutablePath: 'C:\\Users\\me\\AppData\\Local\\nodeterm\\session-host\\0.4.0-0123456789abcdef\\nodeterm-sessionhost-v2.exe'
+}
 function probe(processes: Process[], fail = false, directory = 'C:\\Apps\\nodeterm'): number | null {
   // Override only the query, in a fresh PowerShell process. Never enumerate or stop real sessions.
+  // Emit the parsed rows through a variable: Windows PowerShell 5.1's ConvertFrom-Json writes a
+  // JSON array as ONE pipeline object, so a multi-process fixture reached the script as a single
+  // array-valued "process" (real Get-CimInstance emits one object per process).
   const fixture = path.join(temp, 'processes.json')
   fs.writeFileSync(fixture, JSON.stringify(processes))
   const quote = (s: string): string => "'" + s.replace(/'/g, "''") + "'"
   const command = `function Get-CimInstance { param($ClassName, $ErrorAction)
-    ${fail ? "throw 'fixture query denied'" : `Get-Content -Raw ${quote(fixture)} | ConvertFrom-Json`}
+    ${fail ? "throw 'fixture query denied'" : `$rows = Get-Content -Raw ${quote(fixture)} | ConvertFrom-Json; $rows`}
   }; & ${quote(script)} -InstallDirectory ${quote(directory)}; exit $LASTEXITCODE`
   return spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-Command', command], {
     timeout: 15000
@@ -44,7 +51,15 @@ describe.skipIf(!available)('installer preflight with disposable process-query f
     ['unknown app owner/path', [{ ...app, ExecutablePath: '' }], 20],
     ['uninstaller copied to temp is clear', [{ Name: 'Uninstall nodeterm.exe', ExecutablePath: 'C:\\Temp\\Uninstall nodeterm.exe' }], 0],
     ['legacy prefix-matched process blocks', [{ Name: 'helper.exe', ExecutablePath: 'C:\\Apps\\nodeterm-other\\helper.exe' }], 10],
-    ['unrelated process outside installation is clear', [{ Name: 'helper.exe', ExecutablePath: 'C:\\Other\\helper.exe' }], 0]
+    ['unrelated process outside installation is clear', [{ Name: 'helper.exe', ExecutablePath: 'C:\\Other\\helper.exe' }], 0],
+    // Issue #829 step 3: a host running from its staged runtime outside the install directory
+    // maps none of the installed files and must not block the update.
+    ['staged host outside the installation is clear', [staged], 0],
+    ['app closed / staged host live / legacy host gone is clear', [staged, { Name: 'svchost.exe', ExecutablePath: null }], 0],
+    ['staged host plus the legacy host still blocks', [staged, host], 10],
+    ['staged host plus the app still blocks', [staged, app], 10],
+    ['staged image name inside the installation blocks by path', [{ ...staged, ExecutablePath: 'C:\\Apps\\nodeterm\\nodeterm-sessionhost-v2.exe' }], 10],
+    ["another user's staged host with an unreadable path is clear", [{ ...staged, ExecutablePath: null }], 0]
   ] as const)('%s', (_name, processes, result) => {
     expect(probe([...processes])).toBe(result)
   })
@@ -75,6 +90,7 @@ describe('NSIS safety wiring', () => {
     expect(check).toBeGreaterThanOrEqual(0)
     expect(check).toBeLessThan(install.indexOf('!insertmacro uninstallOldVersion SHELL_CONTEXT'))
     expect(fs.readFileSync(templates + 'uninstaller.nsh', 'utf8')).toContain('!insertmacro CHECK_APP_RUNNING')
+    expect(include).toContain('"${PROJECT_DIR}\\scripts\\windows-update-preflight.ps1"')
   })
   it('only proceeds on proven clear; silent, error and cancellation paths quit nonzero', () => {
     expect(include).toMatch(/\$R0 == 0\s+Goto nodeterm_preflight_clear/)

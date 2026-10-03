@@ -1,0 +1,5 @@
+{
+  "ok": true,
+  "content": "{\"hookSpecificOutput\":{\"hookEventName\":\"PermissionRequest\",\"decision\":{\"behavior\":\"allow\",\"updatedInput\":{}}}}",
+  "decision": "allow"
+}

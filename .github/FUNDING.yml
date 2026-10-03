@@ -1,0 +1,5 @@
+# Adds the "Sponsor" button to the repo header.
+# `custom` takes http(s) URLs only (no mailto:): the README section (the offer, the logo grid and the contact
+# address) and the Stripe payment link the ten Founding Sponsor spots are sold through. Add
+# `github: [eneskirca]` once GitHub Sponsors is approved for the account.
+custom: ["https://github.com/eneskirca/nodeterm#sponsor", "https://buy.stripe.com/3cI6oJfveehDeIL90w7EQ04"]

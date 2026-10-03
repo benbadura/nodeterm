@@ -10,11 +10,17 @@
 // or unmounted) must not be travelled to at all: reopening it would load an empty canvas, exactly
 // the case Canvas already excludes from the welcome screen's "Recently closed" list.
 
+import { nodeOwner } from './nodeOwner'
+
 /** The little the routing needs to know about a project. */
 export interface TravelProject {
   id: string
   closed?: boolean
   unavailable?: boolean
+  /** Set on an SSH project handed to a hosted team; that team's tab holds the same node ids. */
+  handedOffTo?: unknown
+  /** A relay tab (a hosted team's project); a closed one owns no node (`nodeOwner`). */
+  remote?: boolean
   nodes: { id: string }[]
 }
 
@@ -48,13 +54,14 @@ export function projectTravel(
 
 /** How to get to the project that owns `nodeId` — the travel half of "jump to the node my teammate
  *  is working in". `none` also covers "the node is on the canvas we are already on": there is no
- *  travel to do, only a focus. */
+ *  travel to do, only a focus. The owner is `nodeOwner`'s: a node id a closed, handed-off SSH project
+ *  shares with its open team tab travels to the tab. */
 export function nodeTravel(
   projects: readonly TravelProject[],
   activeProjectId: string,
   nodeId: string
 ): Travel {
-  const owner = projects.find((p) => p.nodes.some((n) => n.id === nodeId))
+  const owner = nodeOwner(projects, nodeId)
   if (!owner) return { kind: 'none' }
   return projectTravel(projects, activeProjectId, owner.id)
 }

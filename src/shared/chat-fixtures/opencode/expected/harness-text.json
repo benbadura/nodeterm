@@ -1,0 +1,101 @@
+{
+  "sessionId": "ses_0a1b2c3d4ffeSynthetic000001",
+  "parse": {
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Review @src/app.ts please"
+          }
+        ],
+        "at": 1780000001000
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "run the tests"
+          }
+        ],
+        "at": 1780000003000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "tool",
+            "name": "bash",
+            "arg": "npm test",
+            "result": "ok 12 tests"
+          }
+        ],
+        "at": 1780000003000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Looks fine."
+          }
+        ],
+        "at": 1780000004000
+      }
+    ],
+    "skipped": 0,
+    "model": "demo-model"
+  },
+  "page": {
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Review @src/app.ts please"
+          }
+        ],
+        "at": 1780000001000
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "run the tests"
+          }
+        ],
+        "at": 1780000003000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "tool",
+            "name": "bash",
+            "arg": "npm test",
+            "result": "ok 12 tests"
+          }
+        ],
+        "at": 1780000003000
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Looks fine."
+          }
+        ],
+        "at": 1780000004000
+      }
+    ],
+    "found": true,
+    "olderCursor": null,
+    "unmatchedResults": [],
+    "model": "demo-model"
+  }
+}

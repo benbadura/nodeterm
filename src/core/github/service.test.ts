@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -14,9 +14,11 @@ import {
 import { GitHubRequestCoordinator } from './request-coordinator'
 import type {
   GitHubIssue,
+  IssueHeartbeatResult,
   IssuePageResult,
   ListIssueOptions,
-  NormalisedProjectKanbanGitHub
+  NormalisedProjectKanbanGitHub,
+  UpdateIssueInput
 } from '../../shared/github-issues'
 
 let userDataDir: string
@@ -51,7 +53,9 @@ const issue = (number: number, over: Partial<GitHubIssue> = {}): GitHubIssue => 
 
 class FixtureClient implements GitHubIssuesClientLike {
   issues = new Map<number, GitHubIssue>()
-  updates: Array<{ number: number; input: { state?: 'open' | 'closed'; labels?: string[] } }> = []
+  updates: Array<{ number: number; input: UpdateIssueInput }> = []
+  /** What GitHub records as the reason when the write names none, or overrides the one asked for. */
+  recordedReason?: GitHubIssue['stateReason']
   repositoryLabels: Array<{ id: number; name: string; color: string; description: null }> = []
   createdLabels: Array<{ name: string; color: string }> = []
 
@@ -59,8 +63,24 @@ class FixtureClient implements GitHubIssuesClientLike {
     for (const item of issues) this.issues.set(item.number, item)
   }
 
+  heartbeats: Array<string | undefined> = []
+
   async listIssues(_repository: string, _options: ListIssueOptions): Promise<IssuePageResult> {
     return { items: [...this.issues.values()] }
+  }
+
+  /** Honest stand-in for GitHub's conditional heartbeat: the validator is derived from the most
+   *  recently updated item, exactly what the real endpoint's body (and so its ETag) depends on. */
+  currentHeartbeatEtag(): string {
+    const top = [...this.issues.values()]
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.number - a.number)[0]
+    return top ? `W/"${top.number}@${top.updatedAt}"` : 'W/"empty"'
+  }
+
+  async issuesHeartbeat(_repository: string, etag?: string): Promise<IssueHeartbeatResult> {
+    this.heartbeats.push(etag)
+    const current = this.currentHeartbeatEtag()
+    return etag === current ? { notModified: true, etag } : { notModified: false, etag: current }
   }
 
   async getIssue(_repository: string, number: number) {
@@ -70,13 +90,18 @@ class FixtureClient implements GitHubIssuesClientLike {
   async updateIssue(
     _repository: string,
     number: number,
-    input: { state?: 'open' | 'closed'; labels?: string[] }
+    input: UpdateIssueInput
   ) {
     this.updates.push({ number, input: structuredClone(input) })
     const current = this.issues.get(number)!
     const updated = {
       ...current,
-      ...(input.state ? { state: input.state } : {}),
+      ...(input.state ? {
+        state: input.state,
+        stateReason: this.recordedReason !== undefined
+          ? this.recordedReason
+          : input.stateReason ?? (input.state === 'closed' ? 'completed' as const : 'reopened' as const)
+      } : {}),
       ...(input.labels ? {
         labels: input.labels.map((name, index) => ({ id: index + 1, name, color: '8b5cf6' }))
       } : {}),
@@ -114,6 +139,7 @@ function context(client: FixtureClient, over: Partial<GitHubIssueServiceContext>
     userId: 'user-1',
     client,
     columnColors: { todo: '#0a84ff', doing: '#ffd60a', done: '#30d158' },
+    mappingApproved: true,
     ...over
   }
 }
@@ -375,6 +401,44 @@ describe('GitHubIssueService', () => {
     expect(saved.lastComplete?.lastSuccessfulRefreshAt).toBe(1_000)
   })
 
+  it('does not let one of our own writes advance the incremental watermark', async () => {
+    // Only a completed scan has looked at everything up to its start. Our write looked at ONE
+    // issue, so a third party's change landing between the last scan and our write must still be
+    // inside the next incremental `since` window, not deferred to the daily full pass.
+    const client = new FixtureClient([issue(1), issue(2)])
+    const sinces: Array<string | undefined> = []
+    client.listIssues = async (_repository, options: ListIssueOptions) => {
+      sinces.push(options.since)
+      return { items: [...client.issues.values()]
+        .filter((item) => !options.since || item.updatedAt >= options.since) }
+    }
+    let clock = Date.parse('2026-08-09T10:05:00Z')
+    const service = new GitHubIssueService({
+      cache: new GitHubIssueCache(userDataDir),
+      coordinator: new GitHubRequestCoordinator(),
+      contextForProject: async () => context(client),
+      now: () => clock
+    })
+    await service.refresh({ projectId: 'project-1', full: true })
+
+    // Someone else edits issue 2 after our scan...
+    client.issues.set(2, issue(2, { title: 'Renamed elsewhere', updatedAt: '2026-08-09T10:06:00Z' }))
+    // ...and only then do we move issue 1.
+    clock = Date.parse('2026-08-09T10:10:00Z')
+    expect((await service.moveIssue({
+      projectId: 'project-1', issueNumber: 1, toColumnId: 'doing',
+      expectedUpdatedAt: issue(1).updatedAt
+    })).status).toBe('confirmed')
+
+    clock = Date.parse('2026-08-09T12:00:00Z')
+    await service.refresh({ projectId: 'project-1' })
+    expect(sinces.at(-1)).toBe(new Date(Date.parse('2026-08-09T10:05:00Z') - 2_000).toISOString())
+    const shown = await service.query({ projectId: 'project-1', columnId: null, pageSize: 50 })
+    expect(shown.items.find((item) => item.number === 2)?.title).toBe('Renamed elsewhere')
+    // The page's "last refreshed" is the scan's, not the write's: nothing was re-read then.
+    expect(shown.lastSuccessfulRefreshAt).toBe(Date.parse('2026-08-09T12:00:00Z'))
+  })
+
   it('refreshes and maps open, closed, unmatched, and conflicting issues', async () => {
     const client = new FixtureClient([
       issue(1, { labels: [{ id: 1, name: 'status:todo', color: '0a84ff' }] }),
@@ -616,7 +680,7 @@ describe('GitHubIssueService', () => {
     })
     expect(result.status).toBe('confirmed')
     expect(client.updates).toEqual([{ number: 42, input: {
-      state: 'open', labels: ['bug', 'status:todo']
+      state: 'open', stateReason: 'reopened', labels: ['bug', 'status:todo']
     } }])
   })
 
@@ -833,17 +897,20 @@ describe('GitHubIssueService', () => {
 
     await service.refresh({ projectId: 'project-1' })
     expect(listed).toBe(1)
+    expect(client.heartbeats).toHaveLength(1)
     const afterFirst = resolutions
 
     clock += 1_000
     await service.refresh({ projectId: 'project-1' })
-    expect(listed).toBe(1)
+    expect(client.heartbeats).toHaveLength(1)
     // The throttle must run BEFORE the credential resolution, or the expensive half still happens.
     expect(resolutions).toBe(afterFirst)
 
     clock += REFRESH_MIN_INTERVAL_MS
     await service.refresh({ projectId: 'project-1' })
-    expect(listed).toBe(2)
+    // Admitted again. Nothing changed upstream, so it stops at the (free) conditional heartbeat.
+    expect(client.heartbeats).toHaveLength(2)
+    expect(listed).toBe(1)
   })
 
   it('lets a full refresh through its own longer interval, not the incremental one', async () => {
@@ -942,5 +1009,424 @@ describe('GitHubIssueService', () => {
       expectedUpdatedAt: '2026-08-09T10:05Z'
     })).toEqual({ status: 'invalid-target' })
     expect(client.updates).toEqual([])
+  })
+})
+
+describe('GitHubIssueService heartbeat', () => {
+  function counting(client: FixtureClient) {
+    const scans: ListIssueOptions[] = []
+    const list = client.listIssues.bind(client)
+    client.listIssues = async (repository, options) => {
+      scans.push(structuredClone(options))
+      return list(repository, options)
+    }
+    return scans
+  }
+
+  async function seeded(issues: GitHubIssue[], etags: Record<string, string>, over: {
+    lastFullReconciliationAt?: number
+  } = {}) {
+    const cache = new GitHubIssueCache(userDataDir)
+    await cache.bind('local-1', 'project-1', 'o/r', 'user-1')
+    await cache.saveComplete('user-1', 'o/r', {
+      issues, etags, lastSuccessfulRefreshAt: 5_000,
+      lastFullReconciliationAt: over.lastFullReconciliationAt ?? 5_000
+    })
+    return cache
+  }
+
+  it('skips the whole scan when the heartbeat answers 304', async () => {
+    const client = new FixtureClient([issue(1), issue(2)])
+    const scans = counting(client)
+    const cache = await seeded([issue(1), issue(2)], { heartbeat: client.currentHeartbeatEtag() })
+    const deltas: number[][] = []
+    const service = new GitHubIssueService({
+      cache, coordinator: new GitHubRequestCoordinator(),
+      contextForProject: async () => context(client),
+      now: () => 10_000,
+      onDelta: (_uiId, _projectId, numbers) => deltas.push(numbers)
+    })
+
+    // Opening the board refreshes in the background (a snapshot is cached, so it renders at once).
+    await service.subscribe(1, { projectId: 'project-1' })
+    await vi.waitFor(() => expect(client.heartbeats).toHaveLength(1))
+    await vi.waitFor(() => expect(deltas).toHaveLength(1))
+
+    expect(client.heartbeats).toEqual([client.currentHeartbeatEtag()])
+    expect(scans).toEqual([])
+    // Nothing changed on GitHub, but subscribers still re-read their pages (from the local cache,
+    // at no GitHub cost) — as every refresh always made them do. What a page says is not only
+    // issues: read only, the mapping approval and the completion column are derived by the host
+    // at query time, and a board that is never prompted keeps showing the old answer.
+    expect(deltas).toEqual([[]])
+  })
+
+  it('does not let a 304 freeze an incomplete repository: it keeps scanning', async () => {
+    const client = new FixtureClient([issue(1)])
+    const scans = counting(client)
+    const cache = await seeded([issue(1)], { heartbeat: client.currentHeartbeatEtag() })
+    await cache.saveIncompleteAttempt('user-1', 'o/r', { reason: 'issue-limit', observedAt: 5_000 })
+    const service = new GitHubIssueService({
+      cache, coordinator: new GitHubRequestCoordinator(),
+      contextForProject: async () => context(client), now: () => 10_000
+    })
+
+    await service.refresh({ projectId: 'project-1' })
+
+    expect(scans).toHaveLength(1)
+  })
+
+  it('runs the incremental since scan when the heartbeat reports a change, and persists the new ETag', async () => {
+    const client = new FixtureClient([issue(1)])
+    const scans = counting(client)
+    const cache = await seeded([issue(1)], { heartbeat: client.currentHeartbeatEtag() })
+    client.issues.set(2, issue(2))
+    const service = new GitHubIssueService({
+      cache, coordinator: new GitHubRequestCoordinator(),
+      contextForProject: async () => context(client),
+      now: () => 10_000
+    })
+
+    await service.refresh({ projectId: 'project-1' })
+
+    expect(scans).toHaveLength(1)
+    expect(scans[0].since).toBe(new Date(3_000).toISOString())
+    expect((await cache.load('user-1', 'o/r')).lastComplete?.etags)
+      .toEqual({ heartbeat: client.currentHeartbeatEtag() })
+    expect((await service.query({ projectId: 'project-1', columnId: null, pageSize: 50 })).items
+      .map((item) => item.number)).toEqual([2, 1])
+  })
+
+  it('reuses the persisted ETag after a restart instead of paying for a scan', async () => {
+    const client = new FixtureClient([issue(1)])
+    const cache = await seeded([], {})
+    const first = new GitHubIssueService({
+      cache, coordinator: new GitHubRequestCoordinator(),
+      contextForProject: async () => context(client), now: () => 10_000
+    })
+    await first.refresh({ projectId: 'project-1' })
+
+    // A fresh service over the same on-disk cache is what an app restart looks like.
+    const scans = counting(client)
+    const restarted = new GitHubIssueService({
+      cache, coordinator: new GitHubRequestCoordinator(),
+      contextForProject: async () => context(client), now: () => 20_000
+    })
+    await restarted.refresh({ projectId: 'project-1' })
+
+    expect(client.heartbeats.at(-1)).toBe(client.currentHeartbeatEtag())
+    expect(scans).toEqual([])
+  })
+
+  it('still scans on a full reconciliation even when the heartbeat answers 304', async () => {
+    const client = new FixtureClient([issue(1)])
+    const scans = counting(client)
+    const cache = await seeded([issue(1), issue(9)], { heartbeat: client.currentHeartbeatEtag() })
+    const service = new GitHubIssueService({
+      cache, coordinator: new GitHubRequestCoordinator(),
+      contextForProject: async () => context(client), now: () => 10_000
+    })
+
+    // A deletion or a transfer out of the repository does not move the top item, so the daily
+    // reconciliation is the only thing that can notice one — the heartbeat must never skip it.
+    await service.refresh({ projectId: 'project-1', full: true })
+
+    expect(scans).toHaveLength(1)
+    expect(scans[0].since).toBeUndefined()
+    expect((await service.query({ projectId: 'project-1', columnId: null, pageSize: 50 })).items
+      .map((item) => item.number)).toEqual([1])
+  })
+
+  it('stores the validator read BEFORE the scan, so a change during the scan is seen next time', async () => {
+    const client = new FixtureClient([issue(1)])
+    const cache = await seeded([issue(1)], {})
+    const list = client.listIssues.bind(client)
+    client.listIssues = async (repository, options) => {
+      const page = await list(repository, options)
+      // An edit lands on GitHub after the scan read its page but before the snapshot is saved.
+      client.issues.set(3, issue(3))
+      return page
+    }
+    const service = new GitHubIssueService({
+      cache, coordinator: new GitHubRequestCoordinator(),
+      contextForProject: async () => context(client), now: () => 10_000
+    })
+
+    await service.refresh({ projectId: 'project-1' })
+
+    const stored = (await cache.load('user-1', 'o/r')).lastComplete?.etags.heartbeat
+    expect(stored).toBe('W/"1@2026-08-09T10:00:01Z"')
+    expect(stored).not.toBe(client.currentHeartbeatEtag())
+  })
+})
+
+describe('GitHubIssueService rate budget', () => {
+  const low = { resource: 'core', limit: 5_000, remaining: 12, resetAt: 9_000_000 }
+
+  it('pauses the background poll below the budget floor, but a refresh the user asks for still runs', async () => {
+    let clock = 1_000_000
+    const client = new FixtureClient([issue(1)])
+    const coordinator = new GitHubRequestCoordinator({ now: () => clock })
+    const timers: Array<() => Promise<void>> = []
+    const service = new GitHubIssueService({
+      cache: new GitHubIssueCache(userDataDir), coordinator,
+      contextForProject: async () => context(client),
+      now: () => clock,
+      setInterval: (fn) => { timers.push(fn as () => Promise<void>); return timers.length }
+    })
+    await service.subscribe(1, { projectId: 'project-1' })
+    expect(client.heartbeats).toHaveLength(1)
+
+    coordinator.noteRateSample('user-1', low)
+    await timers[0]()
+    expect(client.heartbeats).toHaveLength(1)
+
+    clock += REFRESH_MIN_INTERVAL_MS
+    await service.refresh({ projectId: 'project-1' })
+    expect(client.heartbeats).toHaveLength(2)
+  })
+
+  it('tells the board until when sync is held, instead of going quiet', async () => {
+    const clock = 1_000_000
+    const client = new FixtureClient([issue(1)])
+    const coordinator = new GitHubRequestCoordinator({ now: () => clock })
+    const service = new GitHubIssueService({
+      cache: new GitHubIssueCache(userDataDir), coordinator,
+      contextForProject: async () => context(client), now: () => clock
+    })
+    await service.refresh({ projectId: 'project-1' })
+    expect((await service.query({ projectId: 'project-1', columnId: null, pageSize: 50 })).throttle)
+      .toBeUndefined()
+
+    coordinator.noteRateSample('user-1', low)
+    expect((await service.query({ projectId: 'project-1', columnId: null, pageSize: 50 })).throttle)
+      .toEqual({ until: 9_000_000, kind: 'low-budget' })
+  })
+
+  it('prompts subscribers to re-read once when the poll pauses, not on every skipped minute', async () => {
+    const clock = 1_000_000
+    const client = new FixtureClient([issue(1)])
+    const coordinator = new GitHubRequestCoordinator({ now: () => clock })
+    const timers: Array<() => Promise<void>> = []
+    const deltas: number[][] = []
+    const service = new GitHubIssueService({
+      cache: new GitHubIssueCache(userDataDir), coordinator,
+      contextForProject: async () => context(client), now: () => clock,
+      setInterval: (fn) => { timers.push(fn as () => Promise<void>); return timers.length },
+      onDelta: (_uiId, _projectId, numbers) => deltas.push(numbers)
+    })
+    await service.subscribe(1, { projectId: 'project-1' })
+    const before = deltas.length
+    coordinator.noteRateSample('user-1', low)
+
+    await timers[0]()
+    await timers[0]()
+
+    expect(deltas.slice(before)).toEqual([[]])
+  })
+
+  it('prompts subscribers once when a poll is refused by a rate limit', async () => {
+    const clock = 1_000_000
+    const client = new FixtureClient([issue(1)])
+    const coordinator = new GitHubRequestCoordinator({ now: () => clock })
+    const timers: Array<() => Promise<void>> = []
+    const deltas: number[][] = []
+    const service = new GitHubIssueService({
+      cache: new GitHubIssueCache(userDataDir), coordinator,
+      contextForProject: async () => context(client), now: () => clock,
+      setInterval: (fn) => { timers.push(fn as () => Promise<void>); return timers.length },
+      onDelta: (_uiId, _projectId, numbers) => deltas.push(numbers)
+    })
+    await service.subscribe(1, { projectId: 'project-1' })
+    const before = deltas.length
+    client.issuesHeartbeat = async () => {
+      throw Object.assign(new Error('rate-limited'), { code: 'rate-limited', retryAt: 2_000_000 })
+    }
+
+    await timers[0]()
+    await timers[0]()
+
+    expect(deltas.slice(before)).toEqual([[]])
+    expect((await service.query({ projectId: 'project-1', columnId: null, pageSize: 50 })).throttle)
+      .toEqual({ until: 2_000_000, kind: 'rate-limited' })
+  })
+})
+
+describe('GitHubIssueService close reason', () => {
+  async function ready(issues: GitHubIssue[]) {
+    const client = new FixtureClient(issues)
+    const cache = new GitHubIssueCache(userDataDir)
+    await cache.bind('local-1', 'project-1', 'o/r', 'user-1')
+    await cache.saveComplete('user-1', 'o/r', {
+      issues, etags: {}, lastSuccessfulRefreshAt: 1, lastFullReconciliationAt: 1
+    })
+    const service = new GitHubIssueService({
+      cache, coordinator: new GitHubRequestCoordinator(),
+      contextForProject: async () => context(client), now: () => 10_000
+    })
+    return { client, service }
+  }
+  const todo = [{ id: 1, name: 'status:todo', color: '0a84ff' }]
+  const done = [{ id: 3, name: 'status:done', color: '30d158' }]
+
+  it('closes with the reason the user chose', async () => {
+    const shown = issue(1, { labels: todo })
+    const { client, service } = await ready([shown])
+    const result = await service.moveIssue({
+      projectId: 'project-1', issueNumber: 1, toColumnId: 'done',
+      expectedUpdatedAt: shown.updatedAt, closeReason: 'not_planned'
+    })
+    expect(result.status).toBe('confirmed')
+    expect(client.updates[0].input).toEqual({
+      state: 'closed', stateReason: 'not_planned', labels: ['status:done']
+    })
+  })
+
+  it('closes as completed when no reason was given, which is what GitHub does on its own', async () => {
+    const shown = issue(1, { labels: todo })
+    const { client, service } = await ready([shown])
+    await service.moveIssue({
+      projectId: 'project-1', issueNumber: 1, toColumnId: 'done', expectedUpdatedAt: shown.updatedAt
+    })
+    expect(client.updates[0].input.stateReason).toBe('completed')
+  })
+
+  it('reopens with state_reason reopened, whatever close reason the caller sent', async () => {
+    const shown = issue(1, { state: 'closed', stateReason: 'not_planned', labels: done })
+    const { client, service } = await ready([shown])
+    await service.moveIssue({
+      projectId: 'project-1', issueNumber: 1, toColumnId: 'todo',
+      expectedUpdatedAt: shown.updatedAt, closeReason: 'not_planned'
+    })
+    expect(client.updates[0].input).toEqual({ state: 'open', stateReason: 'reopened', labels: ['status:todo'] })
+  })
+
+  it('sends no reason for a move that does not change the state', async () => {
+    const shown = issue(1, { labels: todo })
+    const { client, service } = await ready([shown])
+    await service.moveIssue({
+      projectId: 'project-1', issueNumber: 1, toColumnId: 'doing',
+      expectedUpdatedAt: shown.updatedAt, closeReason: 'not_planned'
+    })
+    expect(client.updates[0].input).toEqual({ labels: ['status:doing'] })
+  })
+
+  it('refuses a reason it does not know without writing anything', async () => {
+    const shown = issue(1, { labels: todo })
+    const { client, service } = await ready([shown])
+    const result = await service.moveIssue({
+      projectId: 'project-1', issueNumber: 1, toColumnId: 'done',
+      expectedUpdatedAt: shown.updatedAt, closeReason: 'wontfix' as never
+    })
+    expect(result.status).toBe('invalid-target')
+    expect(client.updates).toEqual([])
+  })
+
+  it('does not report a close as confirmed when GitHub recorded a different reason', async () => {
+    const shown = issue(1, { labels: todo })
+    const { client, service } = await ready([shown])
+    client.recordedReason = 'completed'
+    await expect(service.moveIssue({
+      projectId: 'project-1', issueNumber: 1, toColumnId: 'done',
+      expectedUpdatedAt: shown.updatedAt, closeReason: 'not_planned'
+    })).rejects.toThrow('mutation-not-confirmed')
+  })
+})
+
+describe('GitHubIssueService mapping approval', () => {
+  async function ready(mappingApproved: boolean) {
+    const shown = issue(1, { labels: [{ id: 1, name: 'status:todo', color: '0a84ff' }] })
+    const client = new FixtureClient([shown])
+    const cache = new GitHubIssueCache(userDataDir)
+    await cache.bind('local-1', 'project-1', 'o/r', 'user-1')
+    await cache.saveComplete('user-1', 'o/r', {
+      issues: [shown], etags: {}, lastSuccessfulRefreshAt: 1, lastFullReconciliationAt: 1
+    })
+    const service = new GitHubIssueService({
+      cache, coordinator: new GitHubRequestCoordinator(),
+      contextForProject: async () => context(client, { mappingApproved }), now: () => 10_000
+    })
+    return { client, service, shown }
+  }
+
+  it('writes nothing to GitHub under a column mapping this machine has not approved', async () => {
+    const { client, service, shown } = await ready(false)
+    expect(await service.moveIssue({
+      projectId: 'project-1', issueNumber: 1, toColumnId: 'done', expectedUpdatedAt: shown.updatedAt
+    })).toEqual({ status: 'read-only' })
+    expect((await service.createMissingLabels({ projectId: 'project-1' })).status).toBe('read-only')
+    expect(client.updates).toEqual([])
+    expect(client.createdLabels).toEqual([])
+  })
+
+  it('still shows the issues, read only, and says the mapping is what needs approving', async () => {
+    const { service } = await ready(false)
+    const page = await service.query({ projectId: 'project-1', columnId: 'todo', pageSize: 50 })
+    expect(page.items.map((item) => item.number)).toEqual([1])
+    expect(page.readOnly).toBe(true)
+    expect(page.mappingNotApproved).toBe(true)
+  })
+
+  it('writes as before once the mapping is approved', async () => {
+    const { client, service, shown } = await ready(true)
+    const page = await service.query({ projectId: 'project-1', columnId: 'todo', pageSize: 50 })
+    expect(page.readOnly).toBe(false)
+    expect(page.mappingNotApproved).toBeUndefined()
+    await service.moveIssue({
+      projectId: 'project-1', issueNumber: 1, toColumnId: 'doing', expectedUpdatedAt: shown.updatedAt
+    })
+    expect(client.updates).toHaveLength(1)
+  })
+})
+
+describe('GitHubIssueService throttle lift', () => {
+  it('prompts subscribers again when the hold lifts, so the board stops saying it is paused', async () => {
+    let clock = 1_000_000
+    const client = new FixtureClient([issue(1)])
+    const coordinator = new GitHubRequestCoordinator({ now: () => clock })
+    const timers: Array<() => Promise<void>> = []
+    const deltas: number[][] = []
+    const service = new GitHubIssueService({
+      cache: new GitHubIssueCache(userDataDir), coordinator,
+      contextForProject: async () => context(client), now: () => clock,
+      setInterval: (fn) => { timers.push(fn as () => Promise<void>); return timers.length },
+      onDelta: (_uiId, _projectId, numbers) => deltas.push(numbers)
+    })
+    await service.subscribe(1, { projectId: 'project-1' })
+    coordinator.noteRateSample('user-1', { resource: 'core', limit: 5_000, remaining: 12, resetAt: 2_000_000 })
+    await timers[0]()
+    const held = deltas.length
+
+    // The window resets. Nothing changed upstream, so the heartbeat answers 304 and the scan is
+    // skipped — the only thing that changed is that sync is no longer held.
+    clock = 2_000_000
+    await timers[0]()
+
+    expect(deltas.slice(held)).toEqual([[]])
+    expect((await service.query({ projectId: 'project-1', columnId: null, pageSize: 50 })).throttle)
+      .toBeUndefined()
+    // And a hold that comes back later is announced again rather than taken for the old one.
+    coordinator.noteRateSample('user-1', { resource: 'core', limit: 5_000, remaining: 12, resetAt: 2_000_000 + 3_600_000 })
+    await timers[0]()
+    expect(deltas.slice(held)).toEqual([[], []])
+  })
+})
+
+describe('GitHubIssueService notifyProject', () => {
+  it('prompts only that project\'s subscribers to re-read', async () => {
+    const client = new FixtureClient([issue(1)])
+    const deltas: Array<[number, string, number[]]> = []
+    const service = new GitHubIssueService({
+      cache: new GitHubIssueCache(userDataDir), coordinator: new GitHubRequestCoordinator(),
+      contextForProject: async (projectId) => context(client, { projectId }), now: () => 10_000,
+      onDelta: (uiId, projectId, numbers) => deltas.push([uiId, projectId, numbers])
+    })
+    await service.subscribe(7, { projectId: 'project-1' })
+    await service.subscribe(8, { projectId: 'project-2' })
+    deltas.length = 0
+
+    service.notifyProject('project-1')
+
+    expect(deltas).toEqual([[7, 'project-1', []]])
   })
 })

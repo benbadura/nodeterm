@@ -1,0 +1,56 @@
+[
+  {
+    "before": null,
+    "maxBytes": 262144,
+    "grownMaxBytes": 262144,
+    "start": 0,
+    "parse": {
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "delegate please"
+            }
+          ],
+          "at": 1790627717000,
+          "key": 446
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Delegating."
+            },
+            {
+              "kind": "tool",
+              "name": "task",
+              "arg": "Explore synthetic",
+              "id": "call_task",
+              "result": "Sub-agent final answer."
+            }
+          ],
+          "at": 1790627719000,
+          "key": 1096
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Main done."
+            }
+          ],
+          "at": 1790627735000,
+          "key": 6295
+        }
+      ],
+      "olderCursor": null,
+      "unmatchedResults": [],
+      "model": "gpt-5.5",
+      "noCompleteLine": false
+    }
+  }
+]

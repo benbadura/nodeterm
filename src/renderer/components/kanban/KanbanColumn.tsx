@@ -1,8 +1,10 @@
 import { Fragment, memo, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { IconClose } from '../icons'
-import type { KanbanColumn as KanbanColumnT } from '@shared/types'
+import type { KanbanColumn as KanbanColumnT, KanbanColumnCategory } from '@shared/types'
 import { SYSTEM_NODE_COLOR_SWATCHES } from '@shared/node-colors'
+import { CATEGORY_LABELS, KANBAN_COLUMN_CATEGORIES, columnCategory } from '@shared/kanban-category'
+import { ContextMenu, type MenuItem } from '../ContextMenu'
 import type { KanbanCreateChoice, KanbanCreateOption } from './KanbanView'
 import { byLane, type KanbanSourceId } from '../../lib/kanbanSources'
 
@@ -30,6 +32,10 @@ interface KanbanColumnProps {
   onRename?: (columnId: string, title: string) => void
   onRecolor?: (columnId: string, color: string) => void
   onDelete?: (columnId: string) => void
+  /** Set (or clear, with `undefined`) the column's lifecycle category. Absent = no column menu
+   *  (the Ungrouped column, a board surface that does not edit categories). The BOARD decides
+   *  whether the change needs confirming; the column only reports what was picked. */
+  onSetCategory?: (columnId: string, category: KanbanColumnCategory | undefined) => void
   /** "+ New" menu entries (agents, terminal, sticky) and what to do when one is picked
    *  (columnId null = Ungrouped: no assignment). */
   createOptions: KanbanCreateOption[]
@@ -42,9 +48,10 @@ interface KanbanColumnProps {
 }
 
 export const KanbanColumn = memo(function KanbanColumn({
-  column, lanes, onRename, onRecolor, onDelete,
+  column, lanes, onRename, onRecolor, onDelete, onSetCategory,
   createOptions, onCreate, onColumnDragStart, onDragEnd, onDropOnColumn
 }: KanbanColumnProps) {
+  const [columnMenu, setColumnMenu] = useState<{ x: number; y: number } | null>(null)
   const [editingTitle, setEditingTitle] = useState(false)
   const [title, setTitle] = useState(column?.title ?? '')
   const [swatchesOpen, setSwatchesOpen] = useState(false)
@@ -96,7 +103,23 @@ export const KanbanColumn = memo(function KanbanColumn({
   }, [newMenuOpen])
 
   const colId = column?.id ?? null
+  const category = columnCategory(column)
   const orderedLanes = byLane(lanes)
+  // The column menu: the lifecycle category (a closed set) as check rows, current one ticked.
+  const menuItems = (): MenuItem[] => {
+    if (!column || !onSetCategory) return []
+    const pick = (next: KanbanColumnCategory | undefined): MenuItem => ({
+      label: next ? CATEGORY_LABELS[next] : 'No category',
+      icon: category === next ? <span aria-label="current">✓</span> : undefined,
+      onClick: () => onSetCategory(column.id, next)
+    })
+    return [
+      { type: 'label', label: 'Category' },
+      ...KANBAN_COLUMN_CATEGORIES.map(pick),
+      { type: 'separator' },
+      pick(undefined)
+    ]
+  }
   const count = lanes.reduce((total, lane) => total + lane.count, 0)
 
   const commitTitle = () => {
@@ -126,6 +149,11 @@ export const KanbanColumn = memo(function KanbanColumn({
           onColumnDragStart?.(column.id)
         }}
         onDragEnd={onDragEnd}
+        onContextMenu={(e) => {
+          if (!column || !onSetCategory) return
+          e.preventDefault()
+          setColumnMenu({ x: e.clientX, y: e.clientY })
+        }}
       >
         {column ? (
           <button
@@ -161,7 +189,28 @@ export const KanbanColumn = memo(function KanbanColumn({
             {column ? column.title : 'Ungrouped'}
           </span>
         )}
+        {category && column && column.title.trim().toLowerCase() !== CATEGORY_LABELS[category].toLowerCase() && (
+          <span
+            className={`kanban-col__category kanban-col__category--${category}`}
+            title={`Lifecycle category: ${CATEGORY_LABELS[category]}`}
+          >
+            {CATEGORY_LABELS[category]}
+          </span>
+        )}
         <span className="kanban-col__count">{count}</span>
+        {column && onSetCategory && (
+          <button
+            className="kanban-col__menu"
+            title="Column options"
+            aria-label="Column options"
+            onClick={(e) => {
+              const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+              setColumnMenu({ x: r.left, y: r.bottom + 4 })
+            }}
+          >
+            ⋯
+          </button>
+        )}
         {column && (
           <button
             className="kanban-col__close"
@@ -172,6 +221,15 @@ export const KanbanColumn = memo(function KanbanColumn({
           </button>
         )}
       </div>
+      {columnMenu && column && onSetCategory && (
+        <ContextMenu
+          x={columnMenu.x}
+          y={columnMenu.y}
+          zIndex={60}
+          items={menuItems()}
+          onClose={() => setColumnMenu(null)}
+        />
+      )}
       {column && swatchesOpen && (
         <div className="kanban-col__swatches">
           {/* System subset, not the agent colors: ColumnPill draws a column's color as 10px

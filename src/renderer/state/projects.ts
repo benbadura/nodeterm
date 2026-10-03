@@ -5,9 +5,11 @@ import type {
   CanvasMutation,
   CanvasNodeState,
   ClosedSessionEntry,
+  HandedOffTo,
   NavStop,
   Project,
   ProjectKanban,
+  SceneMutation,
   Viewport,
   Workspace
 } from '@shared/types'
@@ -22,7 +24,12 @@ import {
   pruneLayoutViewports,
   type CanvasLayout
 } from '@shared/canvas-layout'
-import { applyCanvasMutation, createProject, reorderGroupWithinParent } from './workspace'
+import { clampProjectName } from '@shared/project-name'
+import { applyCanvasOp as applyCanvasOpTo, contentOf } from '@shared/canvas-content'
+import { diffToMutations, type CanvasScene } from '@shared/canvas-mutations'
+import { groupsFirst } from '@shared/node-order'
+import { applyOwnCanvasMutation, createProject, reorderGroupWithinParent } from './workspace'
+import { registerCodexRelayProjectCheck } from './codexCli'
 import { markWorkspaceDirty } from './workspaceDirty'
 import { folderName } from '../lib/projectOpen'
 // One order-independent key for an edge's endpoints — the SAME rule `hiddenLinkIds` uses, so a
@@ -97,6 +104,10 @@ interface ProjectsState {
   /** Sets (or clears, with undefined = fall back to the global setting) the project's default
    *  permission mode for new Claude terminal (CLI) sessions. Chat nodes are not covered. */
   setProjectDefaultPermissionMode(id: string, mode: AgentPermissionMode | undefined): void
+  /** Sets (or clears, with undefined) the machine-local mark that this SSH project was handed to a
+   *  hosted team (see `HandedOffTo`). Cleared means the field is gone, so the next save drops it
+   *  from the index entry. The caller saves. No-op for an unknown id. */
+  setHandedOffTo(id: string, value: HandedOffTo | undefined): void
   /**
    * THE strict per-project capability setter (@shared/project-capabilities). `on` writes the
    * literal `true` the validators accept AND records this machine's 'kept' answer — setting a
@@ -145,6 +156,20 @@ interface ProjectsState {
    */
   appendCanvasLinks(projectId: string, links: { bridges?: BridgeLink[]; ropes?: BridgeLink[] }): void
   /**
+   * Applies ONE canvas mutation — node, edge or board — to a project's serialized content, through
+   * the ONE reducer (`applyCanvasOp`, @shared/canvas-content) every client and the Server Edition
+   * canvas authority share — the path for a project React Flow does not hold (it only ever holds
+   * the active project's nodes). Returns false only if the project is unknown here (nothing
+   * applied, nothing created); an op that changes nothing is still `true` but writes NOTHING — no
+   * new `projects` array, so no subscriber re-runs — and callers that schedule a save compare the
+   * project object before and after to tell the two apart.
+   *
+   * Only the fields the op changed are written back, so an absent `bridges` / `ropes` / `kanban`
+   * stays absent (materializing `"bridges": []` or a lazy default board would dirty a file nobody
+   * edited). Side-effect free beyond the store: it marks nothing dirty and publishes nothing.
+   */
+  applyCanvasOp(projectId: string, mutation: CanvasMutation): boolean
+  /**
    * Applies ONE peer canvas mutation to a project's serialized nodes — the path for a project
    * that is loaded but NOT active (React Flow only holds the active project's nodes). Returns
    * false if the project is unknown here (nothing applied, nothing created).
@@ -152,12 +177,46 @@ interface ProjectsState {
    * This must not be skipped for background projects: their serialized nodes are what the next
    * whole-file `workspace.save` writes, so dropping a peer's `remove` would resurrect the node
    * they deleted on the very next save — the data-loss shape canvas sync exists to fix.
+   *
+   * Delegates to `applyCanvasOp` (one reducer), so it takes any family.
    */
   applyNodeMutation(projectId: string, mutation: CanvasMutation): boolean
+  /**
+   * The EDGE counterpart, for the same background-project path. Edges (`bridges` = context links,
+   * `ropes` = display-only lineage) ride the same whole-file save as the nodes, so dropping a
+   * peer's edge mutation for a project we are not looking at has the identical failure mode: our
+   * next save writes a project without their edge, deleting it for everyone.
+   *
+   * Returns false if the project is unknown here (nothing applied). Delegates to `applyCanvasOp`.
+   */
+  applyEdgeMutation(projectId: string, mutation: CanvasMutation): boolean
+  /**
+   * Applies a mutation THIS renderer authored (a cold open, an off-canvas display node, the
+   * headless start's outcome patch) to a project that is not on screen. Unlike `applyNodeMutation`
+   * nothing is stripped: the node's machine-local `pendingLaunch` is ours to set, and an upsert
+   * without one CLEARS it (the peer path carries the old one across instead — @shared/node-exec).
+   * Never route a peer's mutation through this.
+   */
+  applyOwnNodeMutation(projectId: string, mutation: CanvasMutation): boolean
+  /** Several of our own node writes as ONE store write, re-sorted parents-first (`groupsFirst`) —
+   *  a structural control verb run off screen adds a frame after the children it now holds. */
+  applyOwnNodeMutations(projectId: string, mutations: readonly CanvasMutation[]): boolean
   /** Renames a node within a project (source of truth for inactive projects). */
   renameNode(projectId: string, nodeId: string, title: string): void
   /** Recolors a node within a project. */
   recolorNode(projectId: string, nodeId: string, color: string): void
+  /**
+   * Writes an in-place agent restart's rebind (which agent, which account) into a project's
+   * serialized node — for a restart that finished after its project stopped being the active one
+   * (the user switched away while the CLI was quitting), when React Flow no longer holds the node.
+   * A key that is PRESENT is written, even as `undefined` (= the system account); an absent key is
+   * left alone.
+   */
+  rebindNode(
+    projectId: string,
+    nodeId: string,
+    patch: Pick<CanvasNodeState, 'agentId'> & Partial<Pick<CanvasNodeState, 'accountId'>>
+  ): void
   /** Removes a node from a project. */
   removeNode(projectId: string, nodeId: string): void
   /** Duplicates a node within a project (fresh id, offset position). */
@@ -185,6 +244,10 @@ interface ProjectsState {
   closeProject(id: string): string
   /** Restores a closed project and makes it active. No-op if the id is unknown. */
   reopenProject(id: string): void
+  /** Un-close a project WITHOUT making it active: a closed tab reappears, the camera stays put.
+   *  For work that landed while the user was elsewhere (`registerProject`, canvas-control
+   *  `--run-now` #925). `reopenProject` is the human path and also activates. */
+  unhideProject(id: string): void
 
   /** Records freshly deleted sessions into the project's history (newest-first, capped at
    *  `CLOSED_SESSIONS_CAP`). No-op if `entries` is empty or the project no longer exists. */
@@ -350,6 +413,82 @@ function mapProjectNodes(
   return projects.map((p) => (p.id === projectId ? { ...p, nodes: fn(p.nodes) } : p))
 }
 
+/**
+ * Publishes a board write to the project's peers (spec §11.3). Every board write in the renderer
+ * goes through `setProjectKanban` — the board, the card modal, the Omni board, node labels, the
+ * GitHub settings section, the canvas-control `assign` verb (fenced by board-writers.guard.test.ts)
+ * — so the ONE place a board change is published is here, and no writer needs a call site of its
+ * own. `prev` is the board read BEFORE the write (`undefined` = the project's lazy default), `next`
+ * the board written.
+ *
+ * A peer's board op must NEVER come through here: it is applied with `applyCanvasOp` (the store
+ * reducer), which does not call the hook — publishing it would re-cast someone else's edit as ours.
+ */
+export type KanbanPublishHook = (
+  projectId: string,
+  prev: ProjectKanban | undefined,
+  next: ProjectKanban | undefined
+) => void
+let kanbanPublishHook: KanbanPublishHook | null = null
+/** Canvas registers this once per core binding and clears it (`null`) on teardown. */
+export function setKanbanPublishHook(hook: KanbanPublishHook | null): void {
+  kanbanPublishHook = hook
+}
+
+/**
+ * Publishes the node and edge writes THIS renderer makes into a project's STORED copy — every own
+ * store writer: `applyOwnNodeMutation` and `appendCanvasLinks` (a ⌘⇧T / "Recently closed" reopen
+ * into a project that is not on screen, a cold open, an off-canvas display node or link, a headless
+ * start's launch patch) and the sessions sidebar's `renameNode` / `recolorNode` / `rebindNode` /
+ * `removeNode` / `duplicateNode` / `moveNodeToGroup` / `reorderNode` / `reorderGroup`. The node
+ * publisher never sees these writes: it diffs React Flow, and a stored project's nodes enter React
+ * Flow only through a load, which it ADOPTS as its baseline rather than casting. On a project a
+ * Server Edition canvas authority governs that was data loss, because the save overlay replaces the
+ * stored content with what the authority heard as ops (docs/hosted-team-relay.md): a reopened node
+ * vanished from disk, and a sidebar close killed the session while the node came back.
+ *
+ * Called AFTER the write with `ops`, which diffs the project's nodes and edges before and after it
+ * (`diffToMutations`, the publisher's own diff, so no writer keeps a list of its own that drifts).
+ * LAZY: a hook that casts nothing for this project never pays for the diff. Node order is not in
+ * the op vocabulary, so a pure reorder yields no op. Same one-owner rule as the board hook: a peer's
+ * op is applied with `applyCanvasOp`, which never calls it, so nothing received is published again.
+ */
+export type StoredCanvasPublishHook = (projectId: string, ops: () => readonly SceneMutation[]) => void
+let storedCanvasPublishHook: StoredCanvasPublishHook | null = null
+/** Canvas registers this once per core binding and clears it (`null`) on teardown. */
+export function setStoredCanvasPublishHook(hook: StoredCanvasPublishHook | null): void {
+  storedCanvasPublishHook = hook
+}
+
+const sceneOf = (p: Project): CanvasScene => ({
+  nodes: Array.isArray(p.nodes) ? p.nodes : [],
+  bridges: p.bridges ?? [],
+  ropes: p.ropes ?? []
+})
+
+/** Run one own write into a stored project, then hand what it changed to the publish hook. */
+function ownWrite(get: () => ProjectsState, projectId: string, write: () => void): void {
+  const before = get().getProject(projectId)
+  write()
+  const hook = storedCanvasPublishHook
+  const after = get().getProject(projectId)
+  if (!hook || !before || !after || before === after) return
+  hook(projectId, () => diffToMutations(sceneOf(before), sceneOf(after)))
+}
+
+/** One server folder is one project: the same endpoint (host, user, and port — 22 when unset) and
+ *  the same remoteCwd. The server entry's own id and label do not count, so a re-added server entry
+ *  still finds its folder's project. `openSshProject` dedupes by this, and so does anything that
+ *  must know in advance which project that call will reopen. */
+export function sameSshEndpoint(a: NonNullable<Project['ssh']>, b: NonNullable<Project['ssh']>): boolean {
+  return (
+    a.remoteCwd === b.remoteCwd &&
+    a.server.host === b.server.host &&
+    a.server.user === b.server.user &&
+    (a.server.port ?? 22) === (b.server.port ?? 22)
+  )
+}
+
 export const useProjects = create<ProjectsState>((set, get) => ({
   projects: [],
   activeProjectId: '',
@@ -372,13 +511,17 @@ export const useProjects = create<ProjectsState>((set, get) => ({
   },
 
   addProject(name, cwd, ssh) {
-    const project = createProject(get().projects.length, name, cwd, ssh)
+    // Every new project's name — a folder's own name, an SSH label, a relay host's project
+    // name — gets the same cap as a rename (issue #940). A blank one keeps createProject's default.
+    const clean = name === undefined ? undefined : clampProjectName(name) || undefined
+    const project = createProject(get().projects.length, clean, cwd, ssh)
     set((s) => ({ projects: [...s.projects, project] }))
     return project
   },
 
   openFolderProject(folder) {
-    const existing = get().projects.find((p) => p.cwd === folder)
+    // Never a relay tab: it carries the HOST's cwd, and the same path can exist on both machines.
+    const existing = get().projects.find((p) => p.cwd === folder && !p.remote)
     if (existing) {
       // reopenProject also clears `closed` — an "Open folder" on a previously closed
       // project must bring its tab back, not activate an invisible project.
@@ -392,14 +535,7 @@ export const useProjects = create<ProjectsState>((set, get) => ({
   },
 
   openSshProject(label, ssh) {
-    const existing = get().projects.find(
-      (p) =>
-        p.ssh &&
-        p.ssh.remoteCwd === ssh.remoteCwd &&
-        p.ssh.server.host === ssh.server.host &&
-        p.ssh.server.user === ssh.server.user &&
-        (p.ssh.server.port ?? 22) === (ssh.server.port ?? 22)
-    )
+    const existing = get().projects.find((p) => !!p.ssh && sameSshEndpoint(p.ssh, ssh))
     if (existing) {
       get().reopenProject(existing.id)
       return existing
@@ -434,8 +570,12 @@ export const useProjects = create<ProjectsState>((set, get) => ({
   },
 
   renameProject(id, name) {
+    // Every rename surface funnels through here, so the cap holds even for input that bypassed a
+    // field's maxLength (issue #940). A blank name is not a rename.
+    const clean = clampProjectName(name)
+    if (!clean) return
     set((s) => ({
-      projects: s.projects.map((p) => (p.id === id ? { ...p, name } : p))
+      projects: s.projects.map((p) => (p.id === id ? { ...p, name: clean } : p))
     }))
   },
 
@@ -472,6 +612,17 @@ export const useProjects = create<ProjectsState>((set, get) => ({
   setProjectDefaultPermissionMode(id, mode) {
     set((s) => ({
       projects: s.projects.map((p) => (p.id === id ? { ...p, defaultPermissionMode: mode } : p))
+    }))
+  },
+
+  setHandedOffTo(id, value) {
+    set((s) => ({
+      projects: s.projects.map((p) => {
+        if (p.id !== id) return p
+        if (value) return { ...p, handedOffTo: value }
+        const { handedOffTo: _drop, ...rest } = p
+        return rest
+      })
     }))
   },
 
@@ -532,9 +683,13 @@ export const useProjects = create<ProjectsState>((set, get) => ({
   },
 
   setProjectKanban(id, kanban) {
+    // Read BEFORE the write: the publish hook diffs this against what was written.
+    const prev = get().getProject(id)?.kanban
     set((s) => ({
       projects: s.projects.map((p) => (p.id === id ? { ...p, kanban } : p))
     }))
+    // AFTER the write, so a local repair the publisher applies (ruling R2) lands on `kanban`.
+    kanbanPublishHook?.(id, prev, kanban)
   },
 
   setProjectBreadcrumbs(id, breadcrumbs) {
@@ -568,113 +723,182 @@ export const useProjects = create<ProjectsState>((set, get) => ({
       })
       return fresh.length ? [...kept, ...fresh] : existing
     }
-    set((s) => ({
-      projects: s.projects.map((p) =>
-        p.id === projectId
-          ? { ...p, bridges: add(p.bridges, links.bridges), ropes: add(p.ropes, links.ropes) }
-          : p
-      )
-    }))
+    ownWrite(get, projectId, () =>
+      set((s) => ({
+        projects: s.projects.map((p) =>
+          p.id === projectId
+            ? { ...p, bridges: add(p.bridges, links.bridges), ropes: add(p.ropes, links.ropes) }
+            : p
+        )
+      }))
+    )
   },
 
-  applyNodeMutation(projectId, mutation) {
-    if (!get().projects.some((p) => p.id === projectId)) return false
+  applyCanvasOp(projectId, mutation) {
+    const p = get().projects.find((x) => x.id === projectId)
+    if (!p) return false
+    // Compare against the object handed to the reducer: `contentOf` builds a new one per call (and
+    // a fresh `[]` for an absent list), so only this reference can say "nothing changed".
+    const before = contentOf(p)
+    const after = applyCanvasOpTo(before, mutation, projectId)
+    if (after === before) return true
+    // Write back ONLY what the op changed — an absent list or board must stay absent.
+    const patch: Partial<Project> = {}
+    if (after.nodes !== before.nodes) patch.nodes = after.nodes
+    if (after.bridges !== before.bridges) patch.bridges = after.bridges
+    if (after.ropes !== before.ropes) patch.ropes = after.ropes
+    if (after.kanban !== before.kanban) patch.kanban = after.kanban
     set((s) => ({
-      projects: mapProjectNodes(s.projects, projectId, (nodes) =>
-        applyCanvasMutation(nodes, mutation)
-      )
+      projects: s.projects.map((x) => (x.id === projectId ? { ...x, ...patch } : x))
     }))
     return true
   },
 
+  applyNodeMutation(projectId, mutation) {
+    return get().applyCanvasOp(projectId, mutation)
+  },
+
+  applyEdgeMutation(projectId, mutation) {
+    return get().applyCanvasOp(projectId, mutation)
+  },
+
+  applyOwnNodeMutation(projectId, mutation) {
+    if (!get().projects.some((p) => p.id === projectId)) return false
+    ownWrite(get, projectId, () =>
+      set((s) => ({
+        projects: mapProjectNodes(s.projects, projectId, (nodes) =>
+          applyOwnCanvasMutation(nodes, mutation)
+        )
+      }))
+    )
+    return true
+  },
+
+  applyOwnNodeMutations(projectId, mutations) {
+    if (!get().projects.some((p) => p.id === projectId)) return false
+    if (mutations.length === 0) return true
+    ownWrite(get, projectId, () =>
+      set((s) => ({
+        projects: mapProjectNodes(s.projects, projectId, (nodes) =>
+          groupsFirst(mutations.reduce(applyOwnCanvasMutation, nodes))
+        )
+      }))
+    )
+    return true
+  },
+
   renameNode(projectId, nodeId, title) {
-    set((s) => ({
-      projects: mapProjectNodes(s.projects, projectId, (nodes) =>
-        // An explicit rename means the user owns the name now: stop auto-tracking the session.
-        nodes.map((n) => (n.id === nodeId ? { ...n, title, titleAuto: false } : n))
-      )
-    }))
+    ownWrite(get, projectId, () =>
+      set((s) => ({
+        projects: mapProjectNodes(s.projects, projectId, (nodes) =>
+          // An explicit rename means the user owns the name now: stop auto-tracking the session.
+          nodes.map((n) => (n.id === nodeId ? { ...n, title, titleAuto: false } : n))
+        )
+      }))
+    )
   },
 
   recolorNode(projectId, nodeId, color) {
-    set((s) => ({
-      projects: mapProjectNodes(s.projects, projectId, (nodes) =>
-        nodes.map((n) => (n.id === nodeId ? { ...n, color } : n))
-      )
-    }))
+    ownWrite(get, projectId, () =>
+      set((s) => ({
+        projects: mapProjectNodes(s.projects, projectId, (nodes) =>
+          nodes.map((n) => (n.id === nodeId ? { ...n, color } : n))
+        )
+      }))
+    )
+  },
+
+  rebindNode(projectId, nodeId, patch) {
+    ownWrite(get, projectId, () =>
+      set((s) => ({
+        projects: mapProjectNodes(s.projects, projectId, (nodes) =>
+          nodes.map((n) => (n.id === nodeId ? { ...n, ...patch } : n))
+        )
+      }))
+    )
   },
 
   removeNode(projectId, nodeId) {
-    set((s) => ({
-      projects: mapProjectNodes(s.projects, projectId, (nodes) =>
-        nodes.filter((n) => n.id !== nodeId)
-      )
-    }))
+    ownWrite(get, projectId, () =>
+      set((s) => ({
+        projects: mapProjectNodes(s.projects, projectId, (nodes) =>
+          nodes.filter((n) => n.id !== nodeId)
+        )
+      }))
+    )
   },
 
   duplicateNode(projectId, nodeId) {
-    set((s) => ({
-      projects: mapProjectNodes(s.projects, projectId, (nodes) => {
-        const src = nodes.find((n) => n.id === nodeId)
-        if (!src) return nodes
-        const copy: CanvasNodeState = {
-          ...src,
-          id: `${src.kind}-${Math.random().toString(36).slice(2, 10)}`,
-          title: `${src.title} copy`,
-          position: { x: src.position.x + 24, y: src.position.y + 24 }
-        }
-        return [...nodes, copy]
-      })
-    }))
+    ownWrite(get, projectId, () =>
+      set((s) => ({
+        projects: mapProjectNodes(s.projects, projectId, (nodes) => {
+          const src = nodes.find((n) => n.id === nodeId)
+          if (!src) return nodes
+          const copy: CanvasNodeState = {
+            ...src,
+            id: `${src.kind}-${Math.random().toString(36).slice(2, 10)}`,
+            title: `${src.title} copy`,
+            position: { x: src.position.x + 24, y: src.position.y + 24 }
+          }
+          return [...nodes, copy]
+        })
+      }))
+    )
   },
 
   moveNodeToGroup(projectId, nodeId, groupId) {
-    set((s) => ({
-      projects: mapProjectNodes(s.projects, projectId, (nodes) => {
-        const node = nodes.find((n) => n.id === nodeId)
-        if (!node) return nodes
-        if ((node.parentId ?? null) === groupId) return nodes
-        // A frame may be moved into another frame, but never into itself or its own subtree.
-        if (groupId === nodeId || (groupId && stateIsDescendant(nodes, groupId, nodeId))) {
-          return nodes
-        }
-        const next = repositionState(node, groupId, nodes)
-        if (next === node) return nodes // target group missing / not a group
-        return nodes.map((n) => (n.id === nodeId ? next : n))
-      })
-    }))
+    ownWrite(get, projectId, () =>
+      set((s) => ({
+        projects: mapProjectNodes(s.projects, projectId, (nodes) => {
+          const node = nodes.find((n) => n.id === nodeId)
+          if (!node) return nodes
+          if ((node.parentId ?? null) === groupId) return nodes
+          // A frame may be moved into another frame, but never into itself or its own subtree.
+          if (groupId === nodeId || (groupId && stateIsDescendant(nodes, groupId, nodeId))) {
+            return nodes
+          }
+          const next = repositionState(node, groupId, nodes)
+          if (next === node) return nodes // target group missing / not a group
+          return nodes.map((n) => (n.id === nodeId ? next : n))
+        })
+      }))
+    )
   },
 
   reorderNode(projectId, draggedId, beforeId) {
-    set((s) => ({
-      projects: mapProjectNodes(s.projects, projectId, (nodes) => {
-        if (draggedId === beforeId) return nodes
-        const dragged = nodes.find((n) => n.id === draggedId)
-        const before = nodes.find((n) => n.id === beforeId)
-        if (!dragged || !before || dragged.kind === 'group') return nodes
-        const targetParent = before.parentId ?? null
-        const moved =
-          (dragged.parentId ?? null) === targetParent
-            ? dragged
-            : repositionState(dragged, targetParent, nodes)
-        const without = nodes.filter((n) => n.id !== draggedId)
-        const idx = without.findIndex((n) => n.id === beforeId)
-        return [...without.slice(0, idx), moved, ...without.slice(idx)]
-      })
-    }))
+    ownWrite(get, projectId, () =>
+      set((s) => ({
+        projects: mapProjectNodes(s.projects, projectId, (nodes) => {
+          if (draggedId === beforeId) return nodes
+          const dragged = nodes.find((n) => n.id === draggedId)
+          const before = nodes.find((n) => n.id === beforeId)
+          if (!dragged || !before || dragged.kind === 'group') return nodes
+          const targetParent = before.parentId ?? null
+          const moved =
+            (dragged.parentId ?? null) === targetParent
+              ? dragged
+              : repositionState(dragged, targetParent, nodes)
+          const without = nodes.filter((n) => n.id !== draggedId)
+          const idx = without.findIndex((n) => n.id === beforeId)
+          return [...without.slice(0, idx), moved, ...without.slice(idx)]
+        })
+      }))
+    )
   },
 
   reorderGroup(projectId, draggedId, parentId, beforeId) {
-    set((s) => ({
-      projects: mapProjectNodes(s.projects, projectId, (nodes) => {
-        const dragged = nodes.find((node) => node.id === draggedId)
-        const before = beforeId ? nodes.find((node) => node.id === beforeId) : undefined
-        if (!dragged || dragged.kind !== 'group' || (beforeId && before?.kind !== 'group')) {
-          return nodes
-        }
-        return reorderGroupWithinParent(nodes, draggedId, parentId, beforeId)
-      })
-    }))
+    ownWrite(get, projectId, () =>
+      set((s) => ({
+        projects: mapProjectNodes(s.projects, projectId, (nodes) => {
+          const dragged = nodes.find((node) => node.id === draggedId)
+          const before = beforeId ? nodes.find((node) => node.id === beforeId) : undefined
+          if (!dragged || dragged.kind !== 'group' || (beforeId && before?.kind !== 'group')) {
+            return nodes
+          }
+          return reorderGroupWithinParent(nodes, draggedId, parentId, beforeId)
+        })
+      }))
+    )
   },
 
   reorderProject(draggedId, beforeId) {
@@ -860,6 +1084,13 @@ export const useProjects = create<ProjectsState>((set, get) => ({
     })
   },
 
+  unhideProject(id) {
+    set((s) => {
+      if (!s.projects.some((p) => p.id === id && p.closed)) return s
+      return { projects: s.projects.map((p) => (p.id === id ? { ...p, closed: false } : p)) }
+    })
+  },
+
   registerProject({ resolvedCwd, name, color, probed }) {
     // The same exact-match rule as `openFolderProject` (a folder maps to one project), with the
     // trailing slash stripped so `/a/b/` and `/a/b` cannot mint two tabs for one directory.
@@ -870,9 +1101,7 @@ export const useProjects = create<ProjectsState>((set, get) => ({
       if (existing.closed) {
         // Un-close WITHOUT activation — reopenProject also activates, which is the exact
         // mutation the register tests are checked against (spec P6).
-        set((s) => ({
-          projects: s.projects.map((p) => (p.id === existing.id ? { ...p, closed: false } : p))
-        }))
+        get().unhideProject(existing.id)
       }
       return {
         project: get().projects.find((p) => p.id === existing.id) ?? existing,
@@ -894,9 +1123,10 @@ export const useProjects = create<ProjectsState>((set, get) => ({
       set((s) => ({ projects: [...s.projects, adopted] }))
       return { project: adopted, created: false, adopted: true }
     }
-    const fallbackName = folderName(cwd) || 'Project'
+    const fallbackName = clampProjectName(folderName(cwd)) || 'Project'
+    // `name` is the agent's `--name`, free text like a rename: same cap (issue #940).
     const project = {
-      ...createProject(get().projects.length, name ?? fallbackName, cwd),
+      ...createProject(get().projects.length, clampProjectName(name ?? '') || fallbackName, cwd),
       ...(color ? { color } : {})
     }
     set((s) => ({ projects: [...s.projects, project] }))
@@ -911,3 +1141,8 @@ export const useProjects = create<ProjectsState>((set, get) => ({
     return { version: 2, activeProjectId, projects: projects.filter((p) => !p.remote) }
   }
 }))
+
+// Codex launch caps must know a relay tab when they see one: its sessions run on ANOTHER machine's
+// codex, which this machine's probe never saw (see `codexApprovalCaps`). Registered here rather
+// than imported there, because this store imports workspace.ts, which imports codexCli.ts.
+registerCodexRelayProjectCheck((id) => useProjects.getState().getProject(id)?.remote === true)

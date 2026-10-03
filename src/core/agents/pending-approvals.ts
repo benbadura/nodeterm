@@ -13,6 +13,7 @@ import os from 'os'
 import path from 'path'
 import { writeFileAtomic } from '../fs-atomic'
 import { normalizeClaude, type NormalizedAgentEvent } from '../../shared/agents/normalize'
+import { isBoundedAnswerContent, PENDING_REQUEST_MAX_BYTES, type HeldPermissionIo } from './permission-decision'
 
 /** pendingId shape the script generates (`<node>-<ms>-<pid>`) and the ONLY thing we interpolate
  *  into a filename. Validated everywhere a pendingId becomes a path so a forged value can't
@@ -34,27 +35,64 @@ export function pendingDir(homeDir: string = os.homedir()): string {
 }
 
 /**
- * Write the one-line answer file for a held permission hook, atomically (tmp + rename, mode 0600).
- * Resolves true on success, false on an invalid pendingId or any fs error (fail-open — the hook
- * simply times out to the interactive prompt). The `decision` is written verbatim as the hook
- * script compares it against the literals `allow` / `deny`.
+ * Write the answer file for a held permission hook, atomically (tmp + rename, mode 0600).
+ * Resolves true on success, false on an invalid pendingId, content the hook script would not
+ * print (`isBoundedAnswerContent` — the legacy words, or a core-built JSON decision), or any fs
+ * error (fail-open — the hook simply times out to the interactive prompt).
  */
 export async function writePendingAnswerLocal(
   pendingId: string,
-  decision: 'allow' | 'deny',
+  content: string,
   homeDir: string = os.homedir()
 ): Promise<boolean> {
   if (!isValidPendingId(pendingId)) return false
-  if (decision !== 'allow' && decision !== 'deny') return false
+  if (typeof content !== 'string' || !isBoundedAnswerContent(content)) return false
   const dir = pendingDir(homeDir)
   const file = path.join(dir, `${pendingId}.answer`)
   try {
     await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 })
     // writeFileAtomic: unique tmp + retrying rename (core/fs-atomic.ts); removes its temp on failure.
-    await writeFileAtomic(file, decision, { mode: 0o600 })
+    await writeFileAtomic(file, content, { mode: 0o600 })
     return true
   } catch {
     return false
+  }
+}
+
+/**
+ * Read the request file the held hook wrote (`<pendingId>.json` — the raw PermissionRequest
+ * payload). This is the SOURCE OF TRUTH a structured answer is validated against. Null when the
+ * file is missing (the hold ended: answered, timed out, or swept), over-long, or unreadable.
+ */
+export async function readPendingRequestLocal(
+  pendingId: string,
+  homeDir: string = os.homedir()
+): Promise<string | null> {
+  if (!isValidPendingId(pendingId)) return null
+  const file = path.join(pendingDir(homeDir), `${pendingId}.json`)
+  // ONE file descriptor for the check and the read (no stat-then-read on a path, which a swap in
+  // between could defeat). O_NOFOLLOW refuses a symlink planted at the name; where the platform has
+  // no such flag (Windows) it is 0 and the isFile() check on the opened handle still applies.
+  let fh: fs.promises.FileHandle | undefined
+  try {
+    fh = await fs.promises.open(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0))
+    const st = await fh.stat()
+    if (!st.isFile() || st.size > PENDING_REQUEST_MAX_BYTES) return null
+    // Read at most one byte past the cap from the SAME handle: a file that grew after the fstat is
+    // still refused rather than slurped.
+    const buf = Buffer.alloc(PENDING_REQUEST_MAX_BYTES + 1)
+    let total = 0
+    while (total < buf.length) {
+      const { bytesRead } = await fh.read(buf, total, buf.length - total, total)
+      if (bytesRead === 0) break
+      total += bytesRead
+    }
+    if (total > PENDING_REQUEST_MAX_BYTES) return null
+    return buf.subarray(0, total).toString('utf8')
+  } catch {
+    return null
+  } finally {
+    await fh?.close().catch(() => {})
   }
 }
 
@@ -132,4 +170,12 @@ export function startPendingSweep(
   }, intervalMs)
   timer.unref?.()
   return { stop: () => clearInterval(timer) }
+}
+
+/** The local-fs I/O pair for `answerHeldPermission` (the host the agent runs on IS this machine). */
+export function localHeldPermissionIo(pendingId: string, homeDir: string = os.homedir()): HeldPermissionIo {
+  return {
+    readPending: () => readPendingRequestLocal(pendingId, homeDir),
+    write: (content) => writePendingAnswerLocal(pendingId, content, homeDir)
+  }
 }

@@ -5,6 +5,7 @@ import path from 'path'
 import { execFileSync } from 'child_process'
 import {
   directExecutableInvocation,
+  envPathKey,
   executableCandidates,
   findInPathString,
   unquotePathEntry
@@ -254,5 +255,17 @@ describe('findInPathString (real filesystem)', () => {
       writeBin('nt-full.exe')
       expectPath(findInPathString('nt-full.exe', dir), path.join(dir, 'nt-full.exe'))
     })
+  })
+})
+
+describe('envPathKey', () => {
+  it('uses the key the environment already has', () => {
+    expect(envPathKey({ PATH: '/bin' })).toBe('PATH')
+    expect(envPathKey({ Path: 'C:\\Windows' })).toBe('Path')
+    expect(envPathKey({ path: 'x' })).toBe('path')
+  })
+  it('prefers an exact PATH and defaults to PATH', () => {
+    expect(envPathKey({ Path: 'a', PATH: 'b' })).toBe('PATH')
+    expect(envPathKey({})).toBe('PATH')
   })
 })

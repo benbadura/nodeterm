@@ -6,8 +6,9 @@ import { useEffect, useState } from 'react'
  * overlay does it, so notes keep it out of the boot bundle. Rendered with `breaks`: sticky text
  * predates markdown, and a plain list of lines must not collapse into one paragraph.
  *
- * Anchor clicks are safe to leave alone: the main process routes every `will-navigate` /
- * window-open through `isSafeExternalUrl` → `shell.openExternal`.
+ * Anchor clicks are handled by the delegated rendered-markdown link guard
+ * (lib/markdownLinks.ts) — `sticky-node__md`, the class every caller passes, is in its container
+ * list. Never navigate the app window from here.
  */
 export function NoteMarkdown({ text, className }: { text: string; className?: string }) {
   const [html, setHtml] = useState<string | null>(null)

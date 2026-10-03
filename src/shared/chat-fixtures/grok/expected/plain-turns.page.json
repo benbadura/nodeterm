@@ -1,0 +1,147 @@
+{
+  "request": {
+    "maxBytes": 262144
+  },
+  "parse": {
+    "messages": [
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "[system] You are a synthetic coding agent. Follow the rules.\n\n# Rules\n- be brief"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Explain the **plan**:\n\n1. read\n2. write"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "## Plan\n\n- Read `a.ts`\n- Then write\n\n```ts\nconst x = 1\n```\n\n> quoted"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "first half\nsecond half"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "a string-content prompt"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Türkçe karakterler: ğüşiöç — 中文 — emoji 🧪"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Tamam ✓ 🧪"
+          }
+        ]
+      }
+    ],
+    "skipped": 0,
+    "model": "grok-4.6-build",
+    "effort": "xhigh"
+  },
+  "page": {
+    "messages": [
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "[system] You are a synthetic coding agent. Follow the rules.\n\n# Rules\n- be brief"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Explain the **plan**:\n\n1. read\n2. write"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "## Plan\n\n- Read `a.ts`\n- Then write\n\n```ts\nconst x = 1\n```\n\n> quoted"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "first half\nsecond half"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "a string-content prompt"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Türkçe karakterler: ğüşiöç — 中文 — emoji 🧪"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Tamam ✓ 🧪"
+          }
+        ]
+      }
+    ],
+    "found": true,
+    "olderCursor": null,
+    "unmatchedResults": [],
+    "model": "grok-4.6-build",
+    "effort": "xhigh"
+  }
+}
