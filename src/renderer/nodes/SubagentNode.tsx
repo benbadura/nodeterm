@@ -11,6 +11,15 @@ function fmtDur(ms: number): string {
   return `${Math.floor(s / 60)}m ${s % 60}s`
 }
 
+/** Display names for agent types the CLI spells for machines. A Workflow tool run's agents all
+ *  carry `workflow-subagent` (Claude Code 2.1.289); the card says what they are. */
+const TYPE_DISPLAY: Record<string, string> = { 'workflow-subagent': 'workflow' }
+
+function subagentTypeLabel(type: unknown): string {
+  if (typeof type !== 'string' || !type) return 'subagent'
+  return Object.hasOwn(TYPE_DISPLAY, type) ? TYPE_DISPLAY[type] : type
+}
+
 function fmtTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
 }
@@ -75,7 +84,7 @@ export function SubagentNode({ id, data, selected }: NodeProps<CanvasNode>) {
           {expanded ? <IconChevronDown /> : <IconChevronRight />}
         </button>
         <span className="subagent-node__dot" />
-        <span className="subagent-node__type">{(data.subagentType as string) || 'subagent'}</span>
+        <span className="subagent-node__type">{subagentTypeLabel(data.subagentType)}</span>
         <span className="subagent-node__state">{working ? 'working' : 'done'}</span>
       </div>
       {data.title && !expanded && <div className="subagent-node__task">{data.title as string}</div>}

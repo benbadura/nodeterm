@@ -1,0 +1,255 @@
+{
+ "_provenance": "captured live from Claude Code 2.1.289 (darwin-arm64) on 2026-10-06, logged-in account, print mode (`claude -p --model haiku`), capture hooks via a project .claude/settings.local.json in a throwaway dir. Prompt began with `ultracode:` and asked for a Workflow of two parallel agents (labels read-a, read-b). Paths and the session id redacted; agent ids, tool_use ids, KEYS AND SHAPES UNCHANGED; the Workflow script trimmed.",
+ "claudeVersion": "2.1.289",
+ "events": [
+  {
+   "session_id": "00000000-0000-4000-8000-0000000000a1",
+   "transcript_path": "/home/user/.claude/projects/-work-project/00000000-0000-4000-8000-0000000000a1.jsonl",
+   "cwd": "/work/project",
+   "hook_event_name": "SessionStart",
+   "source": "startup"
+  },
+  {
+   "session_id": "00000000-0000-4000-8000-0000000000a1",
+   "transcript_path": "/home/user/.claude/projects/-work-project/00000000-0000-4000-8000-0000000000a1.jsonl",
+   "cwd": "/work/project",
+   "prompt_id": "29f40918-9868-4acf-9a45-0db7b7e36253",
+   "permission_mode": "bypassPermissions",
+   "hook_event_name": "UserPromptSubmit",
+   "prompt": "ultracode: run a Workflow with exactly two agents in parallel: one reads a.txt and returns its contents, the other reads b.txt and returns its contents. Use the Workflow tool, then report both results."
+  },
+  {
+   "session_id": "00000000-0000-4000-8000-0000000000a1",
+   "transcript_path": "/home/user/.claude/projects/-work-project/00000000-0000-4000-8000-0000000000a1.jsonl",
+   "cwd": "/work/project",
+   "prompt_id": "29f40918-9868-4acf-9a45-0db7b7e36253",
+   "permission_mode": "bypassPermissions",
+   "hook_event_name": "PreToolUse",
+   "tool_name": "Workflow",
+   "tool_input": {
+    "script": "[workflow script trimmed: parallel(agent(label read-a), agent(label read-b))]"
+   },
+   "tool_use_id": "toolu_01VHT9DVWkE1iqZ6vY9gKkm9"
+  },
+  {
+   "session_id": "00000000-0000-4000-8000-0000000000a1",
+   "transcript_path": "/home/user/.claude/projects/-work-project/00000000-0000-4000-8000-0000000000a1.jsonl",
+   "cwd": "/work/project",
+   "prompt_id": "29f40918-9868-4acf-9a45-0db7b7e36253",
+   "permission_mode": "bypassPermissions",
+   "hook_event_name": "PostToolUse",
+   "tool_name": "Workflow",
+   "tool_input": {
+    "script": "[workflow script trimmed: parallel(agent(label read-a), agent(label read-b))]"
+   },
+   "tool_response": {
+    "status": "async_launched",
+    "taskId": "wjf20hftg",
+    "taskType": "local_workflow",
+    "workflowName": "read-two-files",
+    "runId": "wf_5b923257-98d",
+    "summary": "Read a.txt and b.txt in parallel using two agents",
+    "transcriptDir": "/home/user/.claude/projects/-work-project/00000000-0000-4000-8000-0000000000a1/subagents/workflows/wf_5b923257-98d",
+    "scriptPath": "/home/user/.claude/projects/-work-project/00000000-0000-4000-8000-0000000000a1/workflows/scripts/read-two-files-wf_5b923257-98d.js"
+   },
+   "tool_use_id": "toolu_01VHT9DVWkE1iqZ6vY9gKkm9",
+   "duration_ms": 2
+  },
+  {
+   "session_id": "00000000-0000-4000-8000-0000000000a1",
+   "transcript_path": "/home/user/.claude/projects/-work-project/00000000-0000-4000-8000-0000000000a1.jsonl",
+   "cwd": "/work/project",
+   "prompt_id": "29f40918-9868-4acf-9a45-0db7b7e36253",
+   "agent_id": "a695a36b6f4558935",
+   "agent_type": "workflow-subagent",
+   "hook_event_name": "SubagentStart"
+  },
+  {
+   "session_id": "00000000-0000-4000-8000-0000000000a1",
+   "transcript_path": "/home/user/.claude/projects/-work-project/00000000-0000-4000-8000-0000000000a1.jsonl",
+   "cwd": "/work/project",
+   "prompt_id": "29f40918-9868-4acf-9a45-0db7b7e36253",
+   "agent_id": "ad3d25c0fbe8bbcea",
+   "agent_type": "workflow-subagent",
+   "hook_event_name": "SubagentStart"
+  },
+  {
+   "session_id": "00000000-0000-4000-8000-0000000000a1",
+   "transcript_path": "/home/user/.claude/projects/-work-project/00000000-0000-4000-8000-0000000000a1.jsonl",
+   "cwd": "/work/project",
+   "prompt_id": "29f40918-9868-4acf-9a45-0db7b7e36253",
+   "permission_mode": "bypassPermissions",
+   "hook_event_name": "Stop",
+   "stop_hook_active": false,
+   "last_assistant_message": "Workflow launched! Two agents are running in parallel \u2014 one reading a.txt, the other reading b.txt. I'll report the results when they complete.",
+   "background_tasks": [
+    {
+     "id": "wjf20hftg",
+     "type": "workflow",
+     "status": "running",
+     "description": "Read a.txt and b.txt in parallel using two agents",
+     "name": "read-two-files"
+    }
+   ],
+   "session_crons": []
+  },
+  {
+   "session_id": "00000000-0000-4000-8000-0000000000a1",
+   "transcript_path": "/home/user/.claude/projects/-work-project/00000000-0000-4000-8000-0000000000a1.jsonl",
+   "cwd": "/work/project",
+   "prompt_id": "29f40918-9868-4acf-9a45-0db7b7e36253",
+   "permission_mode": "bypassPermissions",
+   "agent_id": "a695a36b6f4558935",
+   "agent_type": "workflow-subagent",
+   "hook_event_name": "PreToolUse",
+   "tool_name": "Read",
+   "tool_input": {
+    "file_path": "/work/project/a.txt"
+   },
+   "tool_use_id": "toolu_01Hyqof7B8YDKH7kun7hLtHH"
+  },
+  {
+   "session_id": "00000000-0000-4000-8000-0000000000a1",
+   "transcript_path": "/home/user/.claude/projects/-work-project/00000000-0000-4000-8000-0000000000a1.jsonl",
+   "cwd": "/work/project",
+   "prompt_id": "29f40918-9868-4acf-9a45-0db7b7e36253",
+   "permission_mode": "bypassPermissions",
+   "agent_id": "a695a36b6f4558935",
+   "agent_type": "workflow-subagent",
+   "hook_event_name": "PostToolUse",
+   "tool_name": "Read",
+   "tool_input": {
+    "file_path": "/work/project/a.txt"
+   },
+   "tool_response": {
+    "type": "text",
+    "file": {
+     "filePath": "/work/project/a.txt",
+     "content": "hello a\n",
+     "numLines": 2,
+     "startLine": 1,
+     "totalLines": 2
+    }
+   },
+   "tool_use_id": "toolu_01Hyqof7B8YDKH7kun7hLtHH",
+   "duration_ms": 2
+  },
+  {
+   "session_id": "00000000-0000-4000-8000-0000000000a1",
+   "transcript_path": "/home/user/.claude/projects/-work-project/00000000-0000-4000-8000-0000000000a1.jsonl",
+   "cwd": "/work/project",
+   "prompt_id": "29f40918-9868-4acf-9a45-0db7b7e36253",
+   "permission_mode": "bypassPermissions",
+   "agent_id": "ad3d25c0fbe8bbcea",
+   "agent_type": "workflow-subagent",
+   "hook_event_name": "PreToolUse",
+   "tool_name": "Read",
+   "tool_input": {
+    "file_path": "/work/project/b.txt"
+   },
+   "tool_use_id": "toolu_01JVtpSkHKRzMNbeRie9dPbu"
+  },
+  {
+   "session_id": "00000000-0000-4000-8000-0000000000a1",
+   "transcript_path": "/home/user/.claude/projects/-work-project/00000000-0000-4000-8000-0000000000a1.jsonl",
+   "cwd": "/work/project",
+   "prompt_id": "29f40918-9868-4acf-9a45-0db7b7e36253",
+   "permission_mode": "bypassPermissions",
+   "agent_id": "ad3d25c0fbe8bbcea",
+   "agent_type": "workflow-subagent",
+   "hook_event_name": "PostToolUse",
+   "tool_name": "Read",
+   "tool_input": {
+    "file_path": "/work/project/b.txt"
+   },
+   "tool_response": {
+    "type": "text",
+    "file": {
+     "filePath": "/work/project/b.txt",
+     "content": "hello b\n",
+     "numLines": 2,
+     "startLine": 1,
+     "totalLines": 2
+    }
+   },
+   "tool_use_id": "toolu_01JVtpSkHKRzMNbeRie9dPbu",
+   "duration_ms": 2
+  },
+  {
+   "session_id": "00000000-0000-4000-8000-0000000000a1",
+   "transcript_path": "/home/user/.claude/projects/-work-project/00000000-0000-4000-8000-0000000000a1.jsonl",
+   "cwd": "/work/project",
+   "prompt_id": "29f40918-9868-4acf-9a45-0db7b7e36253",
+   "permission_mode": "bypassPermissions",
+   "agent_id": "ad3d25c0fbe8bbcea",
+   "agent_type": "workflow-subagent",
+   "hook_event_name": "SubagentStop",
+   "stop_hook_active": false,
+   "agent_transcript_path": "/home/user/.claude/projects/-work-project/00000000-0000-4000-8000-0000000000a1/subagents/workflows/wf_5b923257-98d/agent-ad3d25c0fbe8bbcea.jsonl",
+   "last_assistant_message": "hello b",
+   "background_tasks": [
+    {
+     "id": "wjf20hftg",
+     "type": "workflow",
+     "status": "running",
+     "description": "Read a.txt and b.txt in parallel using two agents",
+     "name": "read-two-files"
+    }
+   ],
+   "session_crons": []
+  },
+  {
+   "session_id": "00000000-0000-4000-8000-0000000000a1",
+   "transcript_path": "/home/user/.claude/projects/-work-project/00000000-0000-4000-8000-0000000000a1.jsonl",
+   "cwd": "/work/project",
+   "prompt_id": "29f40918-9868-4acf-9a45-0db7b7e36253",
+   "permission_mode": "bypassPermissions",
+   "agent_id": "a695a36b6f4558935",
+   "agent_type": "workflow-subagent",
+   "hook_event_name": "SubagentStop",
+   "stop_hook_active": false,
+   "agent_transcript_path": "/home/user/.claude/projects/-work-project/00000000-0000-4000-8000-0000000000a1/subagents/workflows/wf_5b923257-98d/agent-a695a36b6f4558935.jsonl",
+   "last_assistant_message": "hello a",
+   "background_tasks": [
+    {
+     "id": "wjf20hftg",
+     "type": "workflow",
+     "status": "running",
+     "description": "Read a.txt and b.txt in parallel using two agents",
+     "name": "read-two-files"
+    }
+   ],
+   "session_crons": []
+  },
+  {
+   "session_id": "00000000-0000-4000-8000-0000000000a1",
+   "transcript_path": "/home/user/.claude/projects/-work-project/00000000-0000-4000-8000-0000000000a1.jsonl",
+   "cwd": "/work/project",
+   "prompt_id": "c9eb9c47-523a-453f-99f8-df89aed0a2f3",
+   "permission_mode": "bypassPermissions",
+   "hook_event_name": "UserPromptSubmit",
+   "prompt": "<task-notification>\n<task-id>wjf20hftg</task-id>\n<tool-use-id>toolu_01VHT9DVWkE1iqZ6vY9gKkm9</tool-use-id>\n<output-file>/tmp/claude-1000/-work-project/00000000-0000-4000-8000-0000000000a1/tasks/wjf20hftg.output</output-file>\n<status>completed</status>\n<summary>Dynamic workflow \"Read a.txt and b.txt in parallel using two agents\" completed</summary>\n<result>{\"a_txt\":\"hello a\",\"b_txt\":\"hello b\"}</result>\n<diagnostics>Per-agent results: /home/user/.claude/projects/-work-project/00000000-0000-4000-8000-0000000000a1/subagents/workflows/wf_5b923257-98d/journal.jsonl \u2014 one {\"type\":\"result\",...} line per completed agent with its full return value.\nIf the result above is empty or unexpected, Read this file BEFORE diagnosing \u2014 do not assume agents returned non-empty results.\nTo re-run with edited post-processing: Workflow({scriptPath: '/home/user/.claude/projects/-work-project/00000000-0000-4000-8000-0000000000a1/workflows/scripts/read-two-files-wf_5b923257-98d.js', resumeFromRunId: 'wf_5b923257-98d'}) \u2014 agents whose (prompt, opts) are unchanged replay from cache.</diagnostics>\n<usage><agent_count>2</agent_count><agents_done>2</agents_done><agents_error>0</agents_error><agents_skipped>0</agents_skipped><agents_empty_result>0</agents_empty_result><subagent_tokens>23030</subagent_tokens><tool_uses>2</tool_uses><duration_ms>5729</duration_ms></usage>\n</task-notification>"
+  },
+  {
+   "session_id": "00000000-0000-4000-8000-0000000000a1",
+   "transcript_path": "/home/user/.claude/projects/-work-project/00000000-0000-4000-8000-0000000000a1.jsonl",
+   "cwd": "/work/project",
+   "prompt_id": "c9eb9c47-523a-453f-99f8-df89aed0a2f3",
+   "permission_mode": "bypassPermissions",
+   "hook_event_name": "Stop",
+   "stop_hook_active": false,
+   "last_assistant_message": "Perfect! The workflow completed with both agents running in parallel:\n\n**Results:**\n- **a.txt:** `hello a`\n- **b.txt:** `hello b`\n\nBoth agents successfully read their files in parallel in 5.7 seconds, using 23,030 tokens total.",
+   "background_tasks": [],
+   "session_crons": []
+  }
+ ],
+ "childMetaJson_a695a36b6f4558935": {
+  "agentType": "workflow-subagent",
+  "description": "read-a",
+  "workflowPhase": "Read files",
+  "spawnDepth": 1,
+  "requestShape": "foreground",
+  "requestNonInteractive": true
+ },
+ "childTranscriptLayout": "<parent transcript without .jsonl>/subagents/workflows/<runId>/agent-<agent_id>.jsonl (+ agent-<id>.meta.json, journal.jsonl). NOT <parent>/subagents/agent-<id>.jsonl."
+}

@@ -1,7 +1,9 @@
 // Claude Code's native subagent hooks (`SubagentStart` / `SubagentStop`) — the pure, measured facts
 // the normalizer, the lifecycle (core/claude-subagent-lifecycle.ts) and both shells' transcript
-// tails share. MEASURED on Claude Code 2.1.284 (fixture: __fixtures__/claude/subagent-hook-payloads.json);
-// the full write-up is CLAUDE.md → Agent support → Subagent visualization.
+// tails share. MEASURED on Claude Code 2.1.284 (fixture: __fixtures__/claude/subagent-hook-payloads.json)
+// and, for the agents of the `Workflow` tool, on 2.1.289 (fixture:
+// __fixtures__/claude/workflow-hook-payloads.json); the full write-up is CLAUDE.md → Agent support →
+// Subagent visualization.
 
 /**
  * A native subagent id as the CLI prints it (measured: `a` + 16 hex, e.g. `a4809888b14b29608`).
@@ -13,6 +15,21 @@ export const CLAUDE_AGENT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 
 export function isClaudeAgentId(v: unknown): v is string {
   return typeof v === 'string' && CLAUDE_AGENT_ID_RE.test(v)
+}
+
+/**
+ * The `agent_type` of every agent a `Workflow` tool run spawns (MEASURED, 2.1.289). Such an agent
+ * fires its own native `SubagentStart` / `SubagentStop` like any subagent, but no Agent/Task tool
+ * call precedes it, and the parent's `Stop` inventory lists the WORKFLOW (`type: 'workflow'`), never
+ * the agents by their own ids — so the lifecycle must not read "not listed" as "over" for these.
+ */
+export const CLAUDE_WORKFLOW_AGENT_TYPE = 'workflow-subagent'
+
+/** `<parent transcript without .jsonl><sep>subagents`, or `undefined` for a non-transcript path. */
+function subagentsDir(parentTranscript: string): { dir: string; sep: string } | undefined {
+  if (!parentTranscript.endsWith('.jsonl')) return undefined
+  const sep = parentTranscript.includes('/') ? '/' : '\\'
+  return { dir: `${parentTranscript.slice(0, -'.jsonl'.length)}${sep}subagents`, sep }
 }
 
 /**
@@ -31,9 +48,83 @@ export function isClaudeAgentId(v: unknown): v is string {
  * remotely, possibly `\` on a Windows desktop), and only its `.jsonl` suffix is replaced.
  */
 export function claudeSubagentTranscriptPath(parentTranscript: string, agentId: string): string | undefined {
-  if (!isClaudeAgentId(agentId) || !parentTranscript.endsWith('.jsonl')) return undefined
+  const d = isClaudeAgentId(agentId) ? subagentsDir(parentTranscript) : undefined
+  return d ? `${d.dir}${d.sep}agent-${agentId}.jsonl` : undefined
+}
+
+/**
+ * Where a `Workflow` run keeps its agents' transcripts (MEASURED, 2.1.289):
+ *
+ *   <parent transcript without .jsonl>/subagents/workflows/<runId>/agent-<agent_id>.jsonl
+ *
+ * beside `agent-<agent_id>.meta.json` and the run's `journal.jsonl`. `SubagentStart` names neither
+ * the run nor the file (the run id is in the Workflow tool's async ack, which a hook-driven tail
+ * cannot pair with a given agent), so a tail RESOLVES the run directory by looking for this exact
+ * agent id under it (the local tail through `claudeWorkflowAgentTranscriptPath`, the SSH locator
+ * with a glob over the same layout). Separator-agnostic like
+ * `claudeSubagentTranscriptPath`.
+ */
+export function claudeWorkflowsDir(parentTranscript: string): string | undefined {
+  const d = subagentsDir(parentTranscript)
+  return d ? `${d.dir}${d.sep}workflows` : undefined
+}
+
+/** One run's transcript for one agent: `<workflows dir>/<runId>/agent-<agentId>.jsonl`. Both ids
+ *  must be plain tokens (`runId` is a directory name read off disk, e.g. `wf_5b923257-98d`). */
+export function claudeWorkflowAgentTranscriptPath(
+  parentTranscript: string,
+  runId: string,
+  agentId: string
+): string | undefined {
+  if (!isClaudeAgentId(agentId) || !isClaudeAgentId(runId)) return undefined
+  const dir = claudeWorkflowsDir(parentTranscript)
+  if (!dir) return undefined
   const sep = parentTranscript.includes('/') ? '/' : '\\'
-  return `${parentTranscript.slice(0, -'.jsonl'.length)}${sep}subagents${sep}agent-${agentId}.jsonl`
+  return `${dir}${sep}${runId}${sep}agent-${agentId}.jsonl`
+}
+
+/** The `.meta.json` sibling of a subagent transcript (`agent-<id>.jsonl` → `agent-<id>.meta.json`). */
+export function claudeSubagentMetaPath(transcript: string): string | undefined {
+  return transcript.endsWith('.jsonl') ? `${transcript.slice(0, -'.jsonl'.length)}.meta.json` : undefined
+}
+
+/** Bound on a card label read off disk, in code points. */
+export const SUBAGENT_LABEL_MAX = 120
+
+/** Bytes of a `.meta.json` either shell reads (a real one is ~200 B). The local tail and the SSH
+ *  locator read the same prefix, so the two can never disagree about the same file. */
+export const SUBAGENT_META_READ_MAX = 4096
+
+/**
+ * A card label from untrusted text: one line, C0/C1 controls and every format control (`\p{Cf}`:
+ * bidi marks and overrides incl. U+061C, zero-width characters, soft hyphen, interlinear
+ * annotation, the tag block) removed — ZWJ alone kept, so an emoji sequence still reads as one —
+ * whitespace collapsed, capped at `SUBAGENT_LABEL_MAX` code points. `undefined` when nothing is
+ * left. The meta.json `description` is written by the CLI from whatever a Workflow SCRIPT passed as
+ * an agent label — model-authored text sitting in a file on disk.
+ */
+export function sanitizeSubagentLabel(v: unknown): string | undefined {
+  if (typeof v !== 'string') return undefined
+  const cleaned = v
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
+    .replace(/(?!\u200d)\p{Cf}/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!cleaned) return undefined
+  const cps = [...cleaned]
+  return cps.length > SUBAGENT_LABEL_MAX ? `${cps.slice(0, SUBAGENT_LABEL_MAX - 1).join('')}…` : cleaned
+}
+
+/** The label a subagent's `.meta.json` carries (`description`; for a Workflow agent the `agent()`
+ *  label the script gave it), sanitized — or `undefined` for anything that does not parse. */
+export function labelFromSubagentMeta(text: string): string | undefined {
+  try {
+    const meta = JSON.parse(text) as unknown
+    if (!meta || typeof meta !== 'object') return undefined
+    return sanitizeSubagentLabel((meta as { description?: unknown }).description)
+  } catch {
+    return undefined
+  }
 }
 
 /** A background-task status that says the task is OVER. A CLOSED set: any other value — including
@@ -50,9 +141,12 @@ const BACKGROUND_TASKS_MAX = 64
  * native-binary release up to 2.1.284 — the exact first version was not bisected, so this is
  * FEATURE-detected per payload, never version-gated).
  *
- * MEASURED: `background_tasks` lists every running BACKGROUND task of the session — async
- * subagents (nested ones included), background shells — as `{id, type, status, description, …}`;
- * a foreground subagent is never in it (a parent `Stop` cannot happen while one runs).
+ * MEASURED: `background_tasks` lists the session's running BACKGROUND tasks as
+ * `{id, type, status, description, …}` — async subagents by their own agent id (nested ones
+ * included, `type: 'subagent'`), background shells, and (2.1.289) a running `Workflow` tool run as
+ * ONE entry of `type: 'workflow'` keyed by the workflow's task id: the agents a workflow spawns are
+ * NOT listed by their own ids. A foreground subagent is never in it (a parent `Stop` cannot happen
+ * while one runs).
  */
 export function liveBackgroundTaskIds(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined
@@ -87,6 +181,25 @@ export function liveBackgroundSubagentIds(value: unknown): string[] | undefined 
     if (!t || typeof t !== 'object') continue
     const { id, type } = t as { id?: unknown; type?: unknown }
     if (type === 'subagent' && typeof id === 'string' && live.has(id) && !out.includes(id)) out.push(id)
+  }
+  return out
+}
+
+/**
+ * The subset of `liveBackgroundTaskIds` that are running `Workflow` tool runs (`type: 'workflow'`,
+ * MEASURED 2.1.289), or `undefined` with no inventory. Each id is the workflow's TASK id
+ * (`wjf20hftg`), never an agent's: while any is live, the lifecycle keeps the workflow agents' cards
+ * (which the inventory cannot list by id), and plain `--after` holds the station — a workflow ends,
+ * and its `<task-notification>` wakes the parent into another turn, exactly like an async subagent.
+ */
+export function liveBackgroundWorkflowIds(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const live = new Set(liveBackgroundTaskIds(value))
+  const out: string[] = []
+  for (const t of value) {
+    if (!t || typeof t !== 'object') continue
+    const { id, type } = t as { id?: unknown; type?: unknown }
+    if (type === 'workflow' && typeof id === 'string' && live.has(id) && !out.includes(id)) out.push(id)
   }
   return out
 }

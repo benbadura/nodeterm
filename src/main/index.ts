@@ -263,7 +263,18 @@ import { retainUntilDismissed } from './notifications'
 import { installManagedAgentHooks } from '../core/agents/hooks'
 import { createSubagentTail } from '../core/subagent-tail'
 import { ClaudeSubagentLifecycle } from '../core/claude-subagent-lifecycle'
-import { claudeSubagentTranscriptPath, isClaudeAgentId } from '../shared/agents/claude-subagents'
+import {
+  CLAUDE_WORKFLOW_AGENT_TYPE,
+  claudeSubagentTranscriptPath,
+  isClaudeAgentId,
+  labelFromSubagentMeta
+} from '../shared/agents/claude-subagents'
+import {
+  parseRemoteSubagentLocate,
+  remoteSubagentLocateCommand,
+  remoteSubagentMetaCommand,
+  type RemoteSubagentLocation
+} from '../core/remote-ssh/claude-subagent-locate'
 import { createContextTail, type TaskNotification } from '../core/context-tail'
 import { registerContextEnsureIpc } from '../core/context-ensure'
 import { grokContextParse, GROK_SIGNALS_FILE } from '../core/grok-signals'
@@ -2625,6 +2636,7 @@ app.whenReady().then(async () => {
     onRelease: (key) => {
       subagentTail.finish(key)
       if (remoteSubagentResolving.has(key)) remoteSubagentCancel.add(key)
+      remoteNativeGen.delete(key) // a native child's remote locate, if one is still running, stops
       remoteSubagentTail.untrack(key)
     }
   })
@@ -2831,6 +2843,69 @@ app.whenReady().then(async () => {
     }
     return undefined
   }
+  // The native counterpart (keyed by agent_id): which of the child's two layouts exists on the
+  // host — the flat `subagents/agent-<id>.jsonl`, or a Workflow run's `subagents/workflows/<run>/
+  // agent-<id>.jsonl` (2.1.289) — plus its `.meta.json` label, in ONE bounded round trip per
+  // attempt (core/remote-ssh/claude-subagent-locate.ts, which jails the answer). The tail is
+  // already reading the flat guess meanwhile, so nothing waits on this. Each attempt fails open on
+  // its own (a transient ssh failure costs that attempt, not the card) and the waits back off, so a
+  // workflow agent queued behind its run's concurrency is still found minutes later — for as long
+  // as `live()` holds (the card's generation: a release or a resume ends this run). `undefined`
+  // once the budget (~10 min) is spent.
+  const REMOTE_NATIVE_LOCATE_DELAYS_MS = [600, 1000, 2000, 4000, 8000, 15000]
+  const REMOTE_NATIVE_LOCATE_BUDGET_MS = 10 * 60_000
+  const resolveRemoteNativeSubagent = async (
+    rt: { conn: import('../shared/ssh').SshConnection; controlPath: string },
+    parentTranscript: string,
+    agentId: string,
+    live: () => boolean
+  ): Promise<RemoteSubagentLocation | undefined> => {
+    if (!sshProjectManager) return undefined
+    const cmd = remoteSubagentLocateCommand(parentTranscript, agentId)
+    if (!cmd) return undefined
+    const until = Date.now() + REMOTE_NATIVE_LOCATE_BUDGET_MS
+    for (let i = 0; Date.now() < until; i++) {
+      if (!live()) return undefined
+      try {
+        const { stdout } = await sshProjectManager.sshRun(childArgs(rt.conn, rt.controlPath, cmd))
+        const found = parseRemoteSubagentLocate(stdout, parentTranscript, agentId)
+        if (found) return found
+      } catch {
+        // a dropped master or a timeout: this attempt only
+      }
+      const d = REMOTE_NATIVE_LOCATE_DELAYS_MS
+      await new Promise((r) => setTimeout(r, d[Math.min(i, d.length - 1)]))
+    }
+    return undefined
+  }
+  // A located Workflow agent whose `.meta.json` had not landed when the locate ran: two more
+  // bounded reads of just that file (the reply's path, already jailed).
+  const readRemoteNativeMeta = async (
+    rt: { conn: import('../shared/ssh').SshConnection; controlPath: string },
+    found: RemoteSubagentLocation,
+    live: () => boolean
+  ): Promise<string | undefined> => {
+    const cmd = remoteSubagentMetaCommand(found)
+    if (!cmd || !sshProjectManager) return undefined
+    for (let i = 0; i < 2; i++) {
+      await new Promise((r) => setTimeout(r, 1000))
+      if (!live()) return undefined
+      try {
+        const { stdout } = await sshProjectManager.sshRun(childArgs(rt.conn, rt.controlPath, cmd))
+        const label = labelFromSubagentMeta(stdout)
+        if (label) return label
+      } catch {
+        // this attempt only
+      }
+    }
+    return undefined
+  }
+  // One generation per native child's remote locate (agent_id → generation). A release deletes
+  // it, a resumed start replaces it, and a locate acts only while its own generation is current —
+  // so a stop + resume inside one locate can never leave an old run tracking a tail after the card
+  // ended (two shared Sets could). Bounded: an entry lives only while a locate runs.
+  const remoteNativeGen = new Map<string, number>()
+  let remoteNativeSeq = 0
   // Read at most the last 5 MB of a transcript (mirrors transcript-reader's READ_CAP_BYTES) —
   // the remote read fetches the tail over ssh, then reuses the SAME pure parsers as local, so
   // the returned shape is byte-identical to the local reader.
@@ -3597,14 +3672,34 @@ app.whenReady().then(async () => {
     // Claude's native subagent hooks, BEFORE the child-event gate below: that gate ignores every
     // agent_id-tagged payload, and these carry the CHILD's agent_id with the PARENT's
     // transcript_path. All they drive here is the child's own transcript tail, started at
-    // SubagentStart at the path derived from the parent's (the start does not name the file; the
-    // stop does, too late) — on the node's host for a remote node, jailed like every other remote
-    // path, and with no meta.json polling over ssh. The stop needs nothing here: the lifecycle's
-    // onRelease ends the tail. Same branch as the Server Edition's, plus the remote leg.
-    const native = payload as { hook_event_name?: string; agent_id?: unknown; transcript_path?: string }
+    // SubagentStart and RESOLVED from the parent's path (the start does not name the file; the
+    // stop does, too late): the flat `subagents/agent-<id>.jsonl`, or — for an agent of the
+    // Workflow tool (2.1.289) — `subagents/workflows/<run>/agent-<id>.jsonl`, whose `.meta.json`
+    // also gives the card its label (labelNative → emitAgentStatus, the path every hook event
+    // takes; markWorkflow, the same way, once the file is found under `workflows/`). On the node's
+    // host for a remote node: the flat guess is tailed at once, and the host is asked (one bounded
+    // command per attempt, its answer jailed to this parent's `subagents/`) only for a
+    // workflow-typed agent or one whose flat file stays silent. The stop needs nothing
+    // here: the lifecycle's onRelease ends the tail. Same branch as the Server Edition's, plus the
+    // remote leg.
+    const native = payload as {
+      hook_event_name?: string
+      agent_id?: unknown
+      transcript_path?: string
+      session_id?: string
+    }
     if (native.hook_event_name === 'SubagentStart' || native.hook_event_name === 'SubagentStop') {
       if (native.hook_event_name === 'SubagentStart' && isClaudeAgentId(native.agent_id)) {
         const agentChild = native.agent_id
+        const sessionId = native.session_id
+        const onLabel = (label: string): void => {
+          if (!nodeId) return
+          for (const ev of claudeSubagents.labelNative(nodeId, sessionId, agentChild, label)) emitAgentStatus(ev)
+        }
+        const onWorkflow = (): void => {
+          if (!nodeId) return
+          for (const ev of claudeSubagents.markWorkflow(nodeId, sessionId, agentChild)) emitAgentStatus(ev)
+        }
         const rtn = nodeId ? ptyManager.sshRemoteForNode(nodeId) : undefined
         let tracked = false
         if (rtn) {
@@ -3612,16 +3707,46 @@ app.whenReady().then(async () => {
             native.transcript_path,
             sshProjectManager?.remoteHomeForControlPath(rtn.controlPath)
           )
-          const file = parent ? claudeSubagentTranscriptPath(parent, agentChild) : undefined
-          if (file) {
-            remoteSubagentTail.track(agentChild, { conn: rtn.conn, controlPath: rtn.controlPath, path: file })
+          const flat = parent ? claudeSubagentTranscriptPath(parent, agentChild) : undefined
+          if (parent && flat) {
             tracked = true
+            const at = (p: string) => ({ conn: rtn.conn, controlPath: rtn.controlPath, path: p })
+            // A resumed child continues on the file it was already reading — once that file is known
+            // to be the right one (located, or it produced data).
+            const resumed = remoteSubagentTail.resumeFor(agentChild)
+            const known = resumed && (resumed.path !== flat || resumed.offset > 0) ? resumed.path : undefined
+            // Tail the flat guess at once (an Agent/Task child's file, which costs no locate).
+            remoteSubagentTail.track(agentChild, at(known ?? flat))
+            if (!known) {
+              const gen = ++remoteNativeSeq
+              remoteNativeGen.set(agentChild, gen)
+              const live = (): boolean => remoteNativeGen.get(agentChild) === gen
+              const typed = (payload as { agent_type?: unknown }).agent_type === CLAUDE_WORKFLOW_AGENT_TYPE
+              void (async () => {
+                try {
+                  // Not typed as a workflow agent: ask the host only if the flat file stays silent
+                  // (a script's `agent({agentType})` runs a workflow agent under another type).
+                  if (!typed) {
+                    await new Promise((r) => setTimeout(r, 2000))
+                    if (!live() || (remoteSubagentTail.offsetFor(agentChild) ?? 0) > 0) return
+                  }
+                  const found = await resolveRemoteNativeSubagent(rtn, parent, agentChild, live)
+                  if (!found || !live()) return
+                  if (found.path !== flat) remoteSubagentTail.retarget(agentChild, at(found.path))
+                  if (found.workflow) onWorkflow()
+                  const label = found.label ?? (found.workflow ? await readRemoteNativeMeta(rtn, found, live) : undefined)
+                  if (label && live()) onLabel(label)
+                } finally {
+                  if (remoteNativeGen.get(agentChild) === gen) remoteNativeGen.delete(agentChild)
+                }
+              })()
+            }
           }
         } else {
           const parent = safeTranscriptPath(native.transcript_path)
-          const file = parent ? claudeSubagentTranscriptPath(parent, agentChild) : undefined
-          subagentTail.trackFile(agentChild, file)
-          tracked = !!file
+          const flat = parent ? claudeSubagentTranscriptPath(parent, agentChild) : undefined
+          subagentTail.trackNative(agentChild, parent, { onLabel, onWorkflow })
+          tracked = !!flat
         }
         if (nodeId && tracked) {
           const set = nodeSubagents.get(nodeId) ?? new Set<string>()
@@ -3702,6 +3827,7 @@ app.whenReady().then(async () => {
       if (p.hook_event_name === 'SessionEnd' && nodeId) {
         for (const toolUseId of nodeSubagents.get(nodeId) ?? []) {
           if (remoteSubagentResolving.has(toolUseId)) remoteSubagentCancel.add(toolUseId)
+          remoteNativeGen.delete(toolUseId)
           remoteSubagentTail.untrack(toolUseId)
         }
         nodeSubagents.delete(nodeId)
@@ -3771,6 +3897,7 @@ app.whenReady().then(async () => {
         subagentTail.finish(toolUseId)
         // Only cancel an in-flight resolve; if it already settled, adding here would leak.
         if (remoteSubagentResolving.has(toolUseId)) remoteSubagentCancel.add(toolUseId)
+        remoteNativeGen.delete(toolUseId)
         remoteSubagentTail.untrack(toolUseId)
       }
       nodeSubagents.delete(nodeId)

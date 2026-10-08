@@ -377,17 +377,38 @@ export function wireAgentStatus(
     // Claude's native subagent hooks, BEFORE the child-event gate below: that gate ignores every
     // agent_id-tagged payload, and these carry the CHILD's agent_id with the PARENT's
     // transcript_path. All they drive here is the child's own transcript tail, started at
-    // SubagentStart at the path derived from the parent's (the start does not name the file; the
-    // stop does, too late). The stop needs nothing here: the lifecycle's onRelease ends the tail.
-    const native = payload as { hook_event_name?: string; agent_id?: unknown; transcript_path?: string }
+    // SubagentStart and RESOLVED from the parent's path (the start does not name the file; the
+    // stop does, too late): the flat `subagents/agent-<id>.jsonl`, or — for an agent of the
+    // Workflow tool (2.1.289) — `subagents/workflows/<run>/agent-<id>.jsonl`, whose `.meta.json`
+    // also gives the card its label (labelNative → `emit`, the same path as every hook event) and
+    // marks it a Workflow agent whatever its agent_type (markWorkflow → `emit`).
+    // The stop needs nothing here: the lifecycle's onRelease ends the tail.
+    const native = payload as {
+      hook_event_name?: string
+      agent_id?: unknown
+      transcript_path?: string
+      session_id?: string
+    }
     if (native.hook_event_name === 'SubagentStart' || native.hook_event_name === 'SubagentStop') {
       if (native.hook_event_name === 'SubagentStart' && isClaudeAgentId(native.agent_id)) {
+        const agentChild = native.agent_id
         const parent = safeTranscriptPath(native.transcript_path)
-        const file = parent ? claudeSubagentTranscriptPath(parent, native.agent_id) : undefined
-        subagentTail.trackFile(native.agent_id, file)
+        const file = parent ? claudeSubagentTranscriptPath(parent, agentChild) : undefined
+        const sessionId = native.session_id
+        subagentTail.trackNative(agentChild, parent, {
+          onLabel: (label) => {
+            if (!nodeId) return
+            for (const ev of claudeSubagents.labelNative(nodeId, sessionId, agentChild, label)) emit(ev)
+          },
+          // Found under subagents/workflows/: a Workflow agent whatever its agent_type (sticky).
+          onWorkflow: () => {
+            if (!nodeId) return
+            for (const ev of claudeSubagents.markWorkflow(nodeId, sessionId, agentChild)) emit(ev)
+          }
+        })
         if (nodeId && file) {
           const set = nodeSubagents.get(nodeId) ?? new Set<string>()
-          set.add(native.agent_id)
+          set.add(agentChild)
           nodeSubagents.set(nodeId, set)
         }
       }

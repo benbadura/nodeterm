@@ -43,10 +43,11 @@
  * `background_tasks` — every background task still running at that turn end — and a turn that ends
  * with one running has not finished what a dependent is armed to read (measured live, 2026-09-30:
  * an agent's turn ended while its work went on in the background, and the node armed `--after` it
- * fired before anything was pushed). Only async SUBAGENTS hold
- * (`NormalizedAgentEvent.backgroundSubagentIds`, `type: 'subagent'`): a child ENDS, and its
- * task-notification wakes the parent into another turn, so a later `Stop` with it gone reliably
- * comes. A background SHELL does not hold — a dev server, a file watcher, `tail -f` may never end
+ * fired before anything was pushed). Only async SUBAGENTS (`NormalizedAgentEvent
+ * .backgroundSubagentIds`, `type: 'subagent'`) and running WORKFLOW runs (`backgroundWorkflowIds`,
+ * `type: 'workflow'`, the `Workflow` tool — MEASURED 2.1.289: the run is one entry keyed by its task
+ * id, its agents are never listed) hold: either ENDS, and its task-notification wakes the parent
+ * into another turn, so a later `Stop` with it gone reliably comes. A background SHELL does not hold — a dev server, a file watcher, `tail -f` may never end
  * and do not reliably wake the station, so holding on one held the dependent forever (the review
  * of #1052 measured three turns ending with the same dev server listed). A station whose
  * dependent needs a shell's result is told to wait for it before ending its turn. Rules:
@@ -54,8 +55,9 @@
  *     the field never sets the hold (today's behaviour, exactly), and a `done` without one (the
  *     idle-prompt rescue, a `StopFailure`, another agent) neither sets nor clears it;
  *   - the hold is not cleared by a turn STARTING (the child may well outlive it) — only by a turn
- *     end that says no subagent is left, or by `SessionEnd` (the CLI exited, taking its children
- *     with it; waiting on a session that will never report again would strand the dependent).
+ *     end that says no subagent or workflow is left, or by `SessionEnd` (the CLI exited, taking its
+ *     children with it; waiting on a session that will never report again would strand the
+ *     dependent).
 
  * NOT a hand-over: a board comment (a person steering), a station notice (the app telling an
  * orchestrator something), a person typing in the pane. Deliberately the same set #1042 counts.
@@ -269,7 +271,9 @@ export class StationHandoverTracker {
    *  `refreshArmed`, the messaging queue's flush on `done`). Events without a state are ignored. */
   onAgentEvent(
     event: Pick<NormalizedAgentEvent, 'nodeId' | 'state'> &
-      Partial<Pick<NormalizedAgentEvent, 'backgroundSubagentIds' | 'sessionPhase' | 'newTurn' | 'idle'>>
+      Partial<
+        Pick<NormalizedAgentEvent, 'backgroundSubagentIds' | 'backgroundWorkflowIds' | 'sessionPhase' | 'newTurn' | 'idle'>
+      >
   ): void {
     if (!event?.nodeId || !isSafeNodeId(event.nodeId)) return
     // The CLI exited: its background tasks died with it, and it will never report them finished.
@@ -301,8 +305,13 @@ export class StationHandoverTracker {
     this.setState(t, state)
     if (state === 'done') {
       // Only a PRESENT inventory speaks about background work; an absent one is unknown. Only
-      // background SUBAGENTS hold (see liveBackgroundSubagentIds and the header).
-      if (Array.isArray(event.backgroundSubagentIds)) t.background = event.backgroundSubagentIds.length > 0
+      // background SUBAGENTS and WORKFLOW runs hold (see liveBackgroundSubagentIds,
+      // liveBackgroundWorkflowIds and the header).
+      const subagents = event.backgroundSubagentIds
+      const workflows = event.backgroundWorkflowIds
+      if (Array.isArray(subagents) || Array.isArray(workflows)) {
+        t.background = (subagents?.length ?? 0) + (workflows?.length ?? 0) > 0
+      }
       this.settle(t)
       this.changed()
     }

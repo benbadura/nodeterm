@@ -404,3 +404,167 @@ describe('ClaudeSubagentLifecycle — the rules, one at a time', () => {
     expect(lc.sizeForTest()).toBeLessThan(200)
   })
 })
+
+// The agents of Claude Code's `Workflow` tool, over the REAL 2.1.289 capture (fixture:
+// src/shared/agents/__fixtures__/claude/workflow-hook-payloads.json). The launch-time `Stop` lists
+// the run as ONE `type: 'workflow'` entry, never its agents — so under the plain inventory rule every
+// workflow card died milliseconds after it appeared.
+describe('ClaudeSubagentLifecycle — Workflow agents', () => {
+  const wf = JSON.parse(
+    readFileSync(
+      path.join(__dirname, '../shared/agents/__fixtures__/claude/workflow-hook-payloads.json'),
+      'utf8'
+    ).replace(/\r\n/g, '\n')
+  ) as { events: Payload[] }
+  const ids = wf.events.filter((e) => e.hook_event_name === 'SubagentStart').map((e) => e.agent_id as string)
+  const base = { nodeId: 'n1', agentId: 'claude', sessionId: 's1' } as const
+  const wfStart = (id: string): NormalizedAgentEvent => ({
+    ...base, kind: 'subagent-start', toolUseId: id, subagentType: 'workflow-subagent', subagentSignal: 'native'
+  })
+  const stop = (taskIds: string[], workflowIds: string[]): NormalizedAgentEvent => ({
+    ...base, kind: 'state', state: 'done', backgroundTaskIds: taskIds, backgroundWorkflowIds: workflowIds,
+    backgroundSubagentIds: taskIds.filter((t) => !workflowIds.includes(t))
+  })
+
+  it('the capture: two agents, no Agent/Task call, a launch-time Stop that lists only the workflow', () => {
+    expect(ids).toHaveLength(2)
+    expect(wf.events.some((e) => e.tool_name === 'Agent' || e.tool_name === 'Task')).toBe(false)
+    const firstStop = wf.events.find((e) => e.hook_event_name === 'Stop')!
+    expect((firstStop.background_tasks as Array<{ type: string; id: string }>).map((t) => t.type)).toEqual(['workflow'])
+  })
+
+  it('draws a card per agent, keeps both through the launch-time Stop, and ends each exactly once at its own SubagentStop', () => {
+    const released: string[] = []
+    const lc = new ClaudeSubagentLifecycle({ onRelease: (k) => released.push(k) })
+    const stream: NormalizedAgentEvent[] = []
+    const releasedAtStop: string[][] = []
+    for (const p of wf.events) {
+      const e = normalizeClaude({ nodeId: 'n1', agentId: 'claude', payload: p })
+      if (!e) continue
+      const before = released.length
+      stream.push(...lc.apply(e))
+      if (p.hook_event_name === 'Stop') releasedAtStop.push(released.slice(before))
+    }
+    const starts = stream.filter((e) => e.kind === 'subagent-start')
+    expect(starts.map((e) => e.toolUseId)).toEqual(ids)
+    expect(starts.every((e) => e.subagentType === 'workflow-subagent' && !e.supersedes)).toBe(true)
+    const ends = stream.filter((e) => e.kind === 'subagent-end' && ids.includes(e.toolUseId!))
+    expect(ends.map((e) => e.toolUseId).sort()).toEqual([...ids].sort())
+    // Each end is the SubagentStop's own (the launch-time Stop released nothing).
+    expect(releasedAtStop[0]).toEqual([])
+    expect(released.sort()).toEqual([...ids].sort())
+    // Both still working right after the launch-time Stop.
+    const firstStopIdx = wf.events.findIndex((p) => p.hook_event_name === 'Stop')
+    const lc2 = new ClaudeSubagentLifecycle()
+    const live = new Map<string, boolean>()
+    for (const p of wf.events.slice(0, firstStopIdx + 1)) {
+      const e = normalizeClaude({ nodeId: 'n1', agentId: 'claude', payload: p })
+      if (!e) continue
+      for (const o of lc2.apply(e)) {
+        if (o.kind === 'subagent-start') live.set(o.toolUseId!, true)
+        if (o.kind === 'subagent-end') live.set(o.toolUseId!, false)
+      }
+    }
+    expect([...live.values()]).toEqual([true, true])
+  })
+
+  it('a later Stop with no live workflow reaps a workflow card whose stop never came (killed)', () => {
+    const lc = new ClaudeSubagentLifecycle()
+    lc.apply(wfStart('a1'))
+    expect(lc.apply(stop(['wjf1'], ['wjf1'])).filter((e) => e.kind === 'subagent-end')).toEqual([])
+    const out = lc.apply(stop([], []))
+    expect(out.filter((e) => e.kind === 'subagent-end').map((e) => e.toolUseId)).toEqual(['a1'])
+  })
+
+  it('a regular async subagent (bound to its Agent call) missing from the inventory is still ended while a workflow is live', () => {
+    const lc = new ClaudeSubagentLifecycle()
+    lc.apply(wfStart('w1'))
+    lc.apply({ ...base, kind: 'subagent-start', toolUseId: 't1', subagentType: 'general-purpose', taskLabel: 'x', subagentSignal: 'tool' })
+    lc.apply({ ...base, kind: 'subagent-start', toolUseId: 'a1', subagentType: 'general-purpose', subagentSignal: 'native' })
+    const out = lc.apply(stop(['wjf1'], ['wjf1']))
+    expect(out.filter((e) => e.kind === 'subagent-end').map((e) => e.toolUseId)).toEqual(['a1'])
+  })
+
+  it('a workflow agent run under another agentType survives the launch-time Stop (fixture, agent_type rewritten)', () => {
+    const released: string[] = []
+    const lc = new ClaudeSubagentLifecycle({ onRelease: (k) => released.push(k) })
+    const stream: NormalizedAgentEvent[] = []
+    let releasedAtFirstStop: string[] | undefined
+    for (const raw of wf.events) {
+      const p = raw.agent_type === 'workflow-subagent' ? { ...raw, agent_type: 'general-purpose' } : raw
+      const e = normalizeClaude({ nodeId: 'n1', agentId: 'claude', payload: p })
+      if (!e) continue
+      const before = released.length
+      stream.push(...lc.apply(e))
+      if (p.hook_event_name === 'Stop' && !releasedAtFirstStop) releasedAtFirstStop = released.slice(before)
+    }
+    expect(releasedAtFirstStop).toEqual([])
+    const ends = stream.filter((e) => e.kind === 'subagent-end' && ids.includes(e.toolUseId!))
+    expect(ends.map((e) => e.toolUseId).sort()).toEqual([...ids].sort())
+    expect(released.sort()).toEqual([...ids].sort())
+  })
+
+  it("a workflow agent's nested (never bound) child survives a parent Stop while the run is live, and is reaped once it is not", () => {
+    const lc = new ClaudeSubagentLifecycle()
+    lc.apply(wfStart('w1'))
+    lc.apply({ ...base, kind: 'subagent-start', toolUseId: 'n1c', subagentType: 'Explore', subagentSignal: 'native' })
+    expect(lc.apply(stop(['wjf1'], ['wjf1'])).filter((e) => e.kind === 'subagent-end')).toEqual([])
+    expect(lc.apply(stop([], [])).filter((e) => e.kind === 'subagent-end').map((e) => e.toolUseId).sort()).toEqual(['n1c', 'w1'])
+  })
+
+  it('markWorkflow: sticky, and a call taken before anyone knew goes to the sibling it was meant for', () => {
+    const lc = new ClaudeSubagentLifecycle()
+    lc.apply(wfStart('w0')) // latches the session
+    lc.apply({ ...base, kind: 'subagent-start', toolUseId: 't1', subagentType: 'general-purpose', taskLabel: 'task t1', subagentSignal: 'tool' })
+    // A workflow agent run as `general-purpose` starts first and takes the call (nothing can tell yet)…
+    expect(lc.apply({ ...base, kind: 'subagent-start', toolUseId: 'wg', subagentType: 'general-purpose', subagentSignal: 'native' })[0].taskLabel).toBe('task t1')
+    // …the real child then starts unlabelled.
+    expect(lc.apply({ ...base, kind: 'subagent-start', toolUseId: 'a1', subagentType: 'general-purpose', subagentSignal: 'native' })[0].taskLabel).toBeUndefined()
+    // The tail finds wg under subagents/workflows/: the label moves to a1.
+    const out = lc.markWorkflow('n1', 's1', 'wg')
+    expect(out.map((e) => [e.toolUseId, e.taskLabel])).toEqual([['wg', undefined], ['a1', 'task t1']])
+    // Sticky: a Stop listing the live workflow spares wg, a bound a1 not listed is ended.
+    const ends = lc.apply(stop(['wjf1'], ['wjf1'])).filter((e) => e.kind === 'subagent-end').map((e) => e.toolUseId)
+    expect(ends).toEqual(['a1'])
+    expect(lc.markWorkflow('n1', 's2', 'wg')).toEqual([])
+    expect(lc.markWorkflow('n1', 's1', 'nobody')).toEqual([])
+  })
+
+  it('markWorkflow with no sibling to give it to: the call goes back to the queue for its own child', () => {
+    const lc = new ClaudeSubagentLifecycle()
+    lc.apply(wfStart('w0'))
+    lc.apply({ ...base, kind: 'subagent-start', toolUseId: 't1', subagentType: 'general-purpose', taskLabel: 'task t1', subagentSignal: 'tool' })
+    lc.apply({ ...base, kind: 'subagent-start', toolUseId: 'wg', subagentType: 'general-purpose', subagentSignal: 'native' })
+    expect(lc.markWorkflow('n1', 's1', 'wg').map((e) => [e.toolUseId, e.taskLabel])).toEqual([['wg', undefined]])
+    expect(lc.apply({ ...base, kind: 'subagent-start', toolUseId: 'a1', subagentType: 'general-purpose', subagentSignal: 'native' })[0].taskLabel).toBe('task t1')
+  })
+
+  it('a workflow card does not take a waiting Agent label; the real child still gets it', () => {
+    const lc = new ClaudeSubagentLifecycle()
+    lc.apply(wfStart('w0')) // latches the session
+    // An Agent call with no `subagent_type` (the CLI's default) is the one FIFO hands to any type.
+    lc.apply({ ...base, kind: 'subagent-start', toolUseId: 't1', taskLabel: 'task t1', subagentSignal: 'tool' })
+    const wfOut = lc.apply(wfStart('w1'))
+    expect(wfOut[0].taskLabel).toBeUndefined()
+    const real = lc.apply({ ...base, kind: 'subagent-start', toolUseId: 'a1', subagentType: 'general-purpose', subagentSignal: 'native' })
+    expect(real[0].taskLabel).toBe('task t1')
+  })
+
+  it('labelNative: a corrective start only for an existing, working, unlabelled card of this session', () => {
+    const lc = new ClaudeSubagentLifecycle()
+    expect(lc.labelNative('n1', 's1', 'w1', 'read-a')).toEqual([])
+    lc.apply(wfStart('w1'))
+    expect(lc.labelNative('n1', 's2', 'w1', 'read-a')).toEqual([])
+    const out = lc.labelNative('n1', 's1', 'w1', 'read-a‮\u0007 x')
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ kind: 'subagent-start', toolUseId: 'w1', taskLabel: 'read-a x', subagentSignal: 'native' })
+    // Fed back through apply (the shells' ordinary path): the same working card, label kept.
+    expect(lc.apply(out[0])[0]).toMatchObject({ kind: 'subagent-start', toolUseId: 'w1', taskLabel: 'read-a x' })
+    expect(lc.labelNative('n1', 's1', 'w1', 'other')).toEqual([]) // already labelled
+    lc.apply({ ...base, kind: 'subagent-end', toolUseId: 'w1', subagentSignal: 'native' })
+    lc.apply(wfStart('w2'))
+    lc.apply({ ...base, kind: 'subagent-end', toolUseId: 'w2', subagentSignal: 'native' })
+    expect(lc.labelNative('n1', 's1', 'w2', 'late')).toEqual([]) // no longer working
+    expect(lc.labelNative('n1', 's1', 'w2', '   ')).toEqual([])
+  })
+})

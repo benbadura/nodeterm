@@ -171,6 +171,20 @@ describe('StationHandoverTracker — when a station counts as finished for plain
       expect(h.t.isHandedOver('st')).toBe(false)
     })
 
+    it('a running WORKFLOW run holds like a subagent (Claude 2.1.289: listed by task id, its agents never)', () => {
+      const h = tracker()
+      h.ev('working', 100)
+      // The launch-time Stop: the workflow runs, no subagent is listed.
+      h.t.onAgentEvent({ nodeId: 'st', state: 'done', backgroundSubagentIds: [], backgroundWorkflowIds: ['wjf1'] })
+      expect(h.t.isHandedOver('st')).toBe(true)
+      expect(h.t.list()).toEqual([{ nodeId: 'st', background: true }])
+      // The workflow's task-notification wakes the parent; its Stop lists nothing left.
+      h.ev('working', 200)
+      expect(h.t.isHandedOver('st')).toBe(true)
+      h.t.onAgentEvent({ nodeId: 'st', state: 'done', backgroundSubagentIds: [], backgroundWorkflowIds: [] })
+      expect(h.t.isHandedOver('st')).toBe(false)
+    })
+
     it('background work and a hand-over hold independently', () => {
       const h = tracker()
       h.ev('working', 100)

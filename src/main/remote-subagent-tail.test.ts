@@ -136,3 +136,32 @@ describe('a resumed subagent (same id tracked again)', () => {
     tail.untrack('a1')
   })
 })
+
+describe('createRemoteSubagentTail — a native child located later (retarget)', () => {
+  it('reports offsets, moves a tracked key to the located file from byte 0, and remembers where it stopped', async () => {
+    const { win, send } = fakeWin()
+    const files: Record<string, string> = {
+      '/abs/workflows/wf_1/agent-a1.jsonl': assistant('from the workflow file') + '\n'
+    }
+    const remoteFile = {
+      readFromCapped: vi.fn(async (r: RemoteFileRef, o: number) => {
+        const body = Buffer.from(files[r.path] ?? '')
+        const data = body.subarray(o)
+        return { data, newOffset: o + data.length }
+      })
+    }
+    const tail = createRemoteSubagentTail(win, remoteFile as never)
+    tail.track('a1', { ...ref, path: '/abs/agent-a1.jsonl' }) // the flat guess: never exists
+    await tick()
+    expect(tail.offsetFor('a1')).toBe(0)
+    expect(tail.offsetFor('nobody')).toBeUndefined()
+    tail.retarget('a1', { ...ref, path: '/abs/workflows/wf_1/agent-a1.jsonl' })
+    await tick()
+    expect(send.mock.calls.map((c) => c[1].chunk).join('')).toContain('from the workflow file')
+    expect(tail.offsetFor('a1')).toBeGreaterThan(0)
+    tail.retarget('nobody', ref) // not tracked: no-op
+    expect(tail.offsetFor('nobody')).toBeUndefined()
+    tail.untrack('a1')
+    expect(tail.resumeFor('a1')?.path).toBe('/abs/workflows/wf_1/agent-a1.jsonl')
+  })
+})

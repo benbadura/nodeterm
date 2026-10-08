@@ -3753,6 +3753,44 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   hand-back turn (a background child reporting back wakes the parent for a turn, then the
   `<task-notification>` wakes it again) may chime "finished" twice — #708's quiet rule is per
   turn.
+  **Workflow-tool agents** (MEASURED on Claude Code **2.1.289**, fixture
+  `src/shared/agents/__fixtures__/claude/workflow-hook-payloads.json`). The `Workflow` tool's
+  `PostToolUse` is an async ack (`status: async_launched`, `taskType: local_workflow`, `runId`); each
+  agent it spawns fires native `SubagentStart`/`SubagentStop` with `agent_type: 'workflow-subagent'`
+  and the PARENT's session/transcript, and NO Agent/Task call precedes it. The parent `Stop` fires
+  milliseconds after the launch and lists the run as ONE `{type: 'workflow'}` entry keyed by its
+  task id — never the agents by agent_id (`SubagentStop` lists it too); completion is a
+  `<task-notification>` naming the Workflow call, then a `Stop` with `background_tasks: []`. The
+  agent's transcript is `<parent>/subagents/workflows/<runId>/agent-<id>.jsonl` beside
+  `agent-<id>.meta.json` (`description` = the script's `agent()` label), NOT the flat path. Rules:
+  **(1)** the inventory rule above would end every workflow card the instant it appeared, so while a
+  `Stop`'s inventory lists a live workflow (`NormalizedAgentEvent.backgroundWorkflowIds`,
+  `liveBackgroundWorkflowIds`) a working native card is NOT ended when it is a workflow card OR was
+  never bound to an Agent/Task call — a script's `agent({agentType})` may report another
+  `agent_type` (unmeasured), and a workflow agent's nested children are never bound (their tool
+  calls carry `agent_id`). A background Agent child is bound by its ack ~1 ms after its start and
+  keeps the old rule. Such a card ends at its own `SubagentStop`, at a later `Stop` listing no live
+  workflow (killed-child cleanup), or by the decay. **(2)** A workflow card never takes a waiting
+  Agent/Task label (`bindNext`); it is known by its type at start, or — sticky — when the tail finds
+  its file under `workflows/` (`markWorkflow`, which also hands a call it took meanwhile to the
+  unbound sibling it was meant for, else back to the queue). **(3)** Its label comes from the
+  `.meta.json`: both shells start the child's tail with `SubagentTail.trackNative`, which RESOLVES
+  the file each tick (flat path, else `workflows/<run>/agent-<id>.jsonl` across the 64 NEWEST run
+  directories by mtime — never readdir order, run ids are random — from a listing cached per
+  session and re-read when the directory changes; never another id), reads at most
+  `SUBAGENT_META_READ_MAX` (4 KB) of the meta once and hands the sanitized description
+  (`sanitizeSubagentLabel`: one line, no C0/C1, every `\p{Cf}` but ZWJ, 120 code points — the text is
+  script output in a file) to `claudeSubagents.labelNative`; `onWorkflow` → `markWorkflow`; both
+  corrective starts go through the shell's ONE event path. The desktop's SSH leg tails the flat
+  guess AT ONCE (an Agent/Task child costs no extra exec) and asks the host
+  (`core/remote-ssh/claude-subagent-locate.ts`, one bounded command, answer jailed to this parent's
+  `subagents/`, real-`/bin/sh` tested) only for a `workflow-subagent`-typed agent or one whose flat
+  file is still empty after 2 s, retrying with backoff (each attempt fails open) for up to ~10 min,
+  then retargets the tail; a located workflow agent with no meta yet gets two more meta-only reads.
+  Each locate runs under a per-agent GENERATION (release deletes it, a resume replaces it), so a
+  stop + resume inside one locate cannot leave a stray tail. **(4)** A live workflow
+  holds plain `--after` exactly like a background subagent (`station-handover.ts` reads the union
+  of `backgroundSubagentIds` and `backgroundWorkflowIds`). The card reads "workflow".
   **Codex** (2026-08-24, `spawn_agent` collaboration — issue #401) joined via its **native
   `SubagentStart`/`SubagentStop` hooks**, measured on codex-cli 0.146.0, keyed by `agent_id` (NOT
   `tool_use_id` — nothing correlates the spawn tool call with the Start it launches; agent_id is
@@ -4488,7 +4526,8 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
     `--after` would hold. The Server Edition's factory asks `handedOver` in `refreshArmed` AND in the
     creation shortcut (`mustWait`): "already satisfied at creation" must mean satisfied under this
     rule, or the node is launched immediately by the shortcut.
-  - **Background SUBAGENTS hold the same way; background SHELLS do not** (same module, same list;
+  - **Background SUBAGENTS and WORKFLOW runs hold the same way; background SHELLS do not** (same
+    module, same list;
     `background: true` on the record). MEASURED live 2026-09-30: an agent's turn ended while its
     work went on in the background, and the node armed `--after` it fired before anything was
     pushed. Claude's `Stop` carries `background_tasks` (see **Claude's native subagent hooks**, fact
@@ -4502,7 +4541,9 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
     #1052). Unknown `type`s are treated like shells. An ABSENT inventory is unknown and changes
     NOTHING (a CLI too old to send it keeps today's behaviour exactly; the idle rescue and
     `StopFailure` carry none). The agent bodies tell a station to wait for a background shell's
-    result itself before ending its turn when a dependent needs it.
+    result itself before ending its turn when a dependent needs it. A running `Workflow` tool run
+    (Claude 2.1.289: one `type: 'workflow'` entry, `backgroundWorkflowIds`) holds like a subagent —
+    it ends, and its task-notification wakes the station — so the hold reads the union of both.
   - **Eviction prefers stations with nothing held** (the bound is 2000 tracked stations; the oldest
     with nothing held goes first) — dropping a held one would release its dependents. Only when
     every tracked station holds is the oldest held one dropped.

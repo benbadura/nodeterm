@@ -50,6 +50,24 @@
 //    native card still working that it no longer lists is over. Foreground children are never in
 //    that list, and none can be running when the parent's turn ends; nested children of a
 //    background agent are listed (measured).
+//  - WORKFLOW agents (MEASURED 2.1.289, fixture shared/agents/__fixtures__/claude/
+//    workflow-hook-payloads.json). The `Workflow` tool launches its agents in the background: each
+//    fires a native `SubagentStart` / `SubagentStop` with `agent_type: 'workflow-subagent'`, no
+//    Agent/Task call precedes it, and the parent's `Stop` — which fires milliseconds after the
+//    launch — lists the run as ONE `type: 'workflow'` entry keyed by the workflow's task id, never
+//    the agents by their own ids. So the killed-child rule above would end every workflow card the
+//    instant it appeared. While the inventory lists at least one live workflow, a working native
+//    card is therefore NOT ended when it is a workflow card OR has never been bound to an Agent/Task
+//    call: a script may run an agent under another `agentType` (whose `agent_type` is then not
+//    `workflow-subagent`), and a workflow agent's own nested children are never bound either (their
+//    tool calls carry `agent_id` and are filtered). A background Agent child is bound (its ack
+//    names its call ~1 ms after its start), so it keeps the plain rule. Such a card ends at its own
+//    `SubagentStop`, at a later `Stop` whose inventory lists no live workflow (the killed-child
+//    cleanup, kept), or by the renderer's decay. A workflow card never takes a waiting Agent/Task
+//    label (it has no tool call of its own): known at start by its type, or later — sticky — when
+//    the shell's tail finds its transcript under `subagents/workflows/` (`markWorkflow`, which also
+//    gives back a call it took before anyone knew). Its label comes from the agent's `.meta.json`
+//    (`description`, the `agent()` label), which the shells' tails read and hand to `labelNative`.
 //  - A replaced tool card also gets a plain end, AFTER the replacing start, for a consumer too old
 //    to know `supersedes`.
 //  - Tool-path ends (the sync `PostToolUse`, the `<task-notification>` sniff) still arrive in a
@@ -60,6 +78,7 @@
 // src/main/index.ts, src/server/agent-status.ts). Events it does not act on come back as the same
 // object. Display-only, never persisted, never permission evidence.
 import type { NormalizedAgentEvent } from '../shared/agents/normalize'
+import { CLAUDE_WORKFLOW_AGENT_TYPE, sanitizeSubagentLabel } from '../shared/agents/claude-subagents'
 
 /** A tool call whose child has not started yet (or never will). */
 interface Pending {
@@ -77,6 +96,8 @@ interface Card {
   type?: string
   label?: string
   working: boolean
+  /** A Workflow agent (by type, or by where its transcript lives): never bound to a tool call. */
+  workflow?: boolean
 }
 
 interface NodeState {
@@ -141,6 +162,61 @@ export class ClaudeSubagentLifecycle {
     return !!st?.native && (!sessionId || st.sessionId === sessionId)
   }
 
+  /**
+   * A label for a native card that has none yet (a Workflow agent's `.meta.json` description, read
+   * by the shell's transcript tail once the file is found). Returns the corrective start that
+   * redraws the card with it — only for an EXISTING, still-WORKING card of this node's current
+   * session that has no label; otherwise `[]`. The shells hand the result to their ordinary event
+   * path; passing it back through `apply` is a no-op re-open of the same working card.
+   */
+  labelNative(nodeId: string, sessionId: string | undefined, agentId: string, label: string): NormalizedAgentEvent[] {
+    const st = this.nodes.get(nodeId)
+    if (!st || (sessionId && st.sessionId && st.sessionId !== sessionId)) return []
+    const card = st.cards.get(agentId)
+    const clean = sanitizeSubagentLabel(label)
+    if (!card || !card.working || card.label || !clean) return []
+    card.label = clean
+    return [this.startEvent({ nodeId, agentId: 'claude', sessionId: st.sessionId, kind: 'subagent-start' }, card)]
+  }
+
+  /**
+   * The shell's tail found this native card's transcript under `subagents/workflows/<run>/`: it is
+   * a Workflow agent whatever its `agent_type` (a script's `agent({agentType})`). Sticky — the card
+   * is never bound to an Agent/Task call again, and an inventory listing a live workflow spares it.
+   * A call it took before anyone knew goes to the still-unbound sibling it was meant for (with a
+   * corrective start for both), else back to the front of the queue (an ack or a sync end still
+   * binds it exactly). `[]` when nothing on screen changes.
+   */
+  markWorkflow(nodeId: string, sessionId: string | undefined, agentId: string): NormalizedAgentEvent[] {
+    const st = this.nodes.get(nodeId)
+    if (!st || (sessionId && st.sessionId && st.sessionId !== sessionId)) return []
+    const card = st.cards.get(agentId)
+    if (!card) return []
+    card.workflow = true
+    if (card.toolUseId === undefined) return []
+    const call: Pending = { toolUseId: card.toolUseId, type: card.type, label: card.label, shown: false }
+    card.toolUseId = undefined
+    card.label = undefined
+    const ev: NormalizedAgentEvent = { nodeId, agentId: 'claude', sessionId: st.sessionId, kind: 'subagent-start' }
+    const out: NormalizedAgentEvent[] = card.working ? [this.startEvent(ev, card)] : []
+    const robbed = [...st.cards.values()].find(
+      (c) =>
+        c !== card &&
+        c.working &&
+        !c.workflow &&
+        c.toolUseId === undefined &&
+        (c.type === undefined || call.type === undefined || c.type === call.type)
+    )
+    if (robbed) {
+      this.take(robbed, call)
+      out.push(this.startEvent(ev, robbed))
+    } else {
+      st.pending.unshift(call)
+      if (st.pending.length > PENDING_MAX) st.pending.pop()
+    }
+    return out
+  }
+
   forgetNode(nodeId: string): void {
     this.nodes.delete(nodeId)
   }
@@ -185,9 +261,15 @@ export class ClaudeSubagentLifecycle {
     if (known) {
       // Resumed under the same id: re-open the card, with what it already knows.
       known.working = true
+      if (ev.subagentType === CLAUDE_WORKFLOW_AGENT_TYPE) known.workflow = true
       return [this.startEvent(ev, known)]
     }
-    const card: Card = { agentId, type: ev.subagentType, working: true }
+    const card: Card = {
+      agentId,
+      type: ev.subagentType,
+      working: true,
+      ...(ev.subagentType === CLAUDE_WORKFLOW_AGENT_TYPE ? { workflow: true } : {})
+    }
     st.cards.set(agentId, card)
     this.evict(st)
     const out: NormalizedAgentEvent[] = []
@@ -262,11 +344,16 @@ export class ClaudeSubagentLifecycle {
     const st = this.nodes.get(ev.nodeId)
     if (!st?.native || (ev.sessionId && st.sessionId !== ev.sessionId)) return [ev]
     const out: NormalizedAgentEvent[] = [ev]
-    // The inventory, when the CLI sends one, ends the native cards it no longer lists.
+    // The inventory, when the CLI sends one, ends the native cards it no longer lists — except,
+    // while any workflow is still running, a card that may belong to it (a workflow card, or one
+    // never bound to an Agent/Task call): the inventory lists the run, never its agents (see the
+    // header).
     if (ev.backgroundTaskIds) {
       const alive = new Set(ev.backgroundTaskIds)
+      const workflowLive = (ev.backgroundWorkflowIds?.length ?? 0) > 0
       for (const card of st.cards.values()) {
         if (!card.working || alive.has(card.agentId)) continue
+        if (workflowLive && (card.workflow || card.toolUseId === undefined)) continue
         card.working = false
         this.onRelease(card.agentId)
         out.push(this.endEvent(ev, card.agentId, card.type))
@@ -290,6 +377,9 @@ export class ClaudeSubagentLifecycle {
   /** First in, first out: the oldest waiting tool call of the same type, else one with no type
    *  on either side. Returns the id of a drawn tool card the new card replaces. */
   private bindNext(st: NodeState, card: Card): string | undefined {
+    // A Workflow agent has no Agent/Task call of its own: it must not take one meant for a real
+    // subagent (that child would then start unlabelled). Its label comes from labelNative.
+    if (card.workflow) return undefined
     // A call an ack already named for another child that has not started yet is not up for grabs.
     const reserved = new Set(st.ackHints.values())
     const free = (p: Pending): boolean => !reserved.has(p.toolUseId)

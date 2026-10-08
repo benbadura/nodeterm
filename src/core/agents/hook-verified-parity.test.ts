@@ -187,10 +187,11 @@ describe('both shells register a 4-arg raw listener', () => {
   // things must be in BOTH shells, and each one missing is silent: (a) every normalized event goes
   // through the lifecycle before any consumer (else the tool card and the native card are drawn
   // twice); (b) the <task-notification> end does too (else it ends nothing in a native session);
-  // (c) SubagentStart starts the child's tail at the DERIVED path; (d) that branch sits BEFORE the
-  // child-event gate, which ignores every agent_id-tagged payload and would swallow it; (e) the
-  // tool-keyed tail is skipped once the session is native, and (f) the lifecycle's release stops
-  // tails.
+  // (c) SubagentStart starts the child's RESOLVING tail (flat path, or a Workflow run's
+  // `workflows/<run>/` path — 2.1.289), whose meta label (labelNative) and workflow location
+  // (markWorkflow) go back through the shell's ONE event path; (d) that branch sits BEFORE the child-event gate, which ignores every
+  // agent_id-tagged payload and would swallow it; (e) the tool-keyed tail is skipped once the
+  // session is native, and (f) the lifecycle's release stops tails.
   it('both shells route Claude subagent events through the ONE lifecycle, and tail natively', () => {
     for (const rel of ['src/main/index.ts', 'src/server/agent-status.ts']) {
       const src = code(rel)
@@ -199,8 +200,12 @@ describe('both shells register a 4-arg raw listener', () => {
         /claudeSubagents\.apply\(taskDoneEvent\)/
       )
       expect(src, `${rel}: (b) the task-notification end is not labelled`).toMatch(/subagentSignal: 'transcript'/)
-      expect(src, `${rel}: (c) no native tail at the derived path`).toMatch(
-        /subagentTail\.trackFile\(\s*agentChild|subagentTail\.trackFile\(\s*native\.agent_id/
+      expect(src, `${rel}: (c) no resolving native tail`).toMatch(/subagentTail\.trackNative\(\s*agentChild/)
+      expect(src, `${rel}: (c) the workflow label does not reach the card through the event path`).toMatch(
+        /claudeSubagents\.labelNative\([^)]*\)\)\s*(emit|emitAgentStatus)\(ev\)/
+      )
+      expect(src, `${rel}: (c) the workflow location does not reach the lifecycle through the event path`).toMatch(
+        /claudeSubagents\.markWorkflow\([^)]*\)\)\s*(emit|emitAgentStatus)\(ev\)/
       )
       expect(src, `${rel}: (c) the derived path helper is not used`).toMatch(/claudeSubagentTranscriptPath\(/)
       const nativeAt = src.indexOf("native.hook_event_name === 'SubagentStart' || native.hook_event_name === 'SubagentStop'")
