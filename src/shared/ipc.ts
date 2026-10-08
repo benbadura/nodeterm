@@ -281,6 +281,14 @@ export const IPC = {
   watchLinkChatSend: 'watchLink:chat-send',
   /** invoke: `(linkId)` → WatchChatMessage[] — this run's last messages (memory only). */
   watchLinkChatHistory: 'watchLink:chat-history',
+  /** invoke: `(linkId, enabled)` → boolean — a Control link: turn typing on or off. */
+  watchLinkSetControl: 'watchLink:set-control',
+  /** invoke: `(linkId, password)` → boolean — a Control link: replace its password. */
+  watchLinkSetPassword: 'watchLink:set-password',
+  /** invoke: `(linkId)` → boolean — a Control link locked by wrong passwords: allow unlocking again. */
+  watchLinkAllowControl: 'watchLink:allow-control',
+  /** invoke: `(nodeId)` → ControlSupport — whether the node's terminal can take a Control link's input. */
+  watchLinkControlSupport: 'watchLink:control-support',
   /** core → owner clients only: the full list on every change, never a delta. */
   watchLinkState: 'watchLink:state',
   /** core → owner clients only: `(linkId, WatchChatMessage)`. */
@@ -374,6 +382,16 @@ export const IPC = {
   wallpaperListStills: 'wallpaper:list-stills',
   wallpaperLoad: 'wallpaper:load',
   wallpaperImport: 'wallpaper:import',
+  // Run node (core/run-service.ts): launch.json entries, devices, launcher, status, stop, signals.
+  runEntries: 'run:entries',
+  runDevices: 'run:devices',
+  runBootDevice: 'run:boot-device',
+  runDiscover: 'run:discover',
+  runStart: 'run:start',
+  runStatus: 'run:status',
+  runStop: 'run:stop',
+  runSignal: 'run:signal',
+  runWatch: 'run:watch',
   // Trigger nodes (issue #493): machine-local arm/disarm + the card's status/run-now.
   triggersArm: 'triggers:arm',
   triggersDisarm: 'triggers:disarm',
@@ -524,6 +542,9 @@ export const IPC = {
   filesSaveAlertSound: 'files:save-alert-sound',
   filesReadAlertSound: 'files:read-alert-sound',
   filesClearAlertSound: 'files:clear-alert-sound',
+  /** Agent-integration consent (issue #744): the last reconcile's report (what is enabled,
+   *  declined, and which user-edited files were kept). Host-only. */
+  integrationsStatus: 'integrations:status',
   settingsLoad: 'settings:load',
   settingsSave: 'settings:save',
   sshList: 'ssh:list',

@@ -89,6 +89,32 @@ describe('createWatchLinkApi', () => {
     }
   })
 
+  // Unlimited (`ttlSeconds: 0`): the server answers `expiresAt: null` — accepted for that request and
+  // for no other. A null to a finite request, or no expiry at all, is a malformed reply.
+  it('create with ttlSeconds 0 accepts a null expiry, and only for that request', async () => {
+    const { a, calls } = api(() => res(200, { linkId: LID, expiresAt: null }))
+    expect(await a.create('ent', 'h', 0)).toEqual({ ok: true, linkId: LID, expiresAt: null })
+    expect(calls[0].body).toEqual({ entitlement: 'ent', joinKeyHash: 'h', ttlSeconds: 0 })
+    for (const ttl of [900, 3600, 86400]) {
+      expect(await api(() => res(200, { linkId: LID, expiresAt: null })).a.create('e', 'h', ttl)).toEqual({ ok: false, error: 'network' })
+    }
+    expect(await api(() => res(200, { linkId: LID })).a.create('e', 'h', 0)).toEqual({ ok: false, error: 'network' })
+    expect(await api(() => res(200, { linkId: LID, expiresAt: 'never' })).a.create('e', 'h', 0)).toEqual({ ok: false, error: 'network' })
+  })
+
+  it('create with ttlSeconds 0 answered with an end time (a capped server) re-anchors it like any other', async () => {
+    const serverNow = Date.parse('Tue, 29 Sep 2026 10:00:00 GMT')
+    const { a } = api(() => res(200, { linkId: LID, expiresAt: serverNow / 1000 + 86400 }, { date: new Date(serverNow).toUTCString() }), 5_000)
+    expect(await a.create('ent', 'h', 0)).toEqual({ ok: true, linkId: LID, expiresAt: 5_000 + 86_400_000 })
+  })
+
+  it('a 400 bad_ttl to an Unlimited request is ttl-unsupported (an older server); any other 400 stays bad-request', async () => {
+    expect(await api(() => res(400, { error: 'bad_ttl' })).a.create('e', 'h', 0)).toEqual({ ok: false, error: 'ttl-unsupported' })
+    expect(await api(() => res(400, { error: 'bad_ttl' })).a.create('e', 'h', 3600)).toEqual({ ok: false, error: 'bad-request' })
+    expect(await api(() => res(400, { error: 'bad_request' })).a.create('e', 'h', 0)).toEqual({ ok: false, error: 'bad-request' })
+    expect(await api(() => res(400, null)).a.create('e', 'h', 0)).toEqual({ ok: false, error: 'bad-request' })
+  })
+
   it('maps create errors', async () => {
     const cases: [Response, string][] = [
       [res(402, { error: 'not_entitled' }), 'not-entitled'],

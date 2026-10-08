@@ -207,6 +207,18 @@ export function underlineThickness(fontSizePx: number): number {
 }
 
 /**
+ * How thick a strikethrough is, in device pixels, for a font of this size.
+ *
+ * xterm's WebGL rule (`Math.max(1, floor(fontSize * dpr / 10))` — `sizePx` is already device px),
+ * for the same reason `underlineThickness` adopts xterm's: a struck run in shared mode should weigh
+ * the same as it does in GPU mode beside it. Floored at 1 so it never rounds away at small sizes.
+ */
+export function strikethroughThickness(fontSizePx: number): number {
+  if (!Number.isFinite(fontSizePx) || fontSizePx <= 0) return 1
+  return Math.max(1, Math.floor(fontSizePx / 10))
+}
+
+/**
  * How close a geometric op's far edge has to come to the cell's far edge to count as REACHING it —
  * see step 2 of `draw` for what reaching one earns.
  *
@@ -510,7 +522,7 @@ export function createCanvasRasterizer(
     /** `x, y` is the INK origin the atlas hands us — already one gutter inside the pitch cell on
      *  each axis (`GlyphAtlas.cellXY`) — and `fg`/`bg` are the FINAL packed colour lanes for this
      *  slot. Two DIFFERENT rects are involved; see the header's invariants 3 and 4. */
-    draw(code, bold, italic, x, y, fg, bg, part = 'whole', underline = false) {
+    draw(code, bold, italic, x, y, fg, bg, part = 'whole', underline = false, strikethrough = false) {
       // The glyph's own origin inside this slot. 'wide-right' is the RIGHT half of a double-width
       // character (see `GlyphAtlas.glyphFor`): the character is drawn one cell FURTHER LEFT, so the
       // window this slot's clip keeps is its second cell instead of its first. Everything else
@@ -696,6 +708,24 @@ export function createCanvasRasterizer(
         ctx.fillStyle = cssColor(fg)
         const thickness = underlineThickness(font.sizePx)
         ctx.fillRect(x, y + colsH - thickness, colsW, thickness)
+        ctx.restore()
+      }
+      // 2c. THE STRIKETHROUGH, if this cell carries one (SGR 9).
+      //
+      //    Everything 2b says applies: our own geometry, the whole-texel box so a struck run joins
+      //    into one continuous line, baked into the slot as one more key lane. Only the position
+      //    differs — xterm's WebGL renderer strokes it across the MIDDLE of the cell, centred on
+      //    `floor(cellH / 2) - 0.5` for an odd width (the half-pixel nudge that keeps a 1px stroke
+      //    crisp). As a whole-pixel fill that is a top edge `ceil(thickness / 2)` above the middle
+      //    row — `floor` would sit one device pixel lower than GPU mode at every odd thickness.
+      if (strikethrough) {
+        ctx.save()
+        ctx.beginPath()
+        ctx.rect(x, y, colsW, colsH)
+        ctx.clip()
+        ctx.fillStyle = cssColor(fg)
+        const thickness = strikethroughThickness(font.sizePx)
+        ctx.fillRect(x, y + Math.floor(font.cellH / 2) - Math.ceil(thickness / 2), colsW, thickness)
         ctx.restore()
       }
       // 3. THE EDGE EXTENSION — clamp-to-edge padding, the standard atlas technique. Replicate the

@@ -44,6 +44,7 @@ const link = (over: Partial<WatchLinkView> = {}): WatchLinkView => ({
   url: 'https://nodeterm.dev/s/L#1.secret',
   status: 'live',
   viewers: [],
+  control: null,
   ...over
 })
 

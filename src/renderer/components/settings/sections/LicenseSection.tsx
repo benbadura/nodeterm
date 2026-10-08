@@ -7,6 +7,7 @@ import { ConfirmDialog } from '../../ConfirmDialog'
 import { ProCompare } from './ProCompare'
 import { Button } from '@renderer/ui/Button'
 import { machineNoun, otherMachines, thisMachine } from '@renderer/lib/machineName'
+import { mobileStoreNames } from '@renderer/lib/links'
 import { isBrowserRuntime } from '@renderer/bridge/runtime'
 import type { SettingsSectionId } from '../nav'
 import { Input } from '@renderer/ui/Input'
@@ -42,6 +43,8 @@ const ROWS = {
       'copy key',
       'app store',
       'iphone',
+      'google play',
+      'android',
       'pairing'
     ]
   }
@@ -53,7 +56,7 @@ const ENTRIES = Object.values(ROWS)
 function AppStorePairingHint(): React.JSX.Element {
   return (
     <p className="text-sm text-muted">
-      Already have Pro from the App Store? Pairing the phone with that subscription can unlock Pro
+      Already have Pro from {mobileStoreNames()}? Pairing the phone with that subscription can unlock Pro
       in the desktop app without a license key.{' '}
       {isBrowserRuntime()
         ? 'In the desktop app, open Settings → Phone to pair. Server Edition does not support this activation route. '

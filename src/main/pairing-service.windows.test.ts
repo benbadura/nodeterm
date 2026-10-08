@@ -46,7 +46,7 @@ vi.mock('../core/device-id', () => ({ getDeviceId: () => 'test-host-device-id' }
 
 import os from 'os'
 import { createPairingService, type PairingDone, type PairingRelayDeps } from './pairing-service'
-import { rewriteKeyComment, type DeviceEntry } from './pairing-core'
+import { type DeviceEntry } from './pairing-core'
 import { genKeyPair } from './remote/e2ee'
 import type { Settings } from '../shared/types'
 
@@ -228,7 +228,8 @@ describe('Windows pairing: relay-only', () => {
 })
 
 describe('Windows revoke sweeps the administrators key file', () => {
-  const KEY_A = rewriteKeyComment('ssh-ed25519 AAAAblobAAAA phone-a@ios', 'dev-a')
+  // A #758 manual copy made from an iPhone paired before the rename: the legacy stamp.
+  const KEY_A = 'ssh-ed25519 AAAAblobAAAA nodeterm-ios-dev-a'
   const OTHER = 'ssh-ed25519 AAAAadminlaptop admin@laptop'
   const seed = (): void => {
     reset()

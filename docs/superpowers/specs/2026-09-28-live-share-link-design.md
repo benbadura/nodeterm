@@ -449,6 +449,8 @@ server is the gate.
 - **Node context menu** (terminal and agent nodes): "Share live link…". The sessions sidebar row
   shares the `selectionItems` builder; the kanban card menu gets the same row from the same builder.
   Hideable from Settings → Appearance as `live-link` (`HIDEABLE_MENU_ITEMS`).
+- **Terminal node header:** a "Share live link" button beside Comments, hideable from Settings →
+  Appearance as `share-link` (the LIVE chip is not).
 - **Card modal header:** a "Share live link" action on terminal cards.
 - **Command palette:** "Manage live links" (opens the Settings section) and "Stop all live links
   (every machine on this license)". Stop all revokes every link of the license, other machines

@@ -316,6 +316,13 @@ export const CHAT_CAPABLE = ['claude', 'grok', 'gemini', 'codex', 'copilot', 'op
 // opencode has no remote leg either but is NOT here: its `unreadable` also means a failed LOCAL
 // `opencode export`, which Retry heals — the panel gives it its own copy (`exportError`) instead.
 export const CHAT_LOCAL_ONLY = ['gemini', 'copilot'] as const
+// CHAT_CAPABLE agents whose chat-view prompts are TYPED as keystrokes instead of pasted
+// (core/typed-input.ts): a multi-line paste is recorded by Claude Code as <pasted_content>, content
+// its model is told may not be the user's own words. The typed path puts a line break in as tmux's
+// M-Enter key — a newline in Claude Code (MEASURED, 2.1.281) but unmeasured in every other CLI,
+// where it could just as well SUBMIT, splitting one prompt into several. So only claude; the rest
+// keep the paste. An agent joins once someone has measured what its composer does with M-Enter.
+export const TYPED_INPUT_CAPABLE = ['claude'] as const
 // Agents whose transcript CLAUDE's own resolver can locate and parse — the gate for everything that
 // goes through `resolveTranscript` (the find bar's index, the meter's mount-time rehydration).
 //
@@ -332,6 +339,13 @@ export const CLAUDE_TRANSCRIPT_READABLE = ['claude'] as const
 // claude's screen layout (MEASURED on 2.1.283); another CLI's layout would read as a permanent
 // dialog and lock its chat view, so each agent needs its own measured reader.
 export const SCREEN_DIALOG_READABLE = ['claude'] as const
+// Agents whose CLI QUEUES a prompt submitted while a turn is running, instead of treating it as
+// input to whatever is on screen. The chat view (⌘M) sends into the pane exactly as typing would, so
+// only for these may it send while the agent is `working`. MEASURED for claude (2.1.281, 2026-09-23):
+// a prompt submitted mid-turn (pasted or typed) shows "Press up to edit queued messages" and is
+// delivered at the next tool boundary of the SAME turn (a `queued_command` transcript attachment, not
+// a new user turn). Every other chat-capable agent is unmeasured and keeps "wait for the reply".
+export const INPUT_QUEUE_CAPABLE = ['claude'] as const
 // Agents whose native transcript we can read + render for cross-agent transfer.
 export const TRANSFER_SOURCE_CAPABLE = ['claude', 'codex', 'gemini', 'grok'] as const
 // Agents whose hooks announce that a session ENDED — i.e. whose orderly `/exit` we will hear about.
@@ -544,7 +558,9 @@ export const canContextLink = (id: AgentId): boolean => includes(CONTEXT_LINK_CA
 export const hasUsage = (id: AgentId): boolean => includes(USAGE_CAPABLE, id)
 export const canChat = (id: AgentId): boolean => includes(CHAT_CAPABLE, id)
 export const chatReadsLocalOnly = (id: AgentId): boolean => includes(CHAT_LOCAL_ONLY, id)
+export const typesChatInput = (id: AgentId): boolean => includes(TYPED_INPUT_CAPABLE, id)
 export const readsScreenDialogs = (id: AgentId): boolean => includes(SCREEN_DIALOG_READABLE, id)
+export const queuesInputWhileWorking = (id: AgentId): boolean => includes(INPUT_QUEUE_CAPABLE, id)
 /** Can CLAUDE's transcript resolver locate and parse this agent's conversation? Never widen this
  *  to mean "can we read this agent" — see CLAUDE_TRANSCRIPT_READABLE. */
 export const readsClaudeShapedTranscript = (id: AgentId): boolean =>

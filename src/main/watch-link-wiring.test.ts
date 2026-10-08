@@ -50,11 +50,15 @@ describe('live-link wiring', () => {
     expect(s).toMatch(/workspaceReady: \(\) => bootWorkspaceLoad/)
     expect(s).toMatch(/entitlement: getStoredEntitlement/)
     expect(s).toMatch(/initLicense\(\(\) => watchLinks\?\.onEntitlementChanged\(\)\)/)
-    // A node of an SSH project is watched on its host, or not at all.
-    const remote = blockAfter(s, 'pty: createWatchPty(ptyManager,', '    ')
-    expect(remote).toMatch(/workspaceStore\.sshProjectIdForNode\(nodeId\)/)
-    expect(remote).toMatch(/requireRemote: true/)
-    expect(remote).toMatch(/sshProjectManager\?\.refForProject\(projectId\)/)
+    // A node in a HOST's tmux is watched on its host, or not at all — an SSH project's node AND a
+    // remote-tmux node in a local project (final review, Minor 4): core's ONE rule, fed the shell's own
+    // records — the SSH project, every persisted copy's binding with its project's server, the masters.
+    expect(s).toMatch(/pty: createWatchPty\(ptyManager, watchRemote\)/)
+    expect(s).toMatch(
+      /const watchRemote = \(nodeId: string\): WatchRemote =>\s*watchRemoteFor\(nodeId, watchRemoteRecords\(workspaceStore, \(connectionId\) => sshProjectManager\?\.refForProject\(connectionId\)\)\)/
+    )
+    // Control support asks the same rule: a node in a host's tmux is not decided by local Zellij.
+    expect(s).toMatch(/controlSupport: \(nodeId\) => \(watchRemote\(nodeId\)\.requireRemote \? 'ok' : ptyManager\.nodeControlSupport\(nodeId\)\)/)
     // The secret is sealed through the keychain seam.
     expect(s).toMatch(/seal: corePlatform\.sealSecret\?\.bind\(corePlatform\)/)
     expect(s).toMatch(/unseal: corePlatform\.unsealSecret\?\.bind\(corePlatform\)/)

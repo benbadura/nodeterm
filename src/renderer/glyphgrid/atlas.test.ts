@@ -53,6 +53,20 @@ describe('GlyphAtlas', () => {
     expect(r.calls).toHaveLength(1)
   })
 
+  it('a struck glyph is its own slot, and a struck space is drawn rather than left blank', () => {
+    const r = fakeRasterizer()
+    const atlas = new GlyphAtlas(r, 100)
+
+    const plain = atlas.glyphFor(0x41, false, false, FG, BG)
+    const struck = atlas.glyphFor(0x41, false, false, FG, BG, 'whole', false, true)
+    const underlined = atlas.glyphFor(0x41, false, false, FG, BG, 'whole', true, false)
+    const struckSpace = atlas.glyphFor(0x20, false, false, FG, BG, 'whole', false, true)
+
+    expect(new Set([plain, struck, underlined]).size).toBe(3)
+    expect(struckSpace).not.toBe(0)
+    expect(r.calls).toHaveLength(4)
+  })
+
   it('same key is cached (one rasterization, stable slot); styles are distinct keys', () => {
     const r = fakeRasterizer()
     const atlas = new GlyphAtlas(r, 100)
@@ -545,11 +559,20 @@ describe('GlyphAtlas', () => {
       atlas.glyphFor(0x20, false, false, FG, BG) // the blank slot is never an allocation
       atlas.glyphFor(0x78, false, false, FG, BG, 'wide-right') // …and so is the other half
       expect(seen).toEqual([
-        { slot: 1, code: 0x78, bold: false, italic: false, x: 16, y: 2, fg: FG, bg: BG, part: 'whole' as const, underline: false },
-        { slot: 2, code: 0x78, bold: true, italic: false, x: 30, y: 2, fg: FG, bg: BG, part: 'whole' as const, underline: false },
-        { slot: 3, code: 0x78, bold: false, italic: false, x: 44, y: 2, fg: FG + 1, bg: BG, part: 'whole' as const, underline: false },
-        { slot: 4, code: 0x78, bold: false, italic: false, x: 58, y: 2, fg: FG, bg: BG, part: 'wide-right' as const, underline: false }
+        { slot: 1, code: 0x78, bold: false, italic: false, x: 16, y: 2, fg: FG, bg: BG, part: 'whole' as const, underline: false, strikethrough: false },
+        { slot: 2, code: 0x78, bold: true, italic: false, x: 30, y: 2, fg: FG, bg: BG, part: 'whole' as const, underline: false, strikethrough: false },
+        { slot: 3, code: 0x78, bold: false, italic: false, x: 44, y: 2, fg: FG + 1, bg: BG, part: 'whole' as const, underline: false, strikethrough: false },
+        { slot: 4, code: 0x78, bold: false, italic: false, x: 58, y: 2, fg: FG, bg: BG, part: 'wide-right' as const, underline: false, strikethrough: false }
       ])
+    })
+
+    it('reports a struck slot as struck', () => {
+      const seen: GlyphSlotAllocation[] = []
+      const atlas = new GlyphAtlas(fakeRasterizer(10, 20), 100, (i) => seen.push(i))
+
+      atlas.glyphFor(0x78, false, false, FG, BG, 'whole', false, true)
+
+      expect(seen.map((a) => a.strikethrough)).toEqual([true])
     })
 
     it('a throwing tap costs the log line, not the glyph', () => {

@@ -79,6 +79,16 @@ describe('licenseSentence — sources that have no key and no device count', () 
     expect(s).not.toContain('get in touch')
   })
 
+  it('says a Google Play subscription bridged Pro here, mirroring the App Store sentence', () => {
+    const s = licenseSentence({ key: null, used: 0, seats: 0, source: 'google', error: null })
+    expect(s).toBe(
+      'Pro on this computer comes from the Google Play subscription on your paired phone, so there is no license key or device count to show here. That subscription is managed by Google, not by nodeterm: to see when it renews or to cancel it, open the Play Store on that phone and go to Payments & subscriptions → Subscriptions.'
+    )
+    expect(s).not.toContain('0')
+    expect(s).not.toContain('get in touch')
+    expect(s).not.toContain('App Store')
+  })
+
   it('says plainly that a `free` source is not backed by a key, inventing no origin story', () => {
     const s = licenseSentence({ key: null, used: 0, seats: 0, source: 'free', error: null })
     expect(s).toBe('Pro on this device is not backed by a license key.')
@@ -201,6 +211,9 @@ describe('canReleaseDevices', () => {
       false
     )
     expect(canReleaseDevices({ key: null, used: 0, seats: 0, source: 'free', error: null })).toBe(
+      false
+    )
+    expect(canReleaseDevices({ key: null, used: 0, seats: 0, source: 'google', error: null })).toBe(
       false
     )
   })

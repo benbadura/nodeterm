@@ -66,7 +66,7 @@ function start(name: string, script: string, ready: string, cols = 30, rows = 4)
   tmux(['-L', SOCKET, '-f', '/dev/null', 'new-session', '-d', '-s', name, '-x', String(cols), '-y', String(rows), script])
   sessions.push(name)
   for (let i = 0; i < 100; i++) {
-    // Polled with the literal spelling, not `exactPaneTarget`: a broken target must fail the test
+    // Polled with the literal spelling, not `capturePaneTarget`: a broken target must fail the test
     // that is about it, not this setup.
     if (tmux(['-L', SOCKET, 'capture-pane', '-p', '-t', `=${name}:`]).includes(ready)) return
     sleepMs(20)

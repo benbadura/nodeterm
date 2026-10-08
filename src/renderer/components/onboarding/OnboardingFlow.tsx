@@ -11,7 +11,7 @@ import {
   dictationBinding,
   effectiveBindings
 } from '../../lib/keybindingOverrides'
-import { IOS_APP_STORE_URL } from '../../lib/links'
+import { mobileStoreLinks, mobileStoreNames } from '../../lib/links'
 import { useSettings } from '../../state/settings'
 import { useEntitlement } from '../../state/entitlement'
 import { Switch } from '@renderer/ui/Switch'
@@ -567,16 +567,19 @@ export function OnboardingFlow({ onClose }: { onClose: () => void }) {
                   terminal from anywhere.
                 </p>
                 <p>
-                  Grab it from the App Store, then pair in seconds: Settings → Phone (or the
+                  Grab it from {mobileStoreNames()}, then pair in seconds: Settings → Phone (or the
                   phone button top-right) shows a QR — scan it and you're in.
                 </p>
                 <div className="onb-notify-actions">
-                  <button
-                    className="onb-btn onb-btn--primary"
-                    onClick={() => window.nodeTerminal.shell.openExternal(IOS_APP_STORE_URL)}
-                  >
-                    Get the iOS app
-                  </button>
+                  {mobileStoreLinks().map((store) => (
+                    <button
+                      key={store.id}
+                      className="onb-btn onb-btn--primary"
+                      onClick={() => window.nodeTerminal.shell.openExternal(store.url)}
+                    >
+                      {store.label}
+                    </button>
+                  ))}
                 </div>
               </>
             )}

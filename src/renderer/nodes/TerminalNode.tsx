@@ -224,10 +224,11 @@ import {
   useMdModeFocus
 } from '../terminal/useMdModeFocus'
 import { canvasOwnsMarkdownChord } from '../lib/markdownChord'
-import { IconChat, IconChevronDown, IconChevronRight, IconClose, IconEye, IconEyeOff, IconGrid, IconMic, IconMoveTo, IconPlay, IconReload, IconSearch, IconSparkle } from '../components/icons'
+import { IconBroadcast, IconChat, IconChevronDown, IconChevronRight, IconClose, IconEye, IconEyeOff, IconGrid, IconMic, IconMoveTo, IconPlay, IconReload, IconSearch, IconSparkle } from '../components/icons'
 import { NodeLabels } from '../components/kanban/NodeLabels'
 import { MdViewHintButton } from '../components/MdViewHintButton'
 import { mdViewHint } from '../lib/mdViewHint'
+import { transcriptSessionFor } from '../lib/transcriptSession'
 import { Tooltip } from '../components/Tooltip'
 import { useTerminalSearch } from '../terminal/useTerminalSearch'
 import { useCopyFeedback } from '../terminal/useCopyFeedback'
@@ -273,10 +274,13 @@ import { isGlobalKanbanOpen, isKanbanOpen, isOmniKanbanEnabled, openIssueOnBoard
 import { useSshConn } from '../state/sshConn'
 import { useWorktrees } from '../state/worktrees'
 import { isRemoteSessionNode } from '@shared/worktree'
+import { RunBar } from './RunBar'
 import { useSession, useActiveSessionPresence } from '../session/session'
 import { isHostedReadOnly, useHostedReadOnly } from '../state/hostedTeams'
 import { isBrowserRuntime } from '../bridge/runtime'
-import { agentLaunchOverride, COLLAPSED_HEIGHT, type CanvasNode } from '../state/workspace'
+import { liveLinkUnavailable } from '../lib/liveLinkEntry'
+import { useWatchLinks } from '../state/watchLinks'
+import { agentLaunchOverride, toggleCollapsed, type CanvasNode } from '../state/workspace'
 import { NodeColorSwatches } from '../components/NodeColorSwatches'
 import { AccountChip, useAccountChip } from '../components/AccountChip'
 import { IssueRefChip } from '../components/IssueRefChip'
@@ -1402,6 +1406,15 @@ export function TerminalNode({
   // mounted node right away instead of waiting for a remount. Search, Close and the worktree-move
   // button are absent from `isHidden`'s inventory and stay put whatever the list says.
   const hiddenHeaderButtons = useSettings((s) => s.settings.hiddenHeaderButtons)
+  // The header's "Share live link" button: the same availability rule every opener checks before the
+  // Pro gate (lib/liveLinkEntry). A primitive selector — the header must not re-render on every
+  // watch-link state push.
+  const activeLiveLinks = useWatchLinks((s) => s.links.length)
+  const shareLinkWhy = liveLinkUnavailable({
+    serverEdition: isBrowserRuntime(),
+    source: session.source,
+    activeLinks: activeLiveLinks
+  })
   const bodyRef = useRef<HTMLDivElement>(null)
   const middleClickPaste = useSettings((st) => st.settings.terminalMiddleClickPaste)
   // Chromium pastes the X PRIMARY selection into xterm's hidden textarea on middle click — a path
@@ -2219,13 +2232,21 @@ export function TerminalNode({
         .map((depId) => ((getNode(depId) as CanvasNode | undefined)?.data.title as string) || depId)
         .join(', ')
     : ''
+  // Which session this node's transcript READERS look at: the hook-confirmed id, else the id the
+  // node was launched with (`data.agentSessionId`) — ONE rule shared with the kanban card modal
+  // (lib/transcriptSession.ts). A fallback reads strictly by id and says so in the chat panel.
+  const transcript = transcriptSessionFor({
+    live: status?.sessionId,
+    persisted: data.agentSessionId,
+    cwd: (data.cwd as string) || undefined
+  })
   // Use the chat panel only for a chat-capable agent with a known session; otherwise the
   // markdown-of-output view (computed in the capture effect below) is shown as a fallback.
   // `chatAvailable` is split out because the label-row ⌘M hint names the face BEFORE it is open:
   // one value feeds both, so the hint cannot say "Chat view" while the chord opens markdown.
-  const chatAvailable = showChat && !!status?.sessionId
+  const chatAvailable = showChat && !!transcript.sessionId
   const useChat = mdMode && chatAvailable
-  useContextEnsure(session.api.context, id, agentId, status?.sessionId, (data.cwd as string) || undefined, accountForReads)
+  useContextEnsure(session.api.context, id, agentId, transcript.sessionId, transcript.cwd, accountForReads)
   const updateNodeInternals = useUpdateNodeInternals()
 
   const [searchOpen, setSearchOpen] = useState(false)
@@ -5523,22 +5544,7 @@ export function TerminalNode({
   // the node whose own membership flipped, and every OTHER terminal is the one being covered.
   useEffect(() => subscribeFocusedNode(() => applyFitRef.current?.()), [])
 
-  const toggleCollapse = () =>
-    setNodes((ns) =>
-      ns.map((n) => {
-        if (n.id !== id) return n
-        const next = !n.data.collapsed
-        const expandedHeight =
-          (n.data.expandedHeight as number) ?? n.measured?.height ?? (n.height as number) ?? 300
-        const height = next ? COLLAPSED_HEIGHT : expandedHeight
-        return {
-          ...n,
-          height,
-          style: { ...n.style, height },
-          data: { ...n.data, collapsed: next, expandedHeight }
-        }
-      })
-    )
+  const toggleCollapse = () => setNodes((ns) => toggleCollapsed(ns as CanvasNode[], [id]))
 
   // ---- hover guard: dwell before entering the terminal ----
   /**
@@ -5981,7 +5987,8 @@ export function TerminalNode({
       onMouseEnter={() => (hoveredRef.current = true)}
       onMouseLeave={() => (hoveredRef.current = false)}
     >
-      <NodeResizer minWidth={NODE_MIN_SIZES.terminal.width} minHeight={NODE_MIN_SIZES.terminal.height} isVisible={selected && !collapsed} color="#0a84ff" />
+      {/* Paint only: the old resize box in its old place (see .nt-resize-ghost in styles.css). */}
+      <NodeResizer isVisible={selected && !collapsed && !focused} color="#0a84ff" lineClassName="nt-resize-ghost" handleClassName="nt-resize-ghost" />
       {/* Invisible source handle so edges to subagent/loop nodes can attach. */}
       <Handle
         id="flow-out"
@@ -5998,32 +6005,6 @@ export function TerminalNode({
         isConnectable={false}
         style={{ opacity: 0, pointerEvents: 'none', top: 0 }}
       />
-      {/* Link handles (all terminal nodes): drag right→left to link. Between two context-capable
-          (Claude) nodes this shares context; from a sticky note it attaches the note as context.
-          Vertically centered on the side edges; raised above the body so they're never buried. */}
-      <Handle
-        id="link-out"
-        type="source"
-        position={Position.Right}
-        className="bridge-handle bridge-handle--out"
-        data-tip={
-          contextLinkCapable
-            ? "Link out — drag to another Claude node so they can read each other's context"
-            : 'Link out — drag to a sticky note to attach it as context'
-        }
-      />
-      <Handle
-        id="link-in"
-        type="target"
-        position={Position.Left}
-        className="bridge-handle bridge-handle--in"
-        data-tip={
-          contextLinkCapable
-            ? 'Link in — drop a link here to share context with this Claude session'
-            : 'Link in — drop a sticky note link here to attach it as context'
-        }
-      />
-
       <div className="term-node__header">
         <Tooltip label={collapsed ? 'Expand' : 'Collapse'}>
           <button
@@ -6178,7 +6159,7 @@ export function TerminalNode({
             SSH {(data.ssh as SshConnection).user}@{(data.ssh as SshConnection).host}
           </span>
         ) : null}
-        {showUsage && <ContextMeter sessionId={status?.sessionId ?? null} nodeId={id} remote={!!remoteSession} agentId={agentId} />}
+        {showUsage && <ContextMeter sessionId={transcript.sessionId ?? null} fromLaunchId={transcript.fallback} nodeId={id} remote={!!remoteSession} agentId={agentId} />}
         {/* Who else is in this node. Subscribes to presence itself — see PresenceChips. */}
         <PresenceChips nodeId={id} />
         {/* This terminal is broadcast by a live link — never hideable (live-link.guard.test.ts).
@@ -6472,6 +6453,28 @@ export function TerminalNode({
             </button>
           </Tooltip>
         )}
+        {!isHidden('share-link', hiddenHeaderButtons) && (
+          <Tooltip label={shareLinkWhy ?? 'Share live link'}>
+            {/* The node menu's "Share live link…" row as a header button. Canvas opens the dialog
+                (`nodeterm:live-link`) after re-checking availability and the Pro gate; a node only
+                ever lives in the active project's canvas, so that is the project it names. */}
+            <button
+              className="term-node__share nodrag"
+              aria-label="Share live link"
+              disabled={!!shareLinkWhy}
+              onClick={(e) => {
+                e.stopPropagation()
+                window.dispatchEvent(
+                  new CustomEvent('nodeterm:live-link', {
+                    detail: { nodeId: id, title: data.title, projectId: owningProjectId() }
+                  })
+                )
+              }}
+            >
+              <IconBroadcast />
+            </button>
+          </Tooltip>
+        )}
         {!isHidden('hide-fanout', hiddenHeaderButtons) && (
           <Tooltip label={hideFanout ? 'Show cards & connections' : 'Hide cards & connections'}>
             <button
@@ -6552,6 +6555,13 @@ export function TerminalNode({
             )
           }
         />
+      )}
+
+      {/* Run node: launch.json run controls over this terminal (see RunBar). Local
+          sessions only — a relay tab's or an SSH node's terminal runs on another machine, whose
+          checkouts and devices this one cannot see. */}
+      {data.runConfig && session.source === 'local' && !data.ssh && !data.sshRemoteTmux && (
+        <RunBar nodeId={id} config={data.runConfig} autoStart={!!data.runAutoStart} />
       )}
 
       {/* Body always mounted (keeps xterm alive); hidden via CSS when collapsed. */}
@@ -6803,7 +6813,8 @@ export function TerminalNode({
             <Suspense fallback={<ChatPanelFallback />}>
               <ChatPanel
                 nodeId={id}
-                sessionId={status?.sessionId}
+                sessionId={transcript.sessionId}
+                sessionFallback={transcript.fallback}
                 cwd={data.cwd as string | undefined}
                 // A READER (the ⌘M transcript view) takes the account the session actually RUNS
                 // as, never the creation-time one, so a plain terminal launched under
@@ -6844,6 +6855,40 @@ export function TerminalNode({
         <NodeCommentsPanel id={id} />
       </div>
     )}
+    {/* Link handles (all terminal nodes): drag right→left to link. Between two context-capable
+        (Claude) nodes this shares context; from a sticky note it attaches the note as context.
+        Vertically centered on the side edges; raised above the body so they're never buried.
+        Siblings AFTER the root, like the resizer: inside a glass root (backdrop-filter = its own
+        stacking context) their z-index only counted inside it, so the resize controls covered
+        them and the outer half was clipped. */}
+    <Handle
+      id="link-out"
+      type="source"
+      position={Position.Right}
+      className="bridge-handle bridge-handle--out"
+      data-tip={
+        contextLinkCapable
+          ? "Link out — drag to another Claude node so they can read each other's context"
+          : 'Link out — drag to a sticky note to attach it as context'
+      }
+    />
+    <Handle
+      id="link-in"
+      type="target"
+      position={Position.Left}
+      className="bridge-handle bridge-handle--in"
+      data-tip={
+        contextLinkCapable
+          ? 'Link in — drop a link here to share context with this Claude session'
+          : 'Link in — drop a sticky note link here to attach it as context'
+      }
+    />
+    {/* Sibling of the root, not a child: under Liquid Glass the root has a backdrop-filter,
+        which makes it the containing block for these absolute edges, so they were clipped and
+        covered (only the top edge stayed grabbable). Out here they sit on the node wrapper.
+        AFTER the root, never before it: focus mode reparents the root out of this wrapper, and
+        React inserting a control "before the root" would then throw NotFoundError. */}
+    <NodeResizer minWidth={NODE_MIN_SIZES.terminal.width} minHeight={NODE_MIN_SIZES.terminal.height} isVisible={selected && !collapsed && !focused} color="#0a84ff" />
     </>
   )
 }

@@ -14,7 +14,7 @@ describe('ProCompare', () => {
   const html = renderToStaticMarkup(<ProCompare />)
 
   it('lists live links under Pro', () => {
-    expect(column(html, 'Pro<')).toContain('Live read-only links to a terminal — viewers need nothing installed')
+    expect(column(html, 'Pro<')).toContain('Live links to a terminal: watch, chat, or let people type — viewers need nothing installed')
   })
 
   it('leaves the free Core list exactly as it was', () => {

@@ -4,7 +4,8 @@ export function Switch({
   checked,
   onChange,
   ariaLabel,
-  disabled = false
+  disabled = false,
+  pending = false
 }: {
   checked: boolean
   onChange: (v: boolean) => void
@@ -12,6 +13,9 @@ export function Switch({
   /** Renders inert (native `disabled` + aria): for a switch whose subject does not currently
    *  exist, e.g. a per-project capability while no project is open. */
   disabled?: boolean
+  /** A change is in flight: announced as disabled and busy, clicks ignored — but NOT natively
+   *  disabled, so a switch that has the keyboard focus keeps it (a disabled button drops it). */
+  pending?: boolean
 }): React.JSX.Element {
   return (
     <button
@@ -20,11 +24,14 @@ export function Switch({
       aria-checked={checked}
       aria-label={ariaLabel}
       disabled={disabled}
-      aria-disabled={disabled || undefined}
-      onClick={() => onChange(!checked)}
+      aria-disabled={disabled || pending || undefined}
+      aria-busy={pending || undefined}
+      onClick={() => {
+        if (!pending) onChange(!checked)
+      }}
       className={cn(
         'relative box-border block h-[24px] w-[42px] shrink-0 rounded-full border-0 p-0 outline-none transition-colors duration-200',
-        disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
+        disabled ? 'cursor-not-allowed opacity-50' : pending ? 'cursor-progress opacity-70' : 'cursor-pointer',
         checked ? 'bg-accent' : 'bg-fill'
       )}
     >

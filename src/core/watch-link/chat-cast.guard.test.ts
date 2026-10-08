@@ -1,6 +1,6 @@
 // A viewer's chat reaches the owner ONLY through a live link's own relay session: the cast arrives on
 // that session's `PeerAttach.cast`, which the link host answers (link-host.ts), after the watcher
-// policy admitted it for a Commenter link only (watcher-policy.ts). Nothing registers `watch:chat` on
+// policy admitted it for a Commenter or Control link only (watcher-policy.ts). Nothing registers `watch:chat` on
 // a platform. If something did, a hosted Editor or a Server Edition browser tab — clients of the same
 // core, whose casts go to the platform — could post "viewer" chat into the owner's popover, and a
 // Viewer link's refusal would no longer be the only door.
@@ -20,7 +20,7 @@ const MENTIONS = /WATCH_CHAT_CAST|WATCH_EVENT\s*\.\s*chat\b|WATCH_EVENT\s*\[\s*[
 const ALLOWED: Record<string, string> = {
   'shared/watch-link/protocol.ts': 'defines the cast and the event',
   'shared/watch-link/client.ts': "the viewer's browser client sends the cast",
-  'core/watch-link/watcher-policy.ts': 'admits the cast for a Commenter link only',
+  'core/watch-link/watcher-policy.ts': 'admits the cast for a Commenter or Control link only',
   'core/watch-link/link-host.ts': "answers the cast on the link's own relay session, and sends the event"
 }
 

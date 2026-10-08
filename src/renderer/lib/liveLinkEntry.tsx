@@ -104,6 +104,53 @@ export function liveLinkNodeFor(o: {
   return n ? { id: n.id, kind: n.kind, title: n.title } : null
 }
 
+/** An SSH binding read off a node or a project: only the two fields the dialog names. */
+export interface LiveLinkSshTarget {
+  user: string
+  host: string
+}
+/** A binding read from hand-editable, git-shared data: a non-empty string host, else nothing. */
+function sshTargetOf(v: unknown): LiveLinkSshTarget | null {
+  if (typeof v !== 'object' || v === null) return null
+  const { host, user } = v as { host?: unknown; user?: unknown }
+  if (typeof host !== 'string' || !host) return null
+  return { user: typeof user === 'string' ? user : '', host }
+}
+
+/**
+ * Where a node runs, for the create dialog — the NODE's own SSH binding first, then its project's:
+ *  - `remoteNode` (R63): the node runs in a HOST's tmux, which gives a viewer a client of its own.
+ *    An SSH project's node, and a node attached to an SSH host in a local project (`sshRemoteTmux`).
+ *    NOT a standalone ssh terminal node: `ssh` is a LOCAL pty program there, in this machine's tmux.
+ *  - `sshTarget`: the machine a controller's commands would run on (the Control warning) — the
+ *    remote shell of every one of those, the standalone ssh node included. On its project's own host
+ *    a remote-tmux node runs as the PROJECT's user: its `ssh` is a snapshot of whoever created it,
+ *    and the project's binding is how THIS user reaches that host (`sshConnectionIdForProject`).
+ *    Null: this machine.
+ * The node comes from the live canvas for the active project, else from the stored copy (R49).
+ */
+export function liveLinkRemoteFacts(o: {
+  nodeId: string
+  projectId: string
+  activeProjectId: string | null
+  live: readonly { id: string; data?: unknown }[]
+  stored: readonly { id: string; ssh?: unknown; sshRemoteTmux?: unknown }[] | undefined
+  projectSsh: unknown
+}): { remoteNode: boolean; sshTarget: LiveLinkSshTarget | null } {
+  let node: { ssh?: unknown; sshRemoteTmux?: unknown } | undefined
+  if (o.projectId === o.activeProjectId) {
+    const data = o.live.find((x) => x.id === o.nodeId)?.data
+    node = typeof data === 'object' && data !== null ? (data as { ssh?: unknown; sshRemoteTmux?: unknown }) : undefined
+  } else {
+    node = Array.isArray(o.stored) ? o.stored.find((x) => x?.id === o.nodeId) : undefined
+  }
+  const project = sshTargetOf(o.projectSsh)
+  const own = sshTargetOf(node?.ssh)
+  const remoteTmux = !!own && node?.sshRemoteTmux === true
+  const sshTarget = own ? (remoteTmux && project?.host === own.host ? project : own) : project
+  return { remoteNode: !!project || remoteTmux, sshTarget }
+}
+
 /**
  * The "Share live link…" row for one node — the ONE builder behind the canvas node menu, the
  * sessions-sidebar row (active and non-active projects) and both boards' card menus. Terminal nodes
@@ -236,9 +283,10 @@ export async function stopAllLiveLinks(
   }
 }
 
-/** The palette's live-link entries. "Stop all" appears wherever the owner could have links to stop
- *  (`showsStopAll`: a link listed here, OR a Pro license — its links on other machines are invisible
- *  here), and its `run` opens the confirm — it never stops anything itself. */
+/** The palette's live-link entries. "Live chat" (the drawer) while any link is live here. "Stop all"
+ *  appears wherever the owner could have links to stop (`showsStopAll`: a link listed here, OR a Pro
+ *  license — its links on other machines are invisible here), and its `run` opens the confirm — it
+ *  never stops anything itself. */
 export function liveLinkCommands(o: {
   activeLinks: number
   /** Pro is active on this machine (`useEntitlement` `isPremium`). */
@@ -246,7 +294,10 @@ export function liveLinkCommands(o: {
   /** `isBrowserRuntime()`: no license layer there (R43), so nothing to stop. */
   serverEdition: boolean
   icon: ReactNode
+  chatIcon: ReactNode
   manage: () => void
+  /** Open the Live chat drawer (on the link picked last). */
+  openChat: () => void
   confirmStopAll: () => void
 }): Command[] {
   return [
@@ -257,6 +308,18 @@ export function liveLinkCommands(o: {
       icon: o.icon,
       run: o.manage
     },
+    ...(o.activeLinks > 0
+      ? [
+          {
+            id: 'live-chat',
+            label: 'Live chat',
+            hint: 'live link viewers messages reply people kick control',
+            section: 'View',
+            icon: o.chatIcon,
+            run: o.openChat
+          }
+        ]
+      : []),
     ...(showsStopAll({ serverEdition: o.serverEdition, entitled: o.entitled, activeLinks: o.activeLinks })
       ? [
           {

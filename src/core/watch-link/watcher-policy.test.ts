@@ -1,8 +1,15 @@
 import { describe, it, expect } from 'vitest'
 import { IPC } from '../../shared/ipc'
 import { encodePtyData, decodePtyData } from '../../shared/rpc'
-import { WATCH_CHAT_CAST, WATCH_EVENT } from '../../shared/watch-link/protocol'
-import { watcherAccess, watcherEventAllowed, wrapWatcherSink, WATCHER_BUFFER_LIMIT } from './watcher-policy'
+import {
+  WATCH_CHAT_CAST,
+  WATCH_EVENT,
+  WATCH_INPUT_CAST,
+  WATCH_RELEASE_CAST,
+  WATCH_UNLOCK_CAST,
+  type WatchLinkRole
+} from '../../shared/watch-link/protocol'
+import { watcherAccess, watcherEventAllowed, wrapWatcherSink, WATCHER_BUFFER_LIMIT, WATCHER_REFUSAL } from './watcher-policy'
 import { createStreamFilter, type StreamFilter } from './stream-filter'
 import { createTokenBucket } from './token-bucket'
 import type { UiSink } from '../ui-sink-registry'
@@ -13,10 +20,12 @@ const channelValues = (): string[] =>
 const channelFactories = (): Array<(id: string) => string> =>
   (Object.values(IPC) as unknown[]).filter((v): v is (id: string) => string => typeof v === 'function')
 
+const ROLES: readonly WatchLinkRole[] = ['viewer', 'commenter', 'controller']
+
 describe('watcherAccess', () => {
-  it('refuses every IPC channel as a request and as a cast, for both roles', () => {
+  it('refuses every IPC channel as a request and as a cast, for every role', () => {
     for (const ch of channelValues()) {
-      for (const role of ['viewer', 'commenter'] as const) {
+      for (const role of ROLES) {
         expect(watcherAccess('req', ch, role).allow).toBe(false)
         expect(watcherAccess('cast', ch, role).allow).toBe(false)
       }
@@ -26,6 +35,35 @@ describe('watcherAccess', () => {
     expect(watcherAccess('cast', WATCH_CHAT_CAST, 'commenter')).toEqual({ allow: true })
     expect(watcherAccess('cast', WATCH_CHAT_CAST, 'viewer').allow).toBe(false)
     expect(watcherAccess('req', WATCH_CHAT_CAST, 'commenter').allow).toBe(false)
+  })
+
+  // The whole inbound surface, three roles by every viewer method there is (plus one that is not),
+  // as a request and as a cast. Exactly these are admitted; everything else is the same refusal.
+  it('admits exactly: chat for commenter and controller, unlock / input / release for controller, all as casts', () => {
+    const admitted = new Set([
+      `cast ${WATCH_CHAT_CAST} commenter`,
+      `cast ${WATCH_CHAT_CAST} controller`,
+      `cast ${WATCH_UNLOCK_CAST} controller`,
+      `cast ${WATCH_INPUT_CAST} controller`,
+      `cast ${WATCH_RELEASE_CAST} controller`
+    ])
+    const methods = [WATCH_CHAT_CAST, WATCH_UNLOCK_CAST, WATCH_INPUT_CAST, WATCH_RELEASE_CAST, 'watch:anything']
+    let allowed = 0
+    for (const kind of ['req', 'cast'] as const) {
+      for (const method of methods) {
+        for (const role of ROLES) {
+          const key = `${kind} ${method} ${role}`
+          const d = watcherAccess(kind, method, role)
+          if (admitted.has(key)) {
+            expect(d, key).toEqual({ allow: true })
+            allowed++
+          } else {
+            expect(d, key).toEqual({ allow: false, message: WATCHER_REFUSAL })
+          }
+        }
+      }
+    }
+    expect(allowed).toBe(admitted.size)
   })
 })
 

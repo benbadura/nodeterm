@@ -8,6 +8,7 @@ import {
   sentinelIntact,
   shrinkEligible,
   shrinkToFit,
+  strikethroughThickness,
   underlineThickness
 } from './raster'
 
@@ -1078,6 +1079,65 @@ describe('underline', () => {
     active = underlined
     createCanvasRasterizer(FONT, 256)!.draw(0x41, false, false, INK_X, INK_Y, FG, BG, 'whole', true)
     expect(underlined.ops.length).toBeGreaterThan(plain.ops.length)
+  })
+})
+
+describe('strikethrough', () => {
+  it('draws a rule across the MIDDLE of the cell, spanning the WHOLE-TEXEL box', () => {
+    const stub = stubCanvas()
+    active = stub
+    const r = createCanvasRasterizer(FONT, 256)!
+    stub.ops.length = 0
+
+    r.draw(0x41, false, false, INK_X, INK_Y, FG, BG, 'whole', false, true)
+
+    const rule = stub.ops.filter((o) => o.kind === 'fillRect').at(-1)!
+    expect(rule.args[0]).toBe(INK_X)
+    expect(rule.args[2]).toBe(COLS_W)
+    // Row 9 of a 20-row cell, 1px thick: the row xterm's WebGL stroke paints (centred on 10 - 0.5).
+    expect(rule.args[1]).toBe(INK_Y + 9)
+    expect(rule.args[3]).toBe(1)
+    expect(rule.fill).toBe(FG_CSS)
+  })
+
+  it('draws NOTHING extra when the cell is not struck', () => {
+    const plain = stubCanvas()
+    active = plain
+    createCanvasRasterizer(FONT, 256)!.draw(0x41, false, false, INK_X, INK_Y, FG, BG)
+    const struck = stubCanvas()
+    active = struck
+
+    createCanvasRasterizer(FONT, 256)!.draw(0x41, false, false, INK_X, INK_Y, FG, BG, 'whole', false, true)
+
+    expect(struck.ops.length).toBeGreaterThan(plain.ops.length)
+  })
+
+  it('draws BOTH rules when a cell is underlined and struck', () => {
+    const stub = stubCanvas()
+    active = stub
+    const r = createCanvasRasterizer(FONT, 256)!
+    stub.ops.length = 0
+
+    r.draw(0x41, false, false, INK_X, INK_Y, FG, BG, 'whole', true, true)
+
+    const rules = stub.ops.filter((o) => o.kind === 'fillRect' && o.args[2] === COLS_W && o.fill === FG_CSS)
+    const ys = rules.map((o) => o.args[1])
+    expect(ys).toContain(INK_Y + COLS_H - 1)
+    expect(ys).toContain(INK_Y + 9)
+  })
+})
+
+describe('strikethroughThickness', () => {
+  it("follows xterm's WebGL rule, so the weight matches the renderer beside it", () => {
+    expect(strikethroughThickness(10)).toBe(1)
+    expect(strikethroughThickness(20)).toBe(2)
+    expect(strikethroughThickness(35)).toBe(3)
+  })
+
+  it('never rounds away to nothing', () => {
+    expect(strikethroughThickness(8)).toBe(1)
+    expect(strikethroughThickness(0)).toBe(1)
+    expect(strikethroughThickness(NaN)).toBe(1)
   })
 })
 

@@ -48,6 +48,11 @@ export interface ScopedGuestDeps {
   nodeOfSession(sessionId: string): string | undefined
   /** The shared project's LOCAL folder, or undefined (a cwd-less or SSH project). */
   projectCwd(projectId: string): string | undefined
+  /** Is the shared project an SSH project (per the index — identity, not liveness)? Its terminals
+   *  run on the remote host, so a guest's create is forced `requireRemote`: joins a live session
+   *  this process holds, never spawns a LOCAL `nt-<id>` wearing a remote node's id. Optional:
+   *  absent = not an SSH project (the Server Edition has none). */
+  projectIsRemote?(projectId: string): boolean
   /** This app's own data directory (keys, license, every project's scrollback): never reachable
    *  through a scoped guest's fs/git calls, even when the shared root contains it. */
   hostDataDir: string
@@ -238,7 +243,9 @@ const worktreeAddOrRemove: Check = (a, s) => {
  * of the shared project, in a working directory inside the project root. Rewritten, not just judged:
  *  - `sshRemote` is dropped. Its `conn.extraArgs` reach `ssh` on the host during the existence probe,
  *    and a guest never names an ssh route; a node that requires one (`requireRemote`) is then
- *    refused by the core instead of spawning locally.
+ *    refused by the core instead of spawning locally. For an SSH project `requireRemote` is SET here
+ *    rather than trusted from the guest, so a guest that omits it still cannot start a local shell
+ *    under a remote node's id (it can still join a live session this process holds).
  *  - a missing `cwd` becomes the project root (the core's default would be the host user's `$HOME`).
  *  - `ownerProjectId` may only name the shared project (it is recorded as the pane's owner, which
  *    agent messaging trusts).
@@ -250,6 +257,7 @@ const ptyCreate: Check = (a, s) => {
   if (!nodeInScope(opts.persistKey, s)) return no(NODE_OUTSIDE)
   if (opts.ownerProjectId !== undefined && opts.ownerProjectId !== s.projectId) return no(OUTSIDE)
   delete opts.sshRemote
+  if (s.deps.projectIsRemote?.(s.projectId)) opts.requireRemote = true
   const root = rootOf(s)
   if (opts.cwd === undefined || opts.cwd === null || opts.cwd === '') {
     if (root) opts.cwd = root
@@ -441,6 +449,8 @@ export const SCOPED_REFUSED: ReadonlySet<string> = new Set<string>([
   // Host settings and credentials (also host-only for every peer, shared/host-control.ts).
   IPC.settingsLoad,
   IPC.settingsSave,
+  // Agent-integration consent status: paths in the host's home (host-only, #744).
+  IPC.integrationsStatus,
   IPC.agentDiscoverModels,
   IPC.agentGatewayCredentialStatus,
   IPC.agentGatewayCredentialSave,

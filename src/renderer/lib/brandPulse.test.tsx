@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
+import * as csstree from 'css-tree'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -59,23 +60,37 @@ describe('brandPulseBackground', () => {
   // Measured, not assumed: with `url(${src})` the CSS parser rejected the declaration for ALL FOUR
   // marks (backgroundImage came back ''), because Vite inlines them as data URIs carrying literal
   // `'` and, for three of them, literal `(`/`)`. The notch strip would have shown an empty box.
+  //
+  // The grammar check runs on css-tree, the parser jsdom itself wraps, called directly. NOT
+  // `el.style.backgroundImage = …`: since jsdom 30.1 (@asamuzakjp/css-color 7) the style setter
+  // drops ANY value longer than 1024 characters, and codex's inlined mark is ~2.1 KB — so jsdom
+  // rejects it for its length, a limit Chromium (where the notch HUD actually paints) does not have.
+  const parsesAsBackgroundImage = (value: string): boolean => {
+    let ok = true
+    try {
+      const ast = csstree.parse(value, { context: 'value', onParseError: () => { ok = false } })
+      return ok && csstree.lexer.matchProperty('background-image', ast).matched !== null
+    } catch {
+      return false
+    }
+  }
+
   it('survives a real CSS parser for every mark', () => {
     for (const agentId of ['claude', 'codex', 'gemini', 'opencode', 'antigravity'] as const) {
       const plan = brandPulsePlan(agentId, 13)
       const src = plan?.kind === 'asset' ? plan.src : ''
-      const el = document.createElement('span')
-      el.style.backgroundImage = brandPulseBackground(src)
-      expect(el.style.backgroundImage.length, agentId).toBeGreaterThan(0)
+      expect(src, agentId).not.toBe('')
+      expect(parsesAsBackgroundImage(brandPulseBackground(src)), agentId).toBe(true)
     }
   })
 
   it('is what the raw form is not — proof the quoting is the load-bearing part', () => {
-    const plan = brandPulsePlan('opencode', 13)
-    const src = plan?.kind === 'asset' ? plan.src : ''
-    expect(src).toMatch(/[()]/) // the inner parens that break an unquoted url()
-    const bare = document.createElement('span')
-    bare.style.backgroundImage = `url(${src})`
-    expect(bare.style.backgroundImage).toBe('')
+    for (const agentId of ['claude', 'codex', 'gemini', 'opencode'] as const) {
+      const plan = brandPulsePlan(agentId, 13)
+      const src = plan?.kind === 'asset' ? plan.src : ''
+      expect(src, agentId).toMatch(/['()]/) // the inner quotes/parens that break an unquoted url()
+      expect(parsesAsBackgroundImage(`url(${src})`), agentId).toBe(false)
+    }
   })
 })
 

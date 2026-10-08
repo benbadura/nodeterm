@@ -38,7 +38,8 @@ const link = (nodeId: string): WatchLinkView => ({
   expiresAt: Date.now() + 3_600_000,
   url: 'u',
   status: 'live',
-  viewers: []
+  viewers: [],
+  control: null
 })
 
 let root: Root | null = null

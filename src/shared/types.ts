@@ -4,6 +4,7 @@ import type { PushWebhookMinted, PushWebhookResult, PushWebhookTokenInfo } from 
 import type { IdentitySeedEntry } from './agent-identity-seed'
 import type { PrWaitHold } from './pr-wait'
 import type { SessionBackend } from './session-backend'
+import type { AgentIntegrationsSettings } from './agent-integrations'
 // Types shared across the main, preload, and renderer processes.
 
 import { TABBAR_HEIGHT_PX } from './window-chrome-metrics'
@@ -562,6 +563,12 @@ export interface CanvasNodeState {
   sshRemoteTmux?: boolean
   /** editor-only: when true (SSH-project editors), reads/writes go to the project's remote fs via `sshFs`. */
   sshFs?: boolean
+  /**
+   * Run nodes only (a terminal node that runs a `.vscode/launch.json` configuration): folder,
+   * configuration, device, reload-on-save. Git-shared and hand-editable — read through
+   * `normalizeRunConfig` (@shared/run-config) on every load AND save.
+   */
+  runConfig?: import('./run-config').RunNodeConfig
   // sticky-only
   text?: string
   /**
@@ -2190,9 +2197,12 @@ export interface Settings {
   /** Push when an agent finishes a turn (the `done` kind). Default on. Sub-gate under
    *  `mobilePushEnabled` (the master switch). Toggle in Settings → Notifications. */
   mobilePushDone: boolean
-  /** Stream Live Activity updates (Lock Screen / Dynamic Island) to paired phones as a session's
-   *  state + activity + context% change (spec: interactive-push-live-activities). Default on.
-   *  Sub-gate under `mobilePushEnabled` (the master switch). Toggle in Settings → Notifications. */
+  /** Stream live status updates to paired phones as a session's state + activity + context%
+   *  change — an iOS Live Activity (Lock Screen / Dynamic Island) or an Android ongoing
+   *  notification (spec: interactive-push-live-activities). Default on. The KEY keeps its
+   *  iOS-era name because it is persisted in settings.json; the UI calls it "Live updates on
+   *  phone". Sub-gate under `mobilePushEnabled` (the master switch). Toggle in Settings →
+   *  Notifications. */
   mobileLiveActivities: boolean
   /** Hold phone ALERTS while you're actively at this computer, releasing them when you go idle or
    *  lock the screen (spec: presence-aware-push). Default on. Desktop-only (the Server Edition is
@@ -2261,6 +2271,11 @@ export interface Settings {
    *  strands a live session gets their canvas back without downgrading the app. Neither value ever
    *  admits a forged token. */
   hookIdentityStrict?: boolean
+  /** Agent-integration consent (issue #744, `@shared/agent-integrations`): which agents nodeterm
+   *  may integrate with by writing into their user-owned global config (status hooks, skills),
+   *  here and per SSH host. Optional and absent from DEFAULT_SETTINGS: absent = a new install that
+   *  has not been asked, which writes NOTHING. Hand-editable, so every reader sanitizes. */
+  agentIntegrations?: AgentIntegrationsSettings
   /** Machine-local waivers for the canvas-control destructive confirm dialog
    *  (@shared/control-confirm). Absent — and absent from DEFAULT_SETTINGS — means "always ask",
    *  which is the pre-feature behavior bit for bit.
@@ -2442,6 +2457,12 @@ export const DEFAULT_SETTINGS: Settings = {
 export interface SettingsApi {
   load(): Promise<Settings>
   save(settings: Settings): Promise<void>
+}
+
+/** Agent-integration consent status (issue #744). The CHOICE rides `settings.agentIntegrations`;
+ *  this only reports what the host's last reconcile did. */
+export interface IntegrationsApi {
+  status(): Promise<import('./agent-integrations').AgentIntegrationsStatus>
 }
 
 /** A downloadable whisper model plus its on-disk status, as returned by `speech.models()`. */
@@ -3781,12 +3802,13 @@ export interface LicenseStatus {
 
 /**
  * Where the entitlement behind this install came from. A verified entitlement's licenseId is NOT
- * always a keygen license id: an App Store purchase on a paired phone bridges Pro to the desktop
- * and mints `apple:<txn>`, and `free:` exists too. For those the server makes zero keygen calls
- * and answers `key: null, used: 0, seats: 0` — genuinely "device counting does not apply here",
- * which is a different fact from a failed read and from a keygen license with no devices yet.
+ * always a keygen license id: a store purchase on a paired phone bridges Pro to the desktop and
+ * mints `apple:<txn>` (App Store) or `google:<orderId>` (Google Play), and `free:` exists too. For
+ * those the server makes zero keygen calls and answers `key: null, used: 0, seats: 0` — genuinely
+ * "device counting does not apply here", which is a different fact from a failed read and from a
+ * keygen license with no devices yet.
  */
-export type LicenseSource = 'keygen' | 'apple' | 'free'
+export type LicenseSource = 'keygen' | 'apple' | 'google' | 'free'
 
 /** What Settings → License shows: the key to copy and how much of the device cap is in use.
  *  A failed read is an ERROR, never "0 devices" — the two are different facts. */
@@ -4201,6 +4223,7 @@ export interface NodeTerminalApi {
   worktree: WorktreeApi
   dialog: DialogApi
   settings: SettingsApi
+  integrations: IntegrationsApi
   speech: SpeechApi
   ssh: SshApi
   sshProject: SshProjectApi
@@ -4226,6 +4249,8 @@ export interface NodeTerminalApi {
   /** "Open recent" — the newest agent conversations in this machine's CLI histories. */
   recentConversations: import('./recent-conversations').RecentConversationsApi
   wallpaper: import('./wallpaper').WallpaperApi
+  /** Run node host side (launch.json, devices, launcher, status, stop, signals, reload on save). */
+  runConfig: import('./run-config').RunConfigApi
   triggers: TriggersApi
   context: ContextApi
   canvas: CanvasApi

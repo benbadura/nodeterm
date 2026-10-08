@@ -95,6 +95,16 @@ describe('scoped guest — terminals', () => {
     })
     expect(d.allow && (d.args?.[0] as Record<string, unknown>).sshRemote).toBeUndefined()
   })
+  it('forces requireRemote for an SSH project, whatever the guest sent (never a local shell)', () => {
+    const remote = { ...deps(), projectIsRemote: (p: string) => p === 'alpha' }
+    const d = decideScopedAccess('alpha', remote, IPC.ptyCreate, [
+      { persistKey: 'a1', cols: 1, rows: 1, requireRemote: false }
+    ])
+    expect(d.allow && (d.args?.[0] as Record<string, unknown>).requireRemote).toBe(true)
+    // A local shared project is left exactly as the guest asked.
+    const local = decide(IPC.ptyCreate, { persistKey: 'a1', cols: 1, rows: 1 })
+    expect(local.allow && (local.args?.[0] as Record<string, unknown>).requireRemote).toBeUndefined()
+  })
   it('judges session-id and persistKey verbs by the node', () => {
     expect(allowed(IPC.ptyWrite, 'sA', 'ls\r')).toBe(true)
     expect(allowed(IPC.ptyWrite, 'sB', 'ls\r')).toBe(false)
@@ -263,7 +273,12 @@ describe('relay host — host-only channels refused to every peer', () => {
       const methods = (Object.values(IPC) as unknown[]).filter(
         (v): v is string => typeof v === 'string' && v.startsWith('watchLink:')
       )
-      expect(methods).toHaveLength(10)
+      expect(methods).toHaveLength(14)
+      // The Control link's owner verbs are among them, by name: a peer must never set a link's
+      // password, turn its typing on, clear its lock, or probe a terminal for it.
+      for (const ch of [IPC.watchLinkSetControl, IPC.watchLinkSetPassword, IPC.watchLinkAllowControl, IPC.watchLinkControlSupport]) {
+        expect(methods, ch).toContain(ch)
+      }
       methods.forEach((method, i) =>
         t.client.send(JSON.stringify({ t: 'req', id: 200 + i, method, args: [{ nodeId: 'a1', role: 'viewer', ttlSeconds: 3600, label: 'x' }] }))
       )

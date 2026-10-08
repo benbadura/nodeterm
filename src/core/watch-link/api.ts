@@ -3,10 +3,25 @@
 import { tokenTtlMs, type MintResult } from '../relay/host-token'
 import { LINK_ID_RE } from '../../shared/watch-link/link'
 
-export type CreateError = 'not-entitled' | 'limit-active' | 'limit-daily' | 'rate-limited' | 'license-check' | 'bad-request' | 'network'
+/** `ttl-unsupported`: a `400 {"error":"bad_ttl"}` answered to an Unlimited request (`ttlSeconds` 0) —
+ *  a server older than unlimited links. The same 400 to a finite request stays `bad-request`. */
+export type CreateError =
+  | 'not-entitled'
+  | 'limit-active'
+  | 'limit-daily'
+  | 'rate-limited'
+  | 'license-check'
+  | 'bad-request'
+  | 'ttl-unsupported'
+  | 'network'
 export type HostTokenResult = MintResult | { ok: false; kind: 'gone'; reason: 'revoked' | 'expired' }
 export interface WatchLinkApi {
-  create(entitlement: string, joinKeyHash: string, ttlSeconds: number): Promise<{ ok: true; linkId: string; expiresAt: number } | { ok: false; error: CreateError }>
+  /** `ttlSeconds` 0 asks for an Unlimited link; only then may the answer's `expiresAt` be null. */
+  create(
+    entitlement: string,
+    joinKeyHash: string,
+    ttlSeconds: number
+  ): Promise<{ ok: true; linkId: string; expiresAt: number | null } | { ok: false; error: CreateError }>
   hostToken(linkId: string, entitlement: string): Promise<HostTokenResult>
   status(linkId: string, entitlement: string): Promise<'live' | 'revoked' | 'expired' | 'unknown'>
   revoke(linkId: string, entitlement: string): Promise<boolean>
@@ -86,11 +101,17 @@ export function createWatchLinkApi(o: { apiBase: string; fetch?: typeof fetch; n
       // the URL could not carry (`formatWatchLink` refuses it, and the store would drop the record at
       // the next boot) is malformed too.
       const linkId = r.json?.linkId
-      if (r.status === 200 && typeof linkId === 'string' && LINK_ID_RE.test(linkId) && typeof exp === 'number' && Number.isFinite(exp) && exp > 0) {
-        // `expiresAt` is an instant on the SERVER's clock; the Date header turns it into time left,
-        // which is then anchored on this machine's clock (see tokenTtlMs).
-        const t = now()
-        return { ok: true, linkId, expiresAt: t + tokenTtlMs(exp, r.date, t) }
+      if (r.status === 200 && typeof linkId === 'string' && LINK_ID_RE.test(linkId)) {
+        // No end time — an Unlimited link — only when one was asked for. A null to a finite request is
+        // a malformed reply: taken as given it would be a link nobody asked to outlive its choice.
+        if (exp === null && ttlSeconds === 0) return { ok: true, linkId, expiresAt: null }
+        if (typeof exp === 'number' && Number.isFinite(exp) && exp > 0) {
+          // `expiresAt` is an instant on the SERVER's clock; the Date header turns it into time left,
+          // which is then anchored on this machine's clock (see tokenTtlMs). A capped server answers an
+          // Unlimited request with an end time too: re-anchored the same way.
+          const t = now()
+          return { ok: true, linkId, expiresAt: t + tokenTtlMs(exp, r.date, t) }
+        }
       }
       if (r.status === 402 || r.status === 403) return { ok: false, error: 'not-entitled' }
       if (r.status === 429) {
@@ -98,7 +119,9 @@ export function createWatchLinkApi(o: { apiBase: string; fetch?: typeof fetch; n
         return { ok: false, error: scope === 'active_links' ? 'limit-active' : scope === 'license' ? 'limit-daily' : 'rate-limited' }
       }
       if (r.status === 503) return { ok: false, error: 'license-check' }
-      if (r.status === 400) return { ok: false, error: 'bad-request' }
+      if (r.status === 400) {
+        return { ok: false, error: ttlSeconds === 0 && r.json?.error === 'bad_ttl' ? 'ttl-unsupported' : 'bad-request' }
+      }
       return { ok: false, error: 'network' }
     },
     async hostToken(linkId, entitlement) {

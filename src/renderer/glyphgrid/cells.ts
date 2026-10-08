@@ -8,6 +8,7 @@ export const FLAG_UNDERLINE = 4
 export const FLAG_CURSOR = 8
 export const FLAG_WIDE = 16
 export const FLAG_SELECTED = 32
+export const FLAG_STRIKETHROUGH = 64
 
 /** RGBA8 packed little-endian style: r in the low byte (matches UNSIGNED_BYTE attr upload).
  *  The trailing `>>> 0` is load-bearing, not cosmetic: `0xff << 24` is NEGATIVE in JS, so

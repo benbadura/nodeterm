@@ -60,9 +60,11 @@ import { ModalTerminal } from './ModalTerminal'
 import { BrowserSurface } from '../../nodes/BrowserSurface'
 import { BrowserDrivingIndicator } from '../../nodes/BrowserDrivingChip'
 import { NoteMarkdown } from '../NoteMarkdown'
+import { inLiveChatDrawer } from '../../lib/liveChatPin'
 import { relativeTime } from '../../lib/relativeTime'
 import { TerminalMarkdownView } from '../../nodes/TerminalMarkdownView'
 import { canChat } from '@shared/agents/config'
+import { transcriptSessionFor } from '../../lib/transcriptSession'
 import { effectiveAccountId } from '../../lib/accountChip'
 import { useSettings } from '../../state/settings'
 import { chipFor, commandTooltip } from '../../lib/keybindingOverrides'
@@ -192,7 +194,14 @@ export function CardModal({ session, projectId, projectName, projectColor, colum
   const createdAgent = session.agentId ?? session.spawn.agentId
   const claudeAccounts = useSettings((s) => s.settings.claudeAccounts)
   const accountForReads = effectiveAccountId(session.spawn.accountId, observedAccount, claudeAccounts)
-  const useChat = mdOpen && !!createdAgent && canChat(createdAgent) && !!agentSessionId
+  // The same session rule as the canvas node (lib/transcriptSession.ts): the hook-confirmed id, else
+  // the id the node was launched with — so a node whose hooks never reach this app still gets Chat.
+  const transcript = transcriptSessionFor({
+    live: agentSessionId,
+    persisted: session.spawn.agentSessionId,
+    cwd: session.spawn.cwd
+  })
+  const useChat = mdOpen && !!createdAgent && canChat(createdAgent) && !!transcript.sessionId
   const captureFull = useCallback((nodeId: string) => api.pty.capture(nodeId, true), [api])
   const mdChip = chipFor('node.toggleMarkdown')
   // The chord (main-intercepted on desktop, bridged in the browser) toggles THIS view while the
@@ -303,6 +312,10 @@ export function CardModal({ session, projectId, projectName, projectColor, colum
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || !isTopDialog(id)) return
+      // An Escape typed in the Live chat drawer is the drawer's, never this modal's: docked over the
+      // modal (raised), the drawer is not a dialog, so this modal is still the top one. Not consumed —
+      // the drawer's own rule decides (unpinned: close the drawer; pinned: nothing).
+      if (inLiveChatDrawer(e.target) || inLiveChatDrawer(document.activeElement)) return
       // A rename in progress owns Esc first (cancel the edit, not the modal).
       if (editingTitleRef.current) {
         e.preventDefault()
@@ -499,7 +512,7 @@ export function CardModal({ session, projectId, projectName, projectColor, colum
           {isTerminal && (
             <>
               {/* Same context-window pill + popover as the node header (null until usage data). */}
-              <ContextMeter sessionId={agentSessionId ?? null} nodeId={session.id} remote={isRemoteSessionNode(session.spawn)} agentId={session.agentId ?? session.spawn.agentId ?? observedAgentId} />
+              <ContextMeter sessionId={transcript.sessionId ?? null} fromLaunchId={transcript.fallback} nodeId={session.id} remote={isRemoteSessionNode(session.spawn)} agentId={session.agentId ?? session.spawn.agentId ?? observedAgentId} />
               <button
                 className="kanban-modal__action"
                 title={commandTooltip(mdOpen ? 'Back to the live terminal' : 'Markdown / chat view', 'node.toggleMarkdown')}
@@ -667,7 +680,8 @@ export function CardModal({ session, projectId, projectName, projectColor, colum
                           <ChatPanel
                             key={session.id}
                             nodeId={session.id}
-                            sessionId={agentSessionId}
+                            sessionId={transcript.sessionId}
+                            sessionFallback={transcript.fallback}
                             cwd={session.spawn.cwd}
                             accountId={accountForReads}
                             agentId={createdAgent!}

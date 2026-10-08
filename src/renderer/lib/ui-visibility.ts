@@ -41,6 +41,9 @@ export const HIDEABLE_HEADER_BUTTONS: readonly HideableRow[] = [
   { id: 'mic', label: 'Dictate' },
   { id: 'ai-name', label: 'Name with AI' },
   { id: 'comments', label: 'Comments' },
+  // The header twin of the node menu's "Share live link…" row. The button may be hidden; the LIVE
+  // chip it leads to never can (renderer/lib/live-link.guard.test.ts).
+  { id: 'share-link', label: 'Share live link' },
   { id: 'hide-fanout', label: 'Hide cards & connections' },
   { id: 'tidy-fanout', label: 'Tidy subagent cards' },
   // Not in the header proper but the label row right under it (`lib/mdViewHint.ts`); it is the

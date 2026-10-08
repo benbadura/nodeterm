@@ -29,7 +29,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { NodeResizer, useReactFlow, type NodeProps } from '@xyflow/react'
 import type { DirEntry } from '@shared/types'
 import { NODE_MIN_SIZES } from '../lib/nodeSizing'
-import { COLLAPSED_HEIGHT, type CanvasNode } from '../state/workspace'
+import { toggleCollapsed, type CanvasNode } from '../state/workspace'
+import { MaximizeButton } from './MaximizeButton'
 import { NodeColorSwatches } from '../components/NodeColorSwatches'
 import {
   breadcrumbs,
@@ -374,22 +375,7 @@ export function FilesNode({ id, data, selected }: NodeProps<CanvasNode>) {
     [cwd, open, create, api, localShell, source, route, rowDl, download, downloadTo]
   )
 
-  const toggleCollapse = () =>
-    setNodes((ns) =>
-      ns.map((n) => {
-        if (n.id !== id) return n
-        const next = !n.data.collapsed
-        const expandedHeight =
-          (n.data.expandedHeight as number) ?? n.measured?.height ?? (n.height as number) ?? 460
-        const height = next ? COLLAPSED_HEIGHT : expandedHeight
-        return {
-          ...n,
-          height,
-          style: { ...n.style, height },
-          data: { ...n.data, collapsed: next, expandedHeight }
-        }
-      })
-    )
+  const toggleCollapse = () => setNodes((ns) => toggleCollapsed(ns as CanvasNode[], [id]))
 
   const shown = useMemo(() => filterEntries(entries ?? [], query), [entries, query])
   const selectedName = sel && sel.cwd === cwd ? sel.name : null
@@ -453,14 +439,10 @@ export function FilesNode({ id, data, selected }: NodeProps<CanvasNode>) {
   const crumbs = useMemo(() => breadcrumbs(cwd), [cwd])
 
   return (
+    <>
     <div className={`files-node${selected ? ' selected' : ''}${collapsed ? ' collapsed' : ''}`}>
-      <NodeResizer
-        minWidth={NODE_MIN_SIZES.files.width}
-        minHeight={NODE_MIN_SIZES.files.height}
-        isVisible={selected && !collapsed}
-        color={data.color as string}
-      />
-
+      {/* Paint only: the old resize box in its old place (see .nt-resize-ghost in styles.css). */}
+      <NodeResizer isVisible={selected && !collapsed} color={data.color as string} lineClassName="nt-resize-ghost" handleClassName="nt-resize-ghost" />
       <div className="files-node__header" style={{ background: `${data.color}22` }}>
         <button className="term-node__collapse" title={collapsed ? 'Expand' : 'Collapse'} onClick={toggleCollapse}>
           {collapsed ? '▸' : '▾'}
@@ -536,6 +518,7 @@ export function FilesNode({ id, data, selected }: NodeProps<CanvasNode>) {
         >
           ⟳
         </button>
+        {!collapsed && <MaximizeButton id={id} maximized={!!data.premaxRect} />}
         <button className="term-node__close" title="Close" onClick={() => deleteElements({ nodes: [{ id }] })}>
           ×
         </button>
@@ -629,5 +612,17 @@ export function FilesNode({ id, data, selected }: NodeProps<CanvasNode>) {
         <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />
       )}
     </div>
+    {/* Sibling of the root, not a child: under Liquid Glass the root has a backdrop-filter,
+        which makes it the containing block for these absolute edges, so they were clipped and
+        covered (only the top edge stayed grabbable). Out here they sit on the node wrapper.
+        AFTER the root, never before it: focus mode reparents the root out of this wrapper, and
+        React inserting a control "before the root" would then throw NotFoundError. */}
+    <NodeResizer
+      minWidth={NODE_MIN_SIZES.files.width}
+      minHeight={NODE_MIN_SIZES.files.height}
+      isVisible={selected && !collapsed}
+      color={data.color as string}
+    />
+    </>
   )
 }

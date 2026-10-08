@@ -29,13 +29,13 @@
 //
 // Client flags (`-f`) need tmux 3.2. Locally the version is probed (`supportsWatcherClient`) and an
 // older or unreadable one refuses the watcher; over SSH the remote tmux rejects the flags itself.
-import { exactPaneTarget } from './capture-route'
+import { capturePaneTarget } from './capture-route'
 
 export const WATCHER_CLIENT_FLAGS = 'ignore-size,read-only'
 
 /** The local tmux argv (after the binary) for a watcher's own client. */
 export function localWatcherAttachArgs(socket: string, sessionName: string): string[] {
-  return ['-L', socket, 'attach-session', '-E', '-f', WATCHER_CLIENT_FLAGS, '-t', exactPaneTarget(sessionName)]
+  return ['-L', socket, 'attach-session', '-E', '-f', WATCHER_CLIENT_FLAGS, '-t', capturePaneTarget(sessionName)]
 }
 
 /**
@@ -48,7 +48,7 @@ export function localWatcherAttachArgs(socket: string, sessionName: string): str
 export const WINDOW_SIZE_FORMAT = '#{window_width} #{window_height} #{status}'
 
 export function localWindowSizeArgs(socket: string, sessionName: string): string[] {
-  return ['-L', socket, 'display-message', '-p', '-t', exactPaneTarget(sessionName), WINDOW_SIZE_FORMAT]
+  return ['-L', socket, 'display-message', '-p', '-t', capturePaneTarget(sessionName), WINDOW_SIZE_FORMAT]
 }
 
 /** `"<width> <height> <status>"` → the client size for that window (see `WINDOW_SIZE_FORMAT`), both

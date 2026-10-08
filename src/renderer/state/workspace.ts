@@ -22,7 +22,7 @@ import { agentAccountColor } from '@shared/agents/account-color'
 import { boundAccountId } from '@shared/agents/account-binding'
 import { agentEnvSnapshot } from '../lib/agentEnv'
 import { uuid } from '@renderer/lib/uuid'
-import { expandRectToGrid, snapNodeToGrid, type Rect } from '../lib/nodeSizing'
+import { expandRectToGrid, NODE_MIN_SIZES, snapNodeToGrid, type Rect } from '../lib/nodeSizing'
 import { claudeCliCapsNow, grokCliCapsNow } from './permissionMode'
 import { ensureGrokTakenIds, grokTakenIdsNow } from './grokSessionIds'
 import { mintFreeGrokSessionId } from '@shared/agents/grok-session-mint'
@@ -35,8 +35,10 @@ import { sshHostKey } from '@shared/ssh'
 import { normalizeNodeIcon } from '@shared/node-icon'
 import { normalizeIssueRef, type IssueRef } from '@shared/github-issue-ref'
 import { isSafeNodeId } from '@shared/safe-id'
+import { openerByTarget, recordedOpenerOf } from '../lib/teamProgress'
 import { normalizePendingLaunch } from '@shared/pending-launch-shape'
 import { normalizeTerminalFontSize } from '../terminal/terminal-font-zoom'
+import { normalizeRunConfig, runNodeTitle, type RunNodeConfig } from '@shared/run-config'
 import { useSettings } from './settings'
 
 // Re-exported so Canvas (and anything else in the renderer) keeps importing it from here, while the
@@ -72,6 +74,45 @@ const FILES_SIZE = { width: 340, height: 460 }
 
 /** Height of a node when collapsed (header only). */
 export const COLLAPSED_HEIGHT = 40
+
+/** The node kinds that render a header-only collapsed state. Any other kind squashed to
+ *  COLLAPSED_HEIGHT crushes its content (a group frame strands its children outside it), so
+ *  neither the menu nor the toggle offers collapse to them. */
+export const COLLAPSIBLE_KINDS: ReadonlySet<string> = new Set(['terminal', 'sticky', 'files'])
+export const isCollapsible = (n: Pick<CanvasNode, 'type'>): boolean =>
+  COLLAPSIBLE_KINDS.has(n.type ?? 'terminal')
+/** Whether the collapse toggle may act on `n`: a collapsible kind either way, or ANY node that is
+ *  already collapsed — an older build collapsed every kind, and such a node must still expand. */
+export const canToggleCollapse = (n: Pick<CanvasNode, 'type' | 'data'>): boolean =>
+  isCollapsible(n) || !!n.data.collapsed
+
+/**
+ * Flip `collapsed` on every node in `ids` the toggle may act on (`canToggleCollapse`): a
+ * non-collapsible kind is only ever EXPANDED. Collapsing records the LIVE height (a user
+ * resize never writes `expandedHeight`, so the stored value can be the load-time size); expanding
+ * gives back what was recorded.
+ */
+export function toggleCollapsed(nodes: CanvasNode[], ids: Iterable<string>): CanvasNode[] {
+  const set = new Set(ids)
+  return nodes.map((n) => {
+    if (!set.has(n.id) || !canToggleCollapse(n)) return n
+    const next = !n.data.collapsed
+    const live = n.measured?.height ?? (n.height as number | undefined)
+    const stored = n.data.expandedHeight as number | undefined
+    const expandedHeight =
+      (next ? live ?? stored : stored ?? live) ?? COLLAPSED_FALLBACK_HEIGHT[n.type ?? 'terminal'] ?? 300
+    const height = next ? COLLAPSED_HEIGHT : expandedHeight
+    return {
+      ...n,
+      height,
+      style: { ...n.style, height },
+      data: { ...n.data, collapsed: next, expandedHeight }
+    }
+  })
+}
+/** Height when a node has neither a measurement nor a recorded size — the per-kind values the four
+ *  toggles this replaced each used. */
+const COLLAPSED_FALLBACK_HEIGHT: Partial<Record<string, number>> = { terminal: 300, sticky: 200, files: 460 }
 
 /** User data carried in the React Flow node's data field. */
 export interface NodeData {
@@ -197,6 +238,10 @@ export interface NodeData {
    * the machine-local arm store's question, never this field's. See @shared/trigger.
    */
   trigger?: import('@shared/trigger').TriggerSpec
+  /** Run nodes only: which launch.json configuration runs, where. See @shared/run-config. Persisted. */
+  runConfig?: import('@shared/run-config').RunNodeConfig
+  /** Run nodes only, transient: start the run on mount (a compound's sibling). Never persisted. */
+  runAutoStart?: boolean
   [key: string]: unknown
 }
 
@@ -336,6 +381,37 @@ export function createTerminalNode(
       cwd: ssh ? ssh.remoteCwd : cwd,
       initialCommand,
       ...(ssh ? { ssh: ssh.server, sshRemoteTmux: true } : {})
+    }
+  }
+}
+
+/** The macOS system blue swatch, so the color stays inside the node palette. */
+const RUN_NODE_COLOR = '#0a84ff'
+
+/**
+ * A run node: a terminal node carrying `data.runConfig` (see @shared/run-config) — VS Code's "Run
+ * Without Debugging" for a `.vscode/launch.json` configuration. Nothing runs on open unless
+ * `autoStart` (a compound's sibling): the toolbar's Run is the user's call, as F5 is.
+ */
+export function createRunNode(
+  index: number,
+  config: RunNodeConfig,
+  center?: { x: number; y: number },
+  opts: { autoStart?: boolean } = {}
+): CanvasNode {
+  const size = terminalNodeSize()
+  return {
+    id: nextId('run'),
+    type: 'terminal',
+    ...placeNode('terminal', center, index, size.width, size.height),
+    data: {
+      title: runNodeTitle(config.projectDir, config.launchConfig),
+      color: RUN_NODE_COLOR,
+      group: null,
+      tags: [],
+      cwd: config.projectDir,
+      runConfig: normalizeRunConfig(config),
+      ...(opts.autoStart ? { runAutoStart: true } : {})
     }
   }
 }
@@ -1307,7 +1383,9 @@ function groupBox(
   }
 }
 
-export type ArrangeLayout = 'grid' | 'row' | 'column'
+import type { ArrangeLayout, GroupArrangeLayout } from '@shared/arrange-verb'
+export type { ArrangeLayout, GroupArrangeLayout }
+export { GROUP_ARRANGE_LAYOUTS } from '@shared/arrange-verb'
 
 /**
  * The single container the given ids all live in: `null` (all top-level), a group id (all
@@ -1331,16 +1409,25 @@ export function commonParentId(nodes: CanvasNode[], ids: string[]): string | nul
  * member. The ids must share ONE container — all top-level, or all children of the same group
  * (the layout then runs in that group's coordinate space); a mixed set is a no-op. Unknown ids
  * are skipped; returns the input array unchanged when nothing resolves. Pure and deterministic.
+ *
+ * **Slots are filled in the order of `ids`, not in array order.** Every caller that sorts its ids
+ * is stating the order it wants — `Tidy canvas` by reading order, a lineage band by the slot of
+ * each node's opener — and the array order is persistence order (frames first, then creation),
+ * which is nobody's intent. Placing by array order silently discarded both sorts.
  */
 export function arrangeNodes(
   nodes: CanvasNode[],
   ids: string[],
   opts?: { layout?: ArrangeLayout; cols?: number; gap?: number; origin?: { x: number; y: number } }
 ): CanvasNode[] {
-  const set = new Set(ids)
-  const members = nodes.filter((nd) => set.has(nd.id))
+  let byId = new Map(nodes.map((nd) => [nd.id, nd]))
+  let members = [...new Set(ids)].flatMap((id) => byId.get(id) ?? [])
   // Only meaningful within one coordinate space (see commonParentId) — mixed containers → no-op.
   if (members.length === 0 || new Set(members.map((m) => m.parentId ?? null)).size > 1) return nodes
+  const memberIds = new Set(members.map((m) => m.id))
+  nodes = restoreMaximizedWhere(nodes, (nd) => memberIds.has(nd.id))
+  byId = new Map(nodes.map((nd) => [nd.id, nd]))
+  members = [...memberIds].flatMap((id) => byId.get(id) ?? [])
   const layout = opts?.layout ?? 'grid'
   const gap = opts?.gap ?? 40
   const origin = opts?.origin ?? {
@@ -1365,6 +1452,476 @@ export function arrangeNodes(
     rowH = Math.max(rowH, nodeH(m))
   })
   return nodes.map((nd) => (pos.has(nd.id) ? { ...nd, position: pos.get(nd.id)! } : nd))
+}
+
+/**
+ * One lineage rope, as the canvas persists it (`project.ropes`): "opened by" or a wait (`--after`).
+ * The `id` is what tells the two apart (`waitRopeId`, lib/edgeModel): pass it through, or every
+ * rope reads as an opener rope.
+ */
+export interface LineageEdge {
+  id?: string
+  source: string
+  target: string
+}
+
+/** Every node's opener (rule 1 of lib/teamProgress — `data.openedBy` first, else the first opener
+ *  rope into it; wait ropes never), keyed by the opened node's id. */
+function openersOf(nodes: CanvasNode[], edges: readonly LineageEdge[]): Map<string, string> {
+  const byId = new Map(nodes.map((nd) => [nd.id, nd]))
+  return openerByTarget(edges, (id) => recordedOpenerOf(byId.get(id)))
+}
+
+/**
+ * For every node INSIDE `containerId` (`null` = the top level), the direct member of that
+ * container it belongs to, by id. A rope points at the NODE an agent opened, which is routinely a
+ * node inside a frame — and a frame moves as one rigid unit, so a layer layout has to ask which
+ * member of the container being arranged that rope really reaches. A node outside the container,
+ * a parentId naming no live node and a cycle (project.json is hand-editable) are simply absent
+ * from the map, so a rope touching one is dropped rather than throwing.
+ */
+function containerAncestors(nodes: CanvasNode[], containerId: string | null): Map<string, string> {
+  const byId = new Map(nodes.map((nd) => [nd.id, nd]))
+  const out = new Map<string, string>()
+  for (const nd of nodes) {
+    let cur: CanvasNode | undefined = nd
+    const seen = new Set<string>([nd.id])
+    while (cur && (cur.parentId ?? null) !== containerId) {
+      const parent: CanvasNode | undefined = cur.parentId ? byId.get(cur.parentId) : undefined
+      cur = parent && !seen.has(parent.id) ? parent : undefined
+      if (cur) seen.add(cur.id)
+    }
+    if (cur) out.set(nd.id, cur.id)
+  }
+  return out
+}
+
+/**
+ * Splits the members of ONE container into lineage layers: layer 0 is every node nothing opened,
+ * layer k is a node whose deepest opener sits in layer k-1, and `loose` holds the nodes no rope
+ * touches at all. The container is the top level by default (`containerId` null) or a group frame,
+ * whose DIRECT children are then the members — the same rules one level down, which is what lets
+ * a frame's own contents be arranged by lineage.
+ *
+ * Three rules, each of which the naive version gets wrong:
+ *
+ * - **Ropes are LIFTED to the member that holds them.** The coordinator opens a team INSIDE a
+ *   frame, so the rope ends on a child; the frame is what gets placed. An edge whose two ends lift
+ *   to the same object is dropped — it is internal to that frame and would otherwise make it its
+ *   own opener. An edge with an end OUTSIDE the container is dropped too: the opener of a frame's
+ *   whole team usually sits outside the frame, and it says nothing about the order inside.
+ * - **A node's layer is its LONGEST path from a root**, not its first: with `max` every rope points
+ *   strictly downward, which is the whole reason the layout reads as a flow. Taking the shortest
+ *   path would let a rope run backwards up the canvas.
+ * - **A cycle never hangs and never throws.** Ropes are "opened by" and `--after`, so a cycle is
+ *   not supposed to exist, but `--after` can be hand-built into one and project.json is editable.
+ *   The edge that closes a cycle contributes nothing (`0`), so the result stays deterministic for
+ *   a given edge order instead of recursing forever.
+ *
+ * `loose` is deliberately NOT layer 0: a node with no lineage is not a root of anything, and
+ * mixing the two would put every sticky note beside the coordinator.
+ */
+export function lineageLayers(
+  nodes: CanvasNode[],
+  edges: readonly LineageEdge[],
+  containerId: string | null = null
+): { layers: string[][]; loose: string[] } {
+  const tops = containerAncestors(nodes, containerId)
+  // Named for the default container; with `containerId` set these are that frame's children.
+  const topLevel = nodes.filter((nd) => (nd.parentId ?? null) === containerId)
+  const live = new Set(topLevel.map((nd) => nd.id))
+
+  const preds = new Map<string, string[]>()
+  const touched = new Set<string>()
+  for (const e of edges) {
+    const from = tops.get(e.source)
+    const to = tops.get(e.target)
+    if (!from || !to || from === to || !live.has(from) || !live.has(to)) continue
+    const list = preds.get(to)
+    if (list) {
+      if (!list.includes(from)) list.push(from)
+    } else {
+      preds.set(to, [from])
+    }
+    touched.add(from)
+    touched.add(to)
+  }
+
+  const memo = new Map<string, number>()
+  const onStack = new Set<string>()
+  const levelOf = (id: string): number => {
+    const cached = memo.get(id)
+    if (cached !== undefined) return cached
+    if (onStack.has(id)) return 0
+    onStack.add(id)
+    let level = 0
+    for (const from of preds.get(id) ?? []) level = Math.max(level, levelOf(from) + 1)
+    onStack.delete(id)
+    memo.set(id, level)
+    return level
+  }
+
+  // Reading order of the canvas as it stands, used as the tie-break everywhere below so the
+  // result is stable and roughly preserves what the user already built.
+  const order = new Map<string, number>()
+  ;[...topLevel]
+    .sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x || (a.id < b.id ? -1 : 1))
+    .forEach((nd, i) => order.set(nd.id, i))
+  const byReadingOrder = (a: string, b: string): number => (order.get(a) ?? 0) - (order.get(b) ?? 0)
+
+  const layers: string[][] = []
+  const loose: string[] = []
+  for (const nd of topLevel) {
+    if (!touched.has(nd.id)) {
+      loose.push(nd.id)
+      continue
+    }
+    const level = levelOf(nd.id)
+    while (layers.length <= level) layers.push([])
+    layers[level].push(nd.id)
+  }
+
+  // The member that OPENED each member (lifted like the ropes), for the slot rule below.
+  const openerOfMember = new Map<string, string>()
+  for (const [target, source] of openersOf(nodes, edges)) {
+    const to = tops.get(target)
+    const from = tops.get(source)
+    if (to && from && to !== from && live.has(to) && live.has(from) && !openerOfMember.has(to)) {
+      openerOfMember.set(to, from)
+    }
+  }
+
+  // Inside a layer, siblings sit together: a node follows its OPENER's slot in the layer above when
+  // the opener is there, else its earliest predecessor's, so the ropes fan out instead of crossing.
+  // Opener first because layering reads BOTH relations (a wait is a flow edge too, and longest-path
+  // keeps it pointing down) while a node has exactly one opener — the team it belongs to. A node
+  // opened by B that waits on A sits under B, with the rest of B's team. Layer 0 and `loose` have
+  // no opener to follow and keep the canvas's own reading order.
+  layers.forEach((layer, level) => {
+    if (level === 0) {
+      layer.sort(byReadingOrder)
+      return
+    }
+    const above = new Map(layers[level - 1].map((id, i) => [id, i]))
+    const slotOf = (id: string): number => {
+      const opener = openerOfMember.get(id)
+      const openerSlot = opener !== undefined ? above.get(opener) : undefined
+      if (openerSlot !== undefined) return openerSlot
+      let best = Number.MAX_SAFE_INTEGER
+      for (const from of preds.get(id) ?? []) {
+        const slot = above.get(from)
+        if (slot !== undefined && slot < best) best = slot
+      }
+      return best
+    }
+    layer.sort((a, b) => slotOf(a) - slotOf(b) || byReadingOrder(a, b))
+  })
+  loose.sort(byReadingOrder)
+  return { layers, loose }
+}
+
+/**
+ * Lays the members of one container (the top level, or `opts.containerId`'s direct children) out
+ * as lineage bands: one row per layer, growing downward, with the nodes no rope touches in a final
+ * band of their own. Returns the input unchanged when there is nothing to arrange (under two
+ * members, or no usable rope) — an unchanged array is the caller's signal to skip the undo entry
+ * and the project.json write.
+ *
+ * Built ON `arrangeNodes` rather than beside it: each band is one `row` placement from a shared
+ * left origin, so the packing, the gap and the mixed-container refusal all stay in ONE place.
+ */
+export function arrangeByLineage(
+  nodes: CanvasNode[],
+  edges: readonly LineageEdge[],
+  opts?: { gap?: number; origin?: { x: number; y: number }; containerId?: string | null }
+): CanvasNode[] {
+  const containerId = opts?.containerId ?? null
+  if (nodes.filter((nd) => (nd.parentId ?? null) === containerId).length < 2) return nodes
+  const { layers, loose } = lineageLayers(nodes, edges, containerId)
+  // No rope reached two different members: every node would land in the single `loose` band,
+  // which is a worse `Tidy canvas`, not a lineage view.
+  if (layers.length === 0) return nodes
+  nodes = restoreMaximizedWhere(nodes, (nd) => (nd.parentId ?? null) === containerId)
+  const topLevel = nodes.filter((nd) => (nd.parentId ?? null) === containerId)
+
+  const gap = opts?.gap ?? 40
+  const origin = opts?.origin ?? {
+    x: Math.min(...topLevel.map((nd) => nd.position.x)),
+    y: Math.min(...topLevel.map((nd) => nd.position.y))
+  }
+  const bands = loose.length > 0 ? [...layers, loose] : layers
+
+  let out = nodes
+  let y = origin.y
+  for (const band of bands) {
+    if (band.length === 0) continue
+    out = arrangeNodes(out, band, { layout: 'row', gap, origin: { x: origin.x, y } })
+    const tallest = Math.max(...band.map((id) => nodeH(out.find((nd) => nd.id === id)!)))
+    y += tallest + gap
+  }
+  return out
+}
+
+/** A laid-out rectangle of units, positions relative to its own top-left. */
+interface TidyBlock {
+  w: number
+  h: number
+  place: { id: string; x: number; y: number }[]
+}
+
+/** `arrangeNodes`' grid flow, over blocks: left to right, wrapping at `cols`, each row advancing
+ *  by its tallest block. */
+function flowBlocks(blocks: TidyBlock[], cols: number, gap: number): TidyBlock {
+  const place: TidyBlock['place'] = []
+  let x = 0
+  let y = 0
+  let rowH = 0
+  let w = 0
+  blocks.forEach((b, i) => {
+    if (i > 0 && i % cols === 0) {
+      x = 0
+      y += rowH + gap
+      rowH = 0
+    }
+    for (const p of b.place) place.push({ id: p.id, x: p.x + x, y: p.y + y })
+    w = Math.max(w, x + b.w)
+    x += b.w + gap
+    rowH = Math.max(rowH, b.h)
+  })
+  return { w, h: y + rowH, place }
+}
+
+/** Reading order of the canvas as it stands — Tidy canvas's own comparator, stable on array order. */
+const byReadingPosition = (a: CanvasNode, b: CanvasNode): number =>
+  a.position.y - b.position.y || a.position.x - b.position.x
+
+/**
+ * **Tidy canvas.** Packs every top-level node (a group frame is one rigid unit, its children ride
+ * along) into a non-overlapping layout — and keeps each ORCHESTRATOR legible: a unit that opened
+ * other units is placed first, at the top-left of its own cluster, with the units it opened packed
+ * in a grid directly to its right, and a unit THEY opened clustered the same way inside that grid.
+ * Clusters are packed in reading order of their orchestrators; every unit with no lineage at all is
+ * packed after them, below, exactly as the plain grid packs it.
+ *
+ * The relation is OPENER ONLY (rule 1 of lib/teamProgress, through `openerByTarget`: the node's
+ * recorded `data.openedBy` when it has one, else the first non-wait rope into it). Not waits:
+ * a wait is sequencing between peers — a verify panel's reviewers wait on the node they review,
+ * but the orchestrator opened them — so following waits would pull an orchestrator's team apart
+ * under whichever station it waits on. And a node has exactly one opener, so the clusters are a
+ * forest and the layout has one answer. (The bands of `arrangeByLineage` read both relations;
+ * they answer "in what order does work flow", this answers "whose team is this".)
+ *
+ * - **Ropes are lifted to the top-level unit that holds their end**, as `lineageLayers` does: an
+ *   orchestrator opens its stations inside a frame, and the frame is what moves. A rope internal
+ *   to one frame says nothing at this level. A frame whose children were opened by different units
+ *   belongs to the one that opened the most of them (ties: the earliest rope); a node's own opener
+ *   always wins for that node.
+ * - **A cycle never hangs.** Openers are not supposed to form one, but frames lift ropes into one
+ *   easily (A in frame F opens B outside, B opens C inside F) and project.json is hand-editable.
+ *   The member of a cycle that comes first in reading order loses its opener and leads the cluster.
+ * - **A rope whose end is gone is ignored** — the canvas prunes it, and an opener that is not here
+ *   cannot lead anything; its stations simply become loose.
+ * - **No lineage ⇒ exactly the plain grid**: `arrangeNodes(grid)` over the reading-order ids, the
+ *   transform this command has always run.
+ *
+ * Returns the SAME array when no unit moves (fewer than two units, or a canvas already tidied),
+ * which is the caller's signal to skip the undo entry and the project.json write. Pure.
+ */
+export function tidyCanvas(
+  nodes: CanvasNode[],
+  edges: readonly LineageEdge[] = [],
+  opts?: { gap?: number }
+): CanvasNode[] {
+  if (nodes.filter((nd) => !nd.parentId).length < 2) return nodes
+  // Every unit moves, and a frame is packed at the size its (maximized) child inflated it to.
+  nodes = restoreMaximizedWhere(nodes, () => true)
+  const units = nodes.filter((nd) => !nd.parentId).sort(byReadingPosition)
+  const gap = opts?.gap ?? 40
+  const order = new Map(units.map((u, i) => [u.id, i]))
+  const unitOf = containerAncestors(nodes, null)
+
+  // Opener of each UNIT. A node's own opener is its opener; a frame takes the unit that opened the
+  // most of its contents, ties going to the earliest rope.
+  const parent = new Map<string, string>()
+  const votes = new Map<string, Map<string, number>>()
+  for (const [target, source] of openersOf(nodes, edges)) {
+    const u = unitOf.get(target)
+    const o = unitOf.get(source)
+    if (!u || !o || u === o) continue
+    if (target === u) {
+      parent.set(u, o)
+      continue
+    }
+    const forU = votes.get(u) ?? new Map<string, number>()
+    forU.set(o, (forU.get(o) ?? 0) + 1) // first insertion = earliest rope, kept on a tie below
+    votes.set(u, forU)
+  }
+  for (const [u, forU] of votes) {
+    if (parent.has(u)) continue
+    let best: string | undefined
+    let bestN = 0
+    for (const [o, n] of forU) {
+      if (n > bestN) {
+        best = o
+        bestN = n
+      }
+    }
+    if (best !== undefined) parent.set(u, best)
+  }
+
+  // Break every cycle at its member that reads first.
+  for (const u of units) {
+    for (;;) {
+      const path: string[] = []
+      const onPath = new Set<string>()
+      let cur: string | undefined = u.id
+      while (cur !== undefined && !onPath.has(cur)) {
+        path.push(cur)
+        onPath.add(cur)
+        cur = parent.get(cur)
+      }
+      if (cur === undefined) break
+      const cycle = path.slice(path.indexOf(cur))
+      const lead = cycle.reduce((a, b) => ((order.get(a) ?? 0) <= (order.get(b) ?? 0) ? a : b))
+      parent.delete(lead)
+    }
+  }
+
+  const children = new Map<string, string[]>()
+  for (const u of units) {
+    const p = parent.get(u.id)
+    if (p === undefined) continue
+    const list = children.get(p) ?? []
+    list.push(u.id) // `units` is in reading order, so every list is too
+    children.set(p, list)
+  }
+
+  const roots = units.filter((u) => !parent.has(u.id) && children.has(u.id))
+  const loose = units.filter((u) => !parent.has(u.id) && !children.has(u.id)).map((u) => u.id)
+  const unmoved = (out: CanvasNode[]): CanvasNode[] =>
+    out.every((nd, i) => nd.position.x === nodes[i].position.x && nd.position.y === nodes[i].position.y)
+      ? nodes
+      : out
+  if (roots.length === 0) return unmoved(arrangeNodes(nodes, units.map((u) => u.id), { layout: 'grid', gap }))
+
+  const byId = new Map(units.map((u) => [u.id, u]))
+  const blockOf = (id: string): TidyBlock => {
+    const self = byId.get(id)!
+    const w = nodeW(self)
+    const h = nodeH(self)
+    const kids = children.get(id) ?? []
+    if (kids.length === 0) return { w, h, place: [{ id, x: 0, y: 0 }] }
+    const team = flowBlocks(kids.map(blockOf), Math.ceil(Math.sqrt(kids.length)), gap)
+    return {
+      w: w + gap + team.w,
+      h: Math.max(h, team.h),
+      place: [{ id, x: 0, y: 0 }, ...team.place.map((p) => ({ id: p.id, x: p.x + w + gap, y: p.y }))]
+    }
+  }
+  const clusters = flowBlocks(roots.map((r) => blockOf(r.id)), Math.ceil(Math.sqrt(roots.length)), gap)
+
+  const origin = {
+    x: Math.min(...units.map((u) => u.position.x)),
+    y: Math.min(...units.map((u) => u.position.y))
+  }
+  const pos = new Map(clusters.place.map((p) => [p.id, { x: origin.x + p.x, y: origin.y + p.y }]))
+  let out = nodes.map((nd) => {
+    const p = pos.get(nd.id)
+    return p && (p.x !== nd.position.x || p.y !== nd.position.y) ? { ...nd, position: p } : nd
+  })
+  if (loose.length > 0) {
+    out = arrangeNodes(out, loose, {
+      layout: 'grid',
+      gap,
+      origin: { x: origin.x, y: origin.y + clusters.h + gap }
+    })
+  }
+  return unmoved(out)
+}
+
+/**
+ * Why `arrangeGroupChildren` has nothing to do for this frame, as a sentence a menu row can show
+ * and a control reply can carry — or `null` when it can run. ONE definition for both, so the row's
+ * disabled reason and the CLI's refusal cannot drift apart.
+ */
+export function groupArrangeRefusal(
+  nodes: CanvasNode[],
+  groupId: string,
+  layout: GroupArrangeLayout,
+  edges: readonly LineageEdge[] = []
+): string | null {
+  const group = nodes.find((nd) => nd.id === groupId)
+  if (!group || group.type !== 'group') return `no group frame has the id ${groupId}`
+  if (!nodes.some((nd) => nd.parentId === groupId)) return 'this group is empty'
+  if (layout === 'lineage' && lineageLayers(nodes, edges, groupId).layers.length === 0) {
+    return 'nothing in this group was opened by another node in it'
+  }
+  return null
+}
+
+/**
+ * Organizes a group frame's own contents, then sizes the frame — and every ancestor frame — to
+ * hold them. The members are the frame's DIRECT children: a nested frame moves as one rigid unit
+ * with its own children untouched, exactly as `Tidy canvas` treats a top-level frame.
+ *
+ * - `grid` / `row` / `column` pack the children in their current reading order (y, then x), so the
+ *   result roughly keeps what the user built; `lineage` lays them out as `arrangeByLineage` bands
+ *   over the ropes that connect two of them.
+ * - **The frame's own top-left stays where it is.** The layout starts at the offset a fitted frame
+ *   keeps its content at (`GROUP_PAD`, plus the label header), so the fit that follows re-derives
+ *   the same origin and the frame only grows or shrinks to the right and downward. Starting from
+ *   the children's current bounding box instead would move the frame to wherever the top-left
+ *   child happened to sit. (With snapping on, a frame that was OFF the grid still moves onto it —
+ *   by under one cell.)
+ * - **The fit walks UP the parent chain, innermost first** (`fitAncestorChain`). Fitting only the
+ *   frame leaves a parent smaller than the child it holds, and `extent:'parent'` then makes React
+ *   Flow clamp that child into an inverted range — the snap `groupSelectedNodes` documents.
+ *
+ * Returns the SAME array when there is nothing to do — a missing or empty frame, a lineage layout
+ * with no usable rope, or a frame whose contents already sit exactly where the layout puts them —
+ * which is the caller's signal to skip the undo entry and the project.json write. Pure.
+ */
+export function arrangeGroupChildren(
+  nodes: CanvasNode[],
+  groupId: string,
+  opts?: {
+    layout?: GroupArrangeLayout
+    cols?: number
+    gap?: number
+    edges?: readonly LineageEdge[]
+    grid?: number
+  }
+): CanvasNode[] {
+  const layout = opts?.layout ?? 'grid'
+  const edges = opts?.edges ?? []
+  if (groupArrangeRefusal(nodes, groupId, layout, edges)) return nodes
+  const grid = opts?.grid ?? 0
+  const pad = grid > 0 ? Math.max(GROUP_PAD, grid) : GROUP_PAD
+  const origin = { x: pad, y: pad + GROUP_HEADER }
+  const gap = opts?.gap
+  let next: CanvasNode[]
+  if (layout === 'lineage') {
+    next = arrangeByLineage(nodes, edges, { containerId: groupId, origin, gap })
+  } else {
+    const ids = nodes
+      .filter((nd) => nd.parentId === groupId)
+      .sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x)
+      .map((nd) => nd.id)
+    next = arrangeNodes(nodes, ids, { layout, cols: opts?.cols, gap, origin })
+  }
+  next = fitAncestorChain(next, groupId, grid)
+  // Every transform above maps the array in place, so index i is the same node before and after.
+  const unchanged = next.every((nd, i) => {
+    const was = nodes[i]
+    return (
+      was === nd ||
+      (was.position.x === nd.position.x &&
+        was.position.y === nd.position.y &&
+        was.width === nd.width &&
+        was.height === nd.height)
+    )
+  })
+  return unchanged ? nodes : next
 }
 
 export type AlignEdge = 'left' | 'right' | 'top' | 'bottom' | 'hcenter' | 'vcenter'
@@ -1486,11 +2043,11 @@ export function selectedRootIds(nodes: CanvasNode[], ids: string[]): string[] {
 }
 
 /**
- * Grows every ancestor frame of `groupId` to hug its children again, innermost first. A frame
- * that gained a child bigger than itself must be re-fitted BEFORE its own parent is, or the
- * parent is fitted around a size that is about to change.
+ * Re-fits `groupId` and then every ancestor frame above it to hug its children again, innermost
+ * first. A frame that gained a child bigger than itself must be re-fitted BEFORE its own parent
+ * is, or the parent is fitted around a size that is about to change.
  */
-function fitAncestorChain(
+export function fitAncestorChain(
   nodes: CanvasNode[],
   groupId: string | undefined,
   grid = 0
@@ -1559,6 +2116,12 @@ export function placeNodeInRect(
   return withNodeRect(nodes, node, rect, {})
 }
 
+/** `rect`'s size raised to the node kind's NodeResizer minimum. */
+function clampToMinSize(node: CanvasNode, rect: { width: number; height: number }) {
+  const min = NODE_MIN_SIZES[node.type ?? 'terminal'] ?? { width: 0, height: 0 }
+  return { width: Math.max(rect.width, min.width), height: Math.max(rect.height, min.height) }
+}
+
 /**
  * The shared placement core: put `node` at the ROOT-space `rect` (converted to parent-relative),
  * patch its data, and re-fit the ancestor frames in the same transform — `extent:'parent'` would
@@ -1576,18 +2139,22 @@ function withNodeRect(
   const root = rootPosition(node, nodes)
   const originX = root.x - node.position.x
   const originY = root.y - node.position.y
+  // A programmatic resize bypasses the NodeResizer's minimums (lib/nodeSizing.ts), and a zone
+  // of a zoomed-in viewport is routinely smaller than a kind's floor — clamp here, once, for
+  // maximize, zones, refit and restore alike.
+  const { width, height } = clampToMinSize(node, rect)
   const next = nodes.map((n) =>
     n.id === node.id
       ? {
           ...n,
           position: { x: rect.x - originX, y: rect.y - originY },
-          width: rect.width,
-          height: rect.height,
-          style: { ...n.style, width: rect.width, height: rect.height },
+          width,
+          height,
+          style: { ...n.style, width, height },
           // Drop the stale measurement in the same tick: flowToNodeStates prefers `measured` over
           // `width`/`height`, and a commit racing the re-measure would persist the OLD size.
           measured: undefined,
-          data: { ...n.data, expandedHeight: rect.height, ...dataPatch }
+          data: { ...n.data, expandedHeight: height, ...dataPatch }
         }
       : n
   )
@@ -1622,15 +2189,63 @@ export function refitMaximizedNode(
   // the node already has. Returning the same array keeps the workspace out of the dirty/save path
   // and lets the caller decide by identity whether anything actually moved.
   const root = rootPosition(node, nodes)
+  const size = clampToMinSize(node, rect)
   if (
     samePx(root.x, rect.x) &&
     samePx(root.y, rect.y) &&
-    samePx(nodeW(node) || (node.style?.width as number) || 0, rect.width) &&
-    samePx(nodeH(node) || (node.style?.height as number) || 0, rect.height)
+    samePx(nodeW(node) || (node.style?.width as number) || 0, size.width) &&
+    samePx(nodeH(node) || (node.style?.height as number) || 0, size.height)
   ) {
     return nodes
   }
   return withNodeRect(nodes, node, rect, { premaxRect })
+}
+
+/**
+ * Take every maximized node `pick` selects back to its remembered rect. A layout pass packs nodes
+ * by size: left maximized, a node is packed at full-viewport size, keeps a restore rect that later
+ * teleports it onto the new layout, and the panel-pin refit snaps it back to fullscreen.
+ */
+function restoreMaximizedWhere(nodes: CanvasNode[], pick: (n: CanvasNode) => boolean): CanvasNode[] {
+  return nodes.reduce(
+    (acc, n) => (n.data.premaxRect && pick(n) ? restoreMaximizedNode(acc, n.id) : acc),
+    nodes
+  )
+}
+
+/**
+ * The ids whose user gesture ENDED in `changes` having actually moved or resized the node: a drag
+ * end (`dragging: false`, which React Flow emits only when positions changed) or a resize end that
+ * followed at least one live `resizing: true` change for that id. React Flow's resizer emits
+ * `resizing: false` on every mouseup — a plain click on a grab band included — so the end alone is
+ * not evidence of a resize. `resizing` is the caller's gesture memory (ids mid-resize), carried
+ * across change batches and updated here. A re-measure carries neither flag.
+ */
+export function movedGestureEnds(
+  changes: readonly { type: string; id?: string; dragging?: boolean; resizing?: boolean }[],
+  resizing: Set<string>
+): Set<string> {
+  const ids = new Set<string>()
+  for (const c of changes) {
+    if (!c.id) continue
+    if (c.type === 'position' && c.dragging === false) ids.add(c.id)
+    else if (c.type === 'dimensions' && c.resizing === true) resizing.add(c.id)
+    else if (c.type === 'dimensions' && c.resizing === false && resizing.delete(c.id)) ids.add(c.id)
+  }
+  return ids
+}
+
+/**
+ * A user drag or resize ends maximize MODE for those nodes where they now stand: the node is no
+ * longer the viewport-sized window "Restore" assumes, so keeping `premaxRect` would leave a stale
+ * Restore in the header and let the panel-pin refit snap the user's placement back to fullscreen.
+ * `ids` comes from movedGestureEnds; programmatic placements never reach onNodesChange.
+ */
+export function endMaximizeOnUserGeometry(nodes: CanvasNode[], ids: ReadonlySet<string>): CanvasNode[] {
+  if (!nodes.some((n) => ids.has(n.id) && n.data.premaxRect)) return nodes
+  return nodes.map((n) =>
+    ids.has(n.id) && n.data.premaxRect ? { ...n, data: { ...n.data, premaxRect: undefined } } : n
+  )
 }
 
 /**
@@ -2028,7 +2643,9 @@ export function nodeStatesToFlow(states: CanvasNodeState[]): CanvasNode[] {
         sshRemoteTmux: n.sshRemoteTmux,
         sshFs: n.sshFs,
         worktree: n.worktree,
-        trigger: n.trigger
+        trigger: n.trigger,
+        // Hostile-input seam (git-shared file → live data), like `icon` above.
+        runConfig: normalizeRunConfig(n.runConfig)
       }
     }
   })
@@ -2118,6 +2735,8 @@ export function flowToNodeStates(nodes: CanvasNode[], retainInitialCommand = tru
         sshFs: n.data.sshFs,
         worktree: n.data.worktree,
         trigger: n.data.trigger,
+        // Re-validated on the way OUT too — the shared file is only as good as its last writer.
+        runConfig: normalizeRunConfig(n.data.runConfig),
         premaxRect: n.data.premaxRect
       }
     })

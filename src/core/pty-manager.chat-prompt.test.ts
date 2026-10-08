@@ -36,7 +36,8 @@ describe('PtyManager.sendChatPrompt', () => {
     const result = await mgr.sendChatPrompt(NODE, 'hello', 'claude')
 
     expect(result).toBe(true)
-    expect(sendText).toHaveBeenCalledWith(NODE, 'hello')
+    // Typed, not pasted (core/typed-input.ts): decided here from the agent id, not by the renderer.
+    expect(sendText).toHaveBeenCalledWith(NODE, 'hello', { typedFor: 'claude' })
   })
 
   it('refuses before writing anything when a claude dialog owns the screen, and returns its text', async () => {
@@ -63,7 +64,7 @@ describe('PtyManager.sendChatPrompt', () => {
     const result = await mgr.sendChatPrompt(NODE, 'hello', 'claude')
 
     expect(result).toBe(true)
-    expect(sendText).toHaveBeenCalledWith(NODE, 'hello')
+    expect(sendText).toHaveBeenCalledWith(NODE, 'hello', { typedFor: 'claude' })
   })
 
   it('never reads the screen of an agent without a measured reader', async () => {
@@ -74,5 +75,63 @@ describe('PtyManager.sendChatPrompt', () => {
     expect(captureSession).not.toHaveBeenCalled()
     expect(result).toBe(true)
     expect(sendText).toHaveBeenCalledWith(NODE, 'hello')
+  })
+})
+
+describe('PtyManager — one write into a pane at a time', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    initPlatform(fakePlatform())
+  })
+  afterEach(() => {
+    resetPlatformForTests()
+  })
+
+  // A typed chat prompt takes seconds; a paste (an agent message, dictation) arriving meanwhile
+  // would land between its lines and be submitted as part of it.
+  it('a send into a pane waits for the one already writing there; another pane does not', async () => {
+    const { PtyManager } = await import('./pty-manager')
+    const mgr = new PtyManager()
+    const order: string[] = []
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const now = vi
+      .spyOn(mgr as unknown as { sendTextNow: (k: string, t: string) => Promise<boolean> }, 'sendTextNow')
+      .mockImplementation(async (key: string, text: string) => {
+        order.push(`start ${key} ${text}`)
+        if (text === 'slow') await gate
+        order.push(`end ${key} ${text}`)
+        return true
+      })
+    vi.spyOn(mgr as unknown as { sendEnvelopeNow: (k: string, e: string) => Promise<boolean> }, 'sendEnvelopeNow')
+      .mockImplementation(async (key: string, env: string) => {
+        order.push(`envelope ${key} ${env}`)
+        return true
+      })
+
+    const first = mgr.sendText(NODE, 'slow')
+    const second = mgr.sendText(NODE, 'after')
+    const envelope = mgr.sendEnvelope(NODE, 'msg')
+    const other = mgr.sendText('node-2', 'elsewhere')
+    await other
+    expect(order).toEqual(['start node-1 slow', 'start node-2 elsewhere', 'end node-2 elsewhere'])
+
+    release()
+    await Promise.all([first, second, envelope])
+    expect(order.slice(3)).toEqual(['end node-1 slow', 'start node-1 after', 'end node-1 after', 'envelope node-1 msg'])
+    expect(now).toHaveBeenCalledTimes(3)
+  })
+
+  it('a failed write does not block the next one', async () => {
+    const { PtyManager } = await import('./pty-manager')
+    const mgr = new PtyManager()
+    vi.spyOn(mgr as unknown as { sendTextNow: (k: string, t: string) => Promise<boolean> }, 'sendTextNow')
+      .mockImplementationOnce(async () => {
+        throw new Error('boom')
+      })
+      .mockImplementationOnce(async () => true)
+
+    await expect(mgr.sendText(NODE, 'a')).rejects.toThrow('boom')
+    await expect(mgr.sendText(NODE, 'b')).resolves.toBe(true)
   })
 })

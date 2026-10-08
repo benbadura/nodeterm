@@ -53,7 +53,8 @@ export function toKanbanSessionState(n: CanvasNodeState): KanbanSession | null {
     accountId: n.accountId,
     ssh: n.ssh,
     sshRemoteTmux: !!n.sshRemoteTmux,
-    terminalFontSize: n.terminalFontSize
+    terminalFontSize: n.terminalFontSize,
+    agentSessionId: n.agentSessionId
   }
   return {
     id: n.id,

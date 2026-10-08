@@ -7,7 +7,7 @@ import { Button } from '@renderer/ui/Button'
 import { Switch } from '@renderer/ui/Switch'
 import { useSettings } from '@renderer/state/settings'
 import { usePhonePairing } from '../usePhonePairing'
-import { IOS_APP_STORE_URL } from '@renderer/lib/links'
+import { mobileStoreLinks } from '@renderer/lib/links'
 import { hostOsFromNavigator, sshServerCopy } from '@shared/ssh-server'
 import {
   pairingEndedMessage,
@@ -26,11 +26,11 @@ const ROWS = {
   },
   pair: {
     title: 'Pair phone',
-    keywords: ['phone', 'pair', 'qr', 'ios', 'mobile', 'ssh', 'scan', 'nodeterm']
+    keywords: ['phone', 'pair', 'qr', 'ios', 'android', 'mobile', 'ssh', 'scan', 'nodeterm']
   },
   devices: {
     title: 'Paired devices',
-    keywords: ['phone', 'device', 'devices', 'paired', 'revoke', 'ios', 'iphone', 'remove']
+    keywords: ['phone', 'device', 'devices', 'paired', 'revoke', 'ios', 'iphone', 'android', 'remove']
   },
   webhook: {
     title: 'Push webhook',
@@ -180,7 +180,7 @@ export function PhoneSection({ isActive }: { isActive: boolean }): React.JSX.Ele
     <SettingsSection
       id="phone"
       title="Phone"
-      description="Pair the nodeterm iOS app so it can connect to this machine over your local network — no terminal commands needed."
+      description="Pair the nodeterm mobile app so it can connect to this machine over your local network — no terminal commands needed."
       isActive={isActive}
       searchEntries={showWebhook ? ENTRIES : BROWSER_ENTRIES}
     >
@@ -209,17 +209,22 @@ export function PhoneSection({ isActive }: { isActive: boolean }): React.JSX.Ele
         <div className="space-y-4">
           <h4 className="text-[13px] font-medium text-text">Pair phone</h4>
           <p className="text-sm text-muted">
-            Pair the nodeterm iOS app: scan this QR with your phone. Your phone generates its own
+            Pair the nodeterm mobile app: scan this QR with your phone. Your phone generates its own
             key on-device — nothing secret leaves this machine except a single-use pairing token.
           </p>
           <p className="text-sm text-muted">
             Don&apos;t have the app yet?{' '}
-            <button
-              className="cursor-pointer underline hover:text-text"
-              onClick={() => window.nodeTerminal.shell.openExternal(IOS_APP_STORE_URL)}
-            >
-              Get nodeterm for iOS on the App Store
-            </button>
+            {mobileStoreLinks().map((store, i) => (
+              <span key={store.id}>
+                {i > 0 ? ' · ' : null}
+                <button
+                  className="cursor-pointer underline hover:text-text"
+                  onClick={() => window.nodeTerminal.shell.openExternal(store.url)}
+                >
+                  {store.label}
+                </button>
+              </span>
+            ))}
           </p>
 
           {phase === 'idle' || phase === 'timeout' ? (

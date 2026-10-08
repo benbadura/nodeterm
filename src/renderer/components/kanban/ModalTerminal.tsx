@@ -1,4 +1,5 @@
 import { useContextEnsure } from '../../terminal/useContextEnsure'
+import { transcriptSessionFor } from '../../lib/transcriptSession'
 import { FIND_DECORATIONS } from '../../lib/palette'
 import { ptyRefusal } from '@shared/pty-refusal'
 
@@ -101,6 +102,9 @@ export interface ModalSpawn {
    *  the SAME session, so it renders at the node's size, not the global one — and, being a
    *  co-attach subscriber, re-reports its grid when that changes like any font change. */
   terminalFontSize?: number
+  /** The session id the node was launched with (`data.agentSessionId`) — the transcript readers'
+   *  fallback when no hook confirmed one (lib/transcriptSession.ts). Never used to spawn. */
+  agentSessionId?: string
 }
 
 /**
@@ -196,7 +200,9 @@ export function ModalTerminal({
   const observedAccount = useAgentStatus((s) => s.byId[nodeId]?.account)
   // …resolved against the live account list, so linking the dir repoints the reader at once.
   const claudeAccounts = useSettings((s) => s.settings.claudeAccounts)
-  useContextEnsure(api.context, nodeId, spawn.agentId ?? observedAgentId, agentSessionId, spawn.cwd,
+  // MIRROR TerminalNode: the meter's rehydration reads the same session the ⌘M view does.
+  const transcript = transcriptSessionFor({ live: agentSessionId, persisted: spawn.agentSessionId, cwd: spawn.cwd })
+  useContextEnsure(api.context, nodeId, spawn.agentId ?? observedAgentId, transcript.sessionId, transcript.cwd,
     effectiveAccountId(spawn.accountId, observedAccount, claudeAccounts))
   // One shallow-compared subscription for the whole appearance slice — see useXtermVisualSettings.
   // MIRROR TerminalNode: scoped to the OWNING project (`owningProjectId`, the active one — a modal

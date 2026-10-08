@@ -261,13 +261,15 @@ export function EditorNode({ id, data, selected }: NodeProps<CanvasNode>) {
   const mdChip = chipFor('node.toggleMarkdown')
 
   return (
+    <>
     <div
       className={`term-node editor-node${selected ? ' selected' : ''}`}
       style={{ borderTopColor: data.color }}
       onMouseEnter={() => (hoveredRef.current = true)}
       onMouseLeave={() => (hoveredRef.current = false)}
     >
-      <NodeResizer minWidth={NODE_MIN_SIZES.editor.width} minHeight={NODE_MIN_SIZES.editor.height} isVisible={selected} color={data.color} />
+      {/* Paint only: the old resize box in its old place (see .nt-resize-ghost in styles.css). */}
+      <NodeResizer isVisible={selected} color={data.color} lineClassName="nt-resize-ghost" handleClassName="nt-resize-ghost" />
       {/* Invisible target handle so a rope from an agent node that opened this can attach. */}
       <Handle
         id="flow-in"
@@ -374,5 +376,12 @@ export function EditorNode({ id, data, selected }: NodeProps<CanvasNode>) {
         )}
       </div>
     </div>
+    {/* Sibling of the root, not a child: under Liquid Glass the root has a backdrop-filter,
+        which makes it the containing block for these absolute edges, so they were clipped and
+        covered (only the top edge stayed grabbable). Out here they sit on the node wrapper.
+        AFTER the root, never before it: focus mode reparents the root out of this wrapper, and
+        React inserting a control "before the root" would then throw NotFoundError. */}
+    <NodeResizer minWidth={NODE_MIN_SIZES.editor.width} minHeight={NODE_MIN_SIZES.editor.height} isVisible={selected} color={data.color} />
+    </>
   )
 }

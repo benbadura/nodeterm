@@ -5,12 +5,75 @@
 // every argument built from the host's own records — nothing comes from the viewer), sends meta and a
 // visible-screen keyframe, then streams through the watcher sink (watcher-policy.ts).
 //
-// READ-ONLY IS ENFORCED HERE, on the host. The relay-host `access` hook refuses every request and
-// every cast but a Commenter's chat (watcherAccess), and this module's own `PeerAttach` is the second
-// layer: it forwards nothing to any platform, and a request or a non-chat cast that reaches it anyway
-// means the access policy failed, so the session is CLOSED (fail closed, as relay-host does for a
-// throwing wrapSink). No viewer byte, size or resize reaches a pty: the join, the size sync and the
-// capture take only ids the host chose. No `interceptReq` is ever supplied (it would bypass `access`).
+// THE VIEWER'S INBOUND SURFACE IS ENFORCED HERE, on the host. The relay-host `access` hook
+// (watcherAccess) refuses every request and every cast but chat (Commenter and Control links) and
+// unlock / input / release (Control links), and this module's own `PeerAttach` is the second layer:
+// it forwards nothing to any platform, and a request, or a cast the link's role does not admit, that
+// reaches it anyway means the access policy failed, so the session is CLOSED (fail closed, as
+// relay-host does for a throwing wrapSink). Input from a viewer that is not controlling is the same
+// breach (but for the GRACE below). No viewer size or resize reaches a pty; the only viewer bytes that
+// reach anything are a controller's input, into the pane of the session the host joined (TYPING
+// below). The join, the size sync, the capture and the input take only ids the host chose. No
+// `interceptReq` is ever supplied (it would bypass `access`).
+//
+// CONTROL (a Control link, role 'controller') is per CONNECTION: a viewer that unlocks with the link's
+// password (`watch:unlock`) is `controlling` until it releases, disconnects or is kicked, or until the
+// owner turns control off or changes the password, or the link locks; a reconnect unlocks again. The
+// record is the service's: the host READS `record.control` live and never writes it (the service sets
+// `locked` inside `onControlLocked`, before it returns). An unlock is answered to that viewer alone
+// (`watch:control`), and every throttle is here: one attempt per UNLOCK_MIN_INTERVAL_MS per viewer and
+// one verification in flight per link (both `too-soon`, not counted); a malformed attempt counts as
+// wrong and is never verified, so an over-long password never reaches scrypt; WRONG_PER_CONN wrong
+// attempts end that connection (`attempts`), WRONG_PER_LINK across the link lock it. The link count is
+// the record's: the host starts from `record.control.wrong` and reports every new count to the service
+// (`onWrongAttempt`), which writes it — an app restart does not reset it. `allowControl` and a password
+// change reset it. A verification is re-checked after its await: an
+// ended viewer, a stopped host, or any change to control meanwhile (off, locked, a new password — the
+// control epoch) voids it, uncounted. A join whose input route is `none` (Zellij, an unknown session;
+// also what a missing or unknown route reads as) makes that viewer's state `off`/`unsupported`: its
+// meta says so, an unlock is answered so (uncounted), and a controller is demoted.
+//
+// TYPING (`watch:input` from a controller). A cast whose data is not a string of 1..INPUT_MAX units is a
+// breach. A terminal's own answer to the pane's query (`isTerminalReport`: DA, CPR, a colour — every
+// controller's emulator answers every query) is dropped, uncounted. Then the connection's own token
+// bucket (INPUT_RATE / INPUT_BURST, UTF-8 bytes), a session to type into, and a batch the panes have
+// not taken yet holding at most INPUT_BURST decide; dropped input still goes through the splitter's
+// `discard` (a paste any part of which was dropped is discarded whole), and the viewer is told
+// `{controlling, dropped}` at most once per DROPPED_NOTICE_MIN_MS. A batch holds at most
+// INPUT_CHUNKS_MAX chunks (each chunk is one pane delivery — a tmux spawn — and a paste/keys alternation
+// would otherwise cost one per chunk): past it, the rest of THAT batch is dropped in whole chunks, the
+// same way and with the same notice. Accepted data goes through the
+// connection's SPLITTER (control-input.ts: keys vs a bracketed paste) into its BATCH; the batch flushes
+// INPUT_BATCH_MS after its first input into ONE flush CHAIN per link host, through `pty.input`
+// (PtyManager's pane delivery, never a tmux client's key table). A connection has at most one batch in
+// the chain: while it waits there, new input keeps collecting, so a slow pane coalesces input instead
+// of piling up deliveries. ORDER: a connection's input reaches the pane in the order it was typed, and
+// every batch arrives whole (no other controller's chunk inside it); ACROSS controllers it is roughly
+// flush order — a connection whose previous batch is still in the chain re-enters only when that batch
+// finishes, behind whatever other controllers flushed meanwhile. Each chunk is re-checked before it
+// goes — same control period (`controlGen`, bumped by every loss of control), still controlling,
+// still the session it was typed at. The same check rides the chunk as a predicate (`isCurrent`), which
+// PtyManager asks right before the step spawns: a chunk handed over and still waiting in its per-session
+// chain (behind a slow step) never lands after its sender stopped controlling. A false, a rejection, or
+// no answer within
+// INPUT_DELIVERY_TIMEOUT_MS stops the batch with the `dropped` notice (an SSH host without tmux answers
+// false on every chunk: never silence) and the chain moves on. Input is never held for a later
+// session: a session that ends drops the pending batch and discards an open paste (told either way).
+// The typing set names a controller by the name it unlocked under, not a later chat name. Nothing
+// typed is ever logged.
+//
+// GRACE. Keystrokes are in flight when control ends (a release, the owner turning typing off, a new
+// password, the lock, a join whose terminal cannot take input — every one of them goes through
+// `loseControl`): input from a connection that stopped
+// controlling within INPUT_GRACE_MS is dropped silently — not delivered, not counted, not a breach.
+// From a connection that never controlled, or later than that, it is a breach as before.
+//
+// THE TYPING SET: the names with accepted input in the last TYPING_WINDOW_MS. It is recomputed at
+// most once per TYPING_EVENT_MIN_MS while anyone is in it (which is also what clears it), sent as
+// `watch:typing` to every joined viewer when the SET changes (a new order alone is no news), and to a
+// viewer right after its meta on every (re)join while it is not empty — otherwise a viewer that
+// reconnects mid-typing would never learn it. A connection that loses control or ends leaves it at
+// once (the event follows within a tick).
 //
 // relay-host never tells us about ends it caused itself (`deny`, `close`): every such path goes
 // through `ended()`, which reports to the scheduler exactly once (the hosted-service pattern).
@@ -79,18 +142,28 @@ import type { RpcErr } from '../../shared/rpc'
 import { bytesToB64, bytesToHex } from '../../shared/watch-link/bytes'
 import { deriveWatchLinkKeys } from '../../shared/watch-link/keys'
 import {
+  INPUT_MAX,
+  PASSWORD_MAX,
+  TYPING_NAMES_MAX,
   WATCH_CHAT_CAST,
   WATCH_EVENT,
+  WATCH_INPUT_CAST,
   WATCH_PROTOCOL_VERSION,
+  WATCH_RELEASE_CAST,
+  WATCH_UNLOCK_CAST,
   sanitizeChatName,
   sanitizeChatText,
   type WatchChatMessage,
+  type WatchControlEvent,
   type WatchKeyframe,
   type WatchLinkEndReason,
   type WatchMeta
 } from '../../shared/watch-link/protocol'
 import type { HostTokenResult } from './api'
 import { unavailableCapture, type VisibleCapture } from './capture-route'
+import { createInputSplitter, createTypingTracker, type InputSplitter } from './control-input'
+import { PANE_INPUT_DEADLINE_MS, WATCHER_INPUT_ROUTES, type ControlInputChunk, type WatcherInputRoute } from './pane-input'
+import { isTerminalReport } from '../terminal-reports'
 import { createStreamFilter, type StreamFilter } from './stream-filter'
 import { createTokenBucket, type TokenBucket } from './token-bucket'
 import {
@@ -100,7 +173,7 @@ import {
   watcherAccess,
   wrapWatcherSink
 } from './watcher-policy'
-import type { WatchLinkRecord } from './store'
+import { CONTROL_WRONG_MAX, type WatchLinkRecord } from './store'
 
 export const MAX_VIEWERS_PER_LINK = 10
 /** While the link is full (no idle listener, so no mint), how often the API is asked whether the link
@@ -123,6 +196,29 @@ export const WATCHER_SIZE_SYNC_MS = 10_000
 export const CONFIRM_DEADLINE_MS = 30_000
 /** A viewer whose socket backlog passes this is closed (viewer gone, not a revoke) — R28. */
 export const VIEWER_BACKLOG_CLOSE = 8 * 1024 * 1024
+/** A Control link's unlock throttles: one attempt per viewer per 2 s; 3 wrong end that connection;
+ *  10 wrong across the link lock control until the owner allows it again. */
+export const UNLOCK_MIN_INTERVAL_MS = 2_000
+export const WRONG_PER_CONN = 3
+export const WRONG_PER_LINK = CONTROL_WRONG_MAX
+/** A controller's input budget (UTF-8 bytes): its own token bucket, separate from the stream's. */
+export const INPUT_RATE = 64 * 1024
+export const INPUT_BURST = 256 * 1024
+/** Input is collected this long per connection, then delivered as one batch. */
+export const INPUT_BATCH_MS = 20
+/** At most this many chunks in one batch: each is a pane delivery (a tmux spawn). Past it, the rest of
+ *  that batch is dropped (whole chunks: a paste is never cut) with the `dropped` notice. */
+export const INPUT_CHUNKS_MAX = 64
+/** The typing set is recomputed (and sent, when it changed) at most this often. */
+export const TYPING_EVENT_MIN_MS = 1000
+/** A viewer is told its input was dropped at most this often. */
+export const DROPPED_NOTICE_MIN_MS = 10_000
+/** Input from a connection that stopped controlling this recently is dropped silently: keystrokes in
+ *  flight when control ended are not a breach. Later than this, they are. */
+export const INPUT_GRACE_MS = 5000
+/** A pane delivery that has not answered by now counts as failed: the batch stops (`dropped`) and the
+ *  link's chain moves on. A late answer is ignored. */
+export const INPUT_DELIVERY_TIMEOUT_MS = PANE_INPUT_DEADLINE_MS
 const RATE = 256 * 1024
 const BURST = 1024 * 1024
 
@@ -135,6 +231,9 @@ export interface WatchJoin {
   /** The stream is a tmux client's output (`PtyCreateResult.tmuxClient`), which tmux paints on the
    *  alternate screen whatever the pane's application does (R18). */
   altScreen: boolean
+  /** How a controller's input reaches this session's pane (`PtyManager.watcherInputRoute`). `none`
+   *  (Zellij, an unknown session; also what a missing or unknown answer reads as) refuses control. */
+  input: WatcherInputRoute
 }
 
 /**
@@ -157,6 +256,11 @@ export interface WatchPty {
   syncSize(sessionId: string): Promise<boolean>
   /** The session is still known to the pty layer (an exit can race the join or a capture — R30). */
   alive(sessionId: string): boolean
+  /** Deliver one chunk of a controller's input to the session's PANE (`PtyManager.controlInput`, never
+   *  a tmux client's key table). Whether it was delivered; a rejection counts as false. `isCurrent` is
+   *  asked right before the delivery runs (the chunk may wait behind a slow one): false — its sender no
+   *  longer controls, in the period it typed in — and it is never delivered. */
+  input(sessionId: string, chunk: ControlInputChunk, isCurrent?: () => boolean): Promise<boolean>
 }
 export interface QuietClients {
   attach(sink: UiSink): number
@@ -176,10 +280,23 @@ export interface LinkHostDeps {
   onChat(msg: WatchChatMessage): void
   onViewerJoined(count: number): void
   onGone(reason: 'revoked' | 'expired'): void
+  /** A Control link's password check, against `record.control` as it is when called. Never asked
+   *  about a malformed or over-long password, and at most one check is in flight per link. */
+  verifyPassword(pw: string): Promise<boolean>
+  /** A viewer unlocked control, under this sanitized, self-chosen name. */
+  onControlTaken(name: string): void
+  /** WRONG_PER_LINK wrong attempts across the link. The service sets `record.control.locked = true`
+   *  before it returns (the host reads the record live and never writes it). */
+  onControlLocked(): void
+  /** A wrong unlock attempt: the link-wide count is now `count` (1..WRONG_PER_LINK). The service puts it
+   *  on `record.control.wrong` and writes it (the 10th rides the lock's own write), so a restart does
+   *  not reset it. Called before `onControlLocked`. */
+  onWrongAttempt(count: number): void
 }
 export type LinkRuntimeStatus = 'live' | 'reconnecting' | 'refused'
 export interface LinkViewer {
   viewerId: string
+  /** While controlling, the name it unlocked under; otherwise its chat name (null before it chats). */
   name: string | null
   joinedAt: number
   /** Connected, but its last join found no session to watch (R63): what the owner must be told,
@@ -187,6 +304,10 @@ export interface LinkViewer {
    *  no local tmux, Zellij) a viewer can co-attach only to a terminal this app has OPEN. Set by a
    *  REFUSED join, never by a session merely ending: that rejoins in seconds, usually successfully. */
   waiting: boolean
+  /** Unlocked this Control link with its password and has not lost control since. */
+  controlling: boolean
+  /** Gave accepted input in the last TYPING_WINDOW_MS, while controlling. */
+  typing: boolean
 }
 export interface LinkHost {
   start(): void
@@ -196,6 +317,14 @@ export interface LinkHost {
   chatHistory(): WatchChatMessage[]
   status(): LinkRuntimeStatus
   viewers(): LinkViewer[]
+  /** The service changed `record.control.enabled` (or cleared `locked`): off or locked demotes every
+   *  controller, and every joined viewer is told its state. */
+  controlChanged(): void
+  /** The password was replaced: every controller is demoted and must unlock with the new one, and the
+   *  link-wide wrong count starts over (the service resets the record's). */
+  passwordChanged(): void
+  /** The owner cleared the lock: the link-wide wrong count starts over, then as `controlChanged`. */
+  allowControl(): void
 }
 
 interface Conn {
@@ -213,6 +342,34 @@ interface Conn {
   joinedAt: number | null
   name: string | null
   lastChatAt: number
+  /** Unlocked this Control link (per connection: a reconnect unlocks again). */
+  controlling: boolean
+  /** Wrong unlock attempts on this connection since its last success. */
+  wrong: number
+  /** When this viewer's last unlock attempt was taken (a too-soon one is not). */
+  lastUnlockAt: number
+  /** When this connection last stopped controlling (INPUT_GRACE_MS); null while it never did. */
+  controlStoppedAt: number | null
+  /** Bumped every time this connection loses control: a batch from before is never delivered. */
+  controlGen: number
+  /** The last landed join's input route; null before the first one. */
+  input: WatcherInputRoute | null
+  splitter: InputSplitter
+  inputBucket: TokenBucket
+  /** Input collected since the last flush: its chunks, the session it was typed at, its UTF-8 bytes. */
+  batch: ControlInputChunk[]
+  /** The batch reached INPUT_CHUNKS_MAX: the rest of it is dropped until it is flushed. */
+  batchFull: boolean
+  batchSession: string | null
+  batchBytes: number
+  batchTimer: unknown
+  /** A batch of this connection is in the host-wide flush chain and has not finished. */
+  inChain: boolean
+  /** The chunk being delivered now: its deadline timer, and how to settle it early (end, stop). */
+  delivery: { timer: unknown; settle(ok: boolean): void } | null
+  lastDroppedAt: number
+  /** The name control was taken under (the unlock's); a later chat name does not change who typed. */
+  controlName: string | null
   // The watched session (null while waiting).
   sessionId: string | null
   altScreen: boolean
@@ -242,6 +399,13 @@ interface Conn {
   warned: Set<string>
 }
 
+/** One connection's batch in the flush chain: its chunks, the session typed at, the control period. */
+interface Batch {
+  chunks: ControlInputChunk[]
+  session: string
+  gen: number
+}
+
 interface CaptureSlot {
   current: { epoch: number; result: Promise<VisibleCapture> } | null
   /** The one rerun queued behind `current`, shared by every keyframe that needs a newer capture. */
@@ -249,6 +413,12 @@ interface CaptureSlot {
 }
 
 const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+/** The same members, in any order (the typing set is a set: a new order alone is no news). */
+function sameMembers(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false
+  const set = new Set(b)
+  return a.every((x) => set.has(x))
+}
 
 /** The session a join attached to, if it answered one (a refused join may still have attached). */
 function joinedSessionId(r: unknown): string | null {
@@ -265,7 +435,29 @@ function normalizeJoin(r: unknown): WatchJoin | null {
   const o = r as Partial<WatchJoin>
   const dim = (n: unknown): boolean => Number.isInteger(n) && (n as number) > 0
   if (!dim(o.cols) || !dim(o.rows)) return null
-  return { sessionId, cols: o.cols as number, rows: o.rows as number, altScreen: o.altScreen === true }
+  // A missing or unknown route refuses control: typing must never be guessed onto a backend.
+  const input = (WATCHER_INPUT_ROUTES as readonly unknown[]).includes(o.input) ? (o.input as WatcherInputRoute) : 'none'
+  return { sessionId, cols: o.cols as number, rows: o.rows as number, altScreen: o.altScreen === true, input }
+}
+
+/** A well-formed unlock payload, or null. The password is bounded before anything else reads it: over
+ *  PASSWORD_MAX code points is malformed, and the cheap UTF-16 test first means a huge string is never
+ *  split into an array. An empty one cannot match any stored password and is not worth a scrypt. */
+function readUnlock(p: unknown): { name: string; password: string } | null {
+  if (!p || typeof p !== 'object') return null
+  const name = sanitizeChatName((p as { name?: unknown }).name)
+  const password = (p as { password?: unknown }).password
+  if (!name || typeof password !== 'string' || password.length === 0) return null
+  if (password.length > PASSWORD_MAX * 2 || Array.from(password).length > PASSWORD_MAX) return null
+  return { name, password }
+}
+
+/** The link-wide wrong count a record holds, as an integer 0..WRONG_PER_LINK: a hand edit cannot buy
+ *  guesses (the store refuses anything else on load; this is the host's own belt). */
+function storedWrong(r: WatchLinkRecord): number {
+  const n = r.control?.wrong
+  if (typeof n !== 'number' || Number.isNaN(n)) return 0
+  return Math.min(WRONG_PER_LINK, Math.max(0, Math.floor(n)))
 }
 
 function normalizeCapture(c: unknown): VisibleCapture {
@@ -289,6 +481,23 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
   let syncTimer: unknown = null
   let stopped = false
   const warnedHost = new Set<string>()
+  /** Wrong unlock attempts across the link, starting from the record's (the service persists every new
+   *  count, so an app restart does not reset it). */
+  let linkWrong = storedWrong(record)
+  /** A password check is in flight: one per link. */
+  let verifying = false
+  /** Bumped by every change to control (off/on, a new password, the lock, allowControl): a check that
+   *  started under an older epoch is void when it returns. */
+  let controlEpoch = 0
+  /** One delivery at a time across the link: every controller's batch reaches the pane whole, in
+   *  flush order. Never rejects (each link is caught), so a failure cannot stall the chain. */
+  let inputChain: Promise<void> = Promise.resolve()
+  const tracker = createTypingTracker()
+  /** The typing set as last sent (names) and the viewers in it (for the owner's view). */
+  let typingNames: string[] = []
+  let typingIds: string[] = []
+  let typingTimer: unknown = null
+  let lastTypingAt = -Infinity
 
   const clearTimer = (h: unknown): void => {
     if (h !== null) deps.clearTimeout(h)
@@ -366,6 +575,12 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     const sid = c.sessionId
     c.sessionId = null
     c.streaming = false
+    c.controlling = false
+    clearInput(c)
+    c.splitter.reset()
+    // A delivery still waiting for the pane must not hold every other controller's batch.
+    c.delivery?.settle(false)
+    forgetTyping(c)
     if (sid !== null) leave(c.clientId, sid, c.viewerId, c)
     safe('the scheduler', () => c.ev.onClose())
     updateSyncTimer()
@@ -581,6 +796,11 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     c.settled = false
     c.followUpOnSettle = false
     c.waiting = false
+    c.input = res.input
+    // A terminal that cannot take input: whoever controls it stops (its keystrokes in flight get the
+    // grace), and the meta below says `unsupported`.
+    const demoted = res.input === 'none' && c.controlling
+    if (demoted) loseControl(c)
     // Meta after EVERY (re)attach: the viewer leaves `waiting` on it (R14).
     const meta: WatchMeta = {
       v: WATCH_PROTOCOL_VERSION,
@@ -591,7 +811,13 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
       cols: res.cols,
       rows: res.rows
     }
+    // A Control link's state for THIS viewer rides every (re)join; absent on every other role.
+    if (record.role === 'controller') meta.control = controlStateFor(c)
     if (!send(c, WATCH_EVENT.meta, meta)) return
+    // The typing set is otherwise sent only when it changes: a viewer (re)joining mid-typing would
+    // never learn it.
+    if (typingNames.length > 0) send(c, WATCH_EVENT.typing, { names: typingNames })
+    if (demoted) safe('onChange', deps.onChange)
     clearTimer(c.settleTimer)
     c.settleTimer = deps.setTimeout(() => {
       c.settleTimer = null
@@ -612,6 +838,8 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     const clientId = c.clientId
     // Deferred: a lifecycle event arrives from inside PtyManager's own delivery loop for that session.
     queueMicrotask(() => leave(clientId, sid, c.viewerId, c))
+    // Input typed at this session's screen never reaches the next session.
+    abandonInput(c)
     enterWaiting(c)
     scheduleRejoin(c)
     updateSyncTimer()
@@ -656,11 +884,29 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     safe('onChange', deps.onChange)
   }
   function onViewerCast(c: Conn, method: string, args: unknown[]): void {
-    // relay-host's access hook admits a Commenter's chat cast and nothing else.
-    if (method !== WATCH_CHAT_CAST || record.role !== 'commenter') {
-      policyBreach(c, `cast ${method}`)
+    // relay-host's access hook admits exactly these (watcherAccess); anything else got past it.
+    if (method === WATCH_CHAT_CAST && (record.role === 'commenter' || record.role === 'controller')) {
+      onChat(c, args)
       return
     }
+    if (record.role === 'controller') {
+      if (method === WATCH_UNLOCK_CAST) {
+        // Never the error's text: nothing that might carry the password is logged.
+        onUnlock(c, args).catch((err) => warn(c, 'an unlock failed', err instanceof Error ? err.name : 'not an Error'))
+        return
+      }
+      if (method === WATCH_INPUT_CAST) {
+        onInput(c, args)
+        return
+      }
+      if (method === WATCH_RELEASE_CAST) {
+        onRelease(c)
+        return
+      }
+    }
+    policyBreach(c, `cast ${method}`)
+  }
+  function onChat(c: Conn, args: unknown[]): void {
     if (c.ended || c.joinedAt === null) return
     const now = deps.now()
     if (now - c.lastChatAt < CHAT_MIN_INTERVAL_MS) return
@@ -672,6 +918,349 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     c.lastChatAt = now
     c.name = name
     publish({ id: bytesToHex(nacl.randomBytes(8)), name, text, at: now, from: 'viewer' })
+  }
+
+  // --- control (a Control link) -----------------------------------------------------------------------
+
+  /** This viewer's control state, as meta and every unprompted `watch:control` carry it. */
+  function controlStateFor(c: Conn): WatchControlEvent {
+    const ctl = record.control
+    // The watched terminal cannot take input (Zellij, an unknown session): no password changes that.
+    if (c.input === 'none') return { state: 'off', reason: 'unsupported' }
+    if (c.controlling && ctl && ctl.enabled && !ctl.locked) return { state: 'controlling' }
+    if (ctl?.locked) return { state: 'locked' }
+    if (!ctl || !ctl.enabled) return { state: 'off' }
+    return { state: 'available' }
+  }
+  function sendControl(c: Conn, ev: WatchControlEvent): void {
+    send(c, WATCH_EVENT.control, ev)
+  }
+  const joinedConns = (): Conn[] => [...conns].filter((c) => c.joinedAt !== null && !c.ended)
+
+  async function onUnlock(c: Conn, args: unknown[]): Promise<void> {
+    if (c.ended || c.joinedAt === null || stopped) return
+    const state = controlStateFor(c)
+    // Already controlling, locked or off: answered as it stands, never counted, never throttled.
+    if (state.state === 'controlling') {
+      sendControl(c, state)
+      return
+    }
+    if (state.state === 'locked' || state.state === 'off') {
+      sendControl(c, { state: state.state, reason: state.reason ?? state.state })
+      return
+    }
+    const now = deps.now()
+    if (verifying || now - c.lastUnlockAt < UNLOCK_MIN_INTERVAL_MS) {
+      sendControl(c, { state: state.state, reason: 'too-soon' })
+      return
+    }
+    c.lastUnlockAt = now
+    const attempt = readUnlock(args[0])
+    // A malformed attempt is still an attempt.
+    if (!attempt) {
+      wrongAttempt(c)
+      return
+    }
+    verifying = true
+    const epoch = controlEpoch
+    let right: boolean | null = null
+    try {
+      right = (await deps.verifyPassword(attempt.password)) === true
+    } catch (err) {
+      warn(c, 'a control password check failed', err instanceof Error ? err.name : 'not an Error')
+    } finally {
+      verifying = false
+    }
+    if (c.ended || stopped) return
+    if (right === null || epoch !== controlEpoch || controlStateFor(c).state !== 'available') {
+      refuseVoid(c)
+      return
+    }
+    if (!right) {
+      wrongAttempt(c)
+      return
+    }
+    c.controlling = true
+    c.wrong = 0
+    c.name = attempt.name
+    c.controlName = attempt.name
+    sendControl(c, { state: 'controlling' })
+    // That send can end the connection (a backlog past VIEWER_BACKLOG_CLOSE): then nobody took control.
+    if (c.ended) return
+    safe('onControlTaken', () => deps.onControlTaken(attempt.name))
+    safe('onChange', deps.onChange)
+  }
+  /** A check whose answer no longer applies (control changed under it, or it failed): void, not
+   *  wrong. Nothing is counted, and the viewer may try again. */
+  function refuseVoid(c: Conn): void {
+    const state = controlStateFor(c)
+    if (state.state === 'locked' || state.state === 'off') sendControl(c, { state: state.state, reason: state.reason ?? state.state })
+    else sendControl(c, { state: state.state, reason: 'too-soon' })
+  }
+  function wrongAttempt(c: Conn): void {
+    c.wrong++
+    linkWrong++
+    // The service records (and writes) the link-wide count before any lock below.
+    const count = Math.min(linkWrong, WRONG_PER_LINK)
+    safe('onWrongAttempt', () => deps.onWrongAttempt(count))
+    sendControl(c, { state: controlStateFor(c).state, reason: 'wrong' })
+    if (linkWrong >= WRONG_PER_LINK) lockLink()
+    if (c.wrong >= WRONG_PER_CONN) endConn(c, 'attempts')
+  }
+  /** Locked: the service records it (synchronously, in `onControlLocked`), every viewer is told, and
+   *  every controller drops back to watching. */
+  function lockLink(): void {
+    controlEpoch++
+    safe('onControlLocked', () => deps.onControlLocked())
+    // The lock rests on the service recording it before it returns. If it did not (it threw, or a
+    // wiring slip), the next attempt would be verified again: say so loudly, and still demote and tell.
+    if (record.control?.locked !== true) console.error('[watch-link] onControlLocked did not lock the link')
+    for (const c of joinedConns()) {
+      loseControl(c)
+      sendControl(c, { state: 'locked', reason: 'locked' })
+    }
+    safe('onChange', deps.onChange)
+  }
+  /** Control changed under every viewer: off or locked demotes the controllers; each is told. */
+  function broadcastControl(): void {
+    controlEpoch++
+    const ctl = record.control
+    const usable = !!ctl && ctl.enabled && !ctl.locked
+    for (const c of joinedConns()) {
+      if (!usable) loseControl(c)
+      sendControl(c, controlStateFor(c))
+    }
+    safe('onChange', deps.onChange)
+  }
+  function onRelease(c: Conn): void {
+    if (c.ended || c.joinedAt === null || !c.controlling) return
+    loseControl(c)
+    sendControl(c, controlStateFor(c))
+    safe('onChange', deps.onChange)
+  }
+
+  // --- typing: the input path ---------------------------------------------------------------------------
+
+  /** This connection stops controlling: its pending input is discarded, an open paste forgotten, it
+   *  leaves the typing set, and its keystrokes still in flight get INPUT_GRACE_MS of silence. */
+  function loseControl(c: Conn): void {
+    if (!c.controlling) return
+    c.controlling = false
+    c.controlStoppedAt = deps.now()
+    c.controlGen++
+    clearInput(c)
+    c.splitter.reset()
+    forgetTyping(c)
+  }
+  function clearInput(c: Conn): void {
+    clearTimer(c.batchTimer)
+    c.batchTimer = null
+    c.batch = []
+    c.batchFull = false
+    c.batchBytes = 0
+    c.batchSession = null
+  }
+  /** The watched session ended: pending input is dropped (and the controller told), and an open paste
+   *  is discarded whole when its end arrives. */
+  function abandonInput(c: Conn): void {
+    const had = c.batch.length > 0 || c.splitter.pasteOpen()
+    clearInput(c)
+    c.splitter.discard('')
+    if (had) noteDropped(c)
+  }
+  /** "Some of your input did not reach the terminal", at most once per DROPPED_NOTICE_MIN_MS, and only
+   *  to a connection that is still controlling (one that lost control was told its new state). */
+  function noteDropped(c: Conn): void {
+    if (c.ended || controlStateFor(c).state !== 'controlling') return
+    const now = deps.now()
+    if (now - c.lastDroppedAt < DROPPED_NOTICE_MIN_MS) return
+    c.lastDroppedAt = now
+    sendControl(c, { state: 'controlling', reason: 'dropped' })
+  }
+  const withinGrace = (c: Conn): boolean => c.controlStoppedAt !== null && deps.now() - c.controlStoppedAt <= INPUT_GRACE_MS
+
+  function onInput(c: Conn, args: unknown[]): void {
+    if (c.ended) return
+    if (controlStateFor(c).state !== 'controlling') {
+      // Keystrokes in flight when control ended (released, demoted, or the record changed and the
+      // host has not been told yet) are dropped silently. From anyone else, or later, a breach.
+      if (c.controlling || withinGrace(c)) return
+      policyBreach(c, `cast ${WATCH_INPUT_CAST}`)
+      return
+    }
+    const p = args[0]
+    const data = p && typeof p === 'object' ? (p as { data?: unknown }).data : undefined
+    if (typeof data !== 'string' || data.length === 0 || data.length > INPUT_MAX) {
+      policyBreach(c, `malformed ${WATCH_INPUT_CAST}`)
+      return
+    }
+    // The viewer's emulator answering the pane's own queries (DA, CPR, a colour) is not typing: every
+    // controller would answer every query again into the pane. Not counted against the budget.
+    if (isTerminalReport(data)) return
+    const bytes = Buffer.byteLength(data, 'utf8')
+    const sid = c.sessionId
+    // No session to type into (waiting), or over budget — a batch already holding INPUT_CHUNKS_MAX
+    // chunks, the bucket, or a batch the panes have not taken yet already holding a burst: dropped, and
+    // the viewer told. Input is never held for a later session. The splitter still sees it, so a paste
+    // it belonged to is discarded whole.
+    if (sid === null || c.batchFull || c.batchBytes + bytes > INPUT_BURST || !c.inputBucket.take(bytes)) {
+      c.splitter.discard(data)
+      noteDropped(c)
+      return
+    }
+    if (c.batchSession !== null && c.batchSession !== sid) abandonInput(c)
+    c.batchSession = sid
+    c.batchBytes += bytes
+    appendChunks(c, c.splitter.push(data))
+    if (c.controlName) tracker.note(c.viewerId, c.controlName, deps.now())
+    scheduleTyping()
+    if (c.batchTimer === null) {
+      c.batchTimer = deps.setTimeout(() => {
+        c.batchTimer = null
+        flushBatch(c)
+      }, INPUT_BATCH_MS)
+    }
+  }
+  /** Adjacent keys merge (up to INPUT_MAX units): one pane delivery per run of typing, not per cast. A
+   *  batch holds at most INPUT_CHUNKS_MAX chunks: the first chunk past it ends the batch's intake. */
+  function appendChunks(c: Conn, chunks: ControlInputChunk[]): void {
+    for (const ch of chunks) {
+      if (c.batchFull) return
+      const last = c.batch[c.batch.length - 1]
+      if (ch.kind === 'keys' && last?.kind === 'keys' && last.data.length + ch.data.length <= INPUT_MAX) {
+        c.batch[c.batch.length - 1] = { kind: 'keys', data: last.data + ch.data }
+      } else if (c.batch.length >= INPUT_CHUNKS_MAX) {
+        batchFilled(c)
+        return
+      } else c.batch.push(ch)
+    }
+  }
+  /** The batch is full: this chunk and the rest of the batch are dropped, in whole chunks — what the
+   *  splitter still holds belongs to that rest (an open paste is discarded whole, a held prefix is never
+   *  keys), and later input is dropped until the batch is flushed. The viewer is told. */
+  function batchFilled(c: Conn): void {
+    c.batchFull = true
+    c.splitter.discard('')
+    noteDropped(c)
+  }
+  /** Hand the connection's batch to the host-wide chain. While its previous batch is still there, this
+   *  one waits (and keeps collecting) and follows it the moment it finishes: one batch per connection
+   *  in the chain at most, so a slow pane cannot pile up deliveries. */
+  function flushBatch(c: Conn): void {
+    if (c.ended || stopped || c.inChain) return
+    // A held Esc or Alt+[ is a key press by now; a longer marker prefix keeps waiting (control-input.ts).
+    appendChunks(c, c.splitter.drain())
+    const chunks = c.batch
+    const session = c.batchSession
+    c.batch = []
+    c.batchFull = false
+    c.batchBytes = 0
+    c.batchSession = null
+    if (chunks.length === 0 || session === null) return
+    const batch = { chunks, session, gen: c.controlGen }
+    c.inChain = true
+    // A rejection here would skip every later batch of every controller: caught, by name only.
+    inputChain = inputChain
+      .then(() => deliverBatch(c, batch))
+      .catch((err) => warn(null, 'the input chain failed', err instanceof Error ? err.name : 'not an Error'))
+  }
+  /** The batch's sender still controls, in the control period it typed in. */
+  const stillControls = (c: Conn, b: Batch): boolean =>
+    !stopped && !c.ended && c.controlGen === b.gen && controlStateFor(c).state === 'controlling'
+  /** Deliver one batch whole, chunk by chunk, re-checking before each that its sender still controls,
+   *  under the same control period, the session it typed at. A false (or a rejection) stops it. */
+  async function deliverBatch(c: Conn, b: Batch): Promise<void> {
+    try {
+      for (const chunk of b.chunks) {
+        // Control ended since it was typed (and the viewer was told its new state): void, silently.
+        if (!stillControls(c, b)) return
+        // The session it was typed at is gone: what is left did not reach the terminal.
+        if (c.sessionId !== b.session) {
+          noteDropped(c)
+          return
+        }
+        const ok = await deliverChunk(c, b, chunk)
+        if (!ok) {
+          noteDropped(c)
+          return
+        }
+      }
+    } finally {
+      c.inChain = false
+      // What it collected meanwhile, when its own timer has already fired.
+      if (c.batchTimer === null) safe('an input flush', () => flushBatch(c))
+    }
+  }
+
+  /** One chunk to the pane, answered within INPUT_DELIVERY_TIMEOUT_MS. A rejection, a throw, or no
+   *  answer in time is false; an answer after that is ignored. `ended` settles it at once (false), so a
+   *  pane that never answers cannot hold the link's chain beyond its deadline. */
+  function deliverChunk(c: Conn, b: Batch, chunk: ControlInputChunk): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      let settled = false
+      const slot: { timer: unknown; settle(ok: boolean): void } = {
+        timer: null,
+        settle(ok) {
+          if (settled) return
+          settled = true
+          clearTimer(slot.timer)
+          slot.timer = null
+          if (c.delivery === slot) c.delivery = null
+          resolve(ok)
+        }
+      }
+      c.delivery = slot
+      slot.timer = deps.setTimeout(() => {
+        slot.timer = null
+        warn(c, 'a pane delivery timed out', `no answer in ${INPUT_DELIVERY_TIMEOUT_MS} ms`)
+        slot.settle(false)
+      }, INPUT_DELIVERY_TIMEOUT_MS)
+      const failed = (err: unknown): void => {
+        // Never the error's text: what failed to type may be in it.
+        warn(c, 'delivering input failed', err instanceof Error ? err.name : 'not an Error')
+        slot.settle(false)
+      }
+      // The same check as before this chunk, asked again by PtyManager right before it runs: a chunk
+      // still waiting in its per-session chain when its sender stops controlling never lands.
+      const isCurrent = (): boolean => stillControls(c, b) && c.sessionId === b.session
+      try {
+        void Promise.resolve(deps.pty.input(b.session, chunk, isCurrent)).then((ok) => slot.settle(ok === true), failed)
+      } catch (err) {
+        failed(err)
+      }
+    })
+  }
+
+  // --- typing: who is typing --------------------------------------------------------------------------
+
+  function forgetTyping(c: Conn): void {
+    tracker.drop(c.viewerId)
+    scheduleTyping()
+  }
+  /** Recompute the typing set now, or at most TYPING_EVENT_MIN_MS after the last time. */
+  function scheduleTyping(): void {
+    if (stopped || typingTimer !== null) return
+    const wait = TYPING_EVENT_MIN_MS - (deps.now() - lastTypingAt)
+    if (wait <= 0) evaluateTyping()
+    else typingTimer = deps.setTimeout(evaluateTyping, wait)
+  }
+  function evaluateTyping(): void {
+    typingTimer = null
+    if (stopped) return
+    const now = deps.now()
+    lastTypingAt = now
+    const names = tracker.names(now).slice(0, TYPING_NAMES_MAX)
+    const ids = joinedConns()
+      .filter((c) => tracker.typing(c.viewerId, now))
+      .map((c) => c.viewerId)
+    const namesChanged = !sameMembers(names, typingNames)
+    const idsChanged = !sameMembers(ids, typingIds)
+    typingNames = names
+    typingIds = ids
+    if (namesChanged) for (const c of joinedConns()) send(c, WATCH_EVENT.typing, { names })
+    if (namesChanged || idsChanged) safe('onChange', deps.onChange)
+    // While anyone is in the set, look again in a second (that is also what clears it).
+    if (names.length > 0 && typingTimer === null && !stopped) typingTimer = deps.setTimeout(evaluateTyping, TYPING_EVENT_MIN_MS)
   }
 
   // --- listeners and viewer sessions ----------------------------------------------------------------
@@ -696,6 +1285,23 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
       joinedAt: null,
       name: null,
       lastChatAt: -Infinity,
+      controlling: false,
+      wrong: 0,
+      lastUnlockAt: -Infinity,
+      controlStoppedAt: null,
+      controlGen: 0,
+      input: null,
+      splitter: createInputSplitter(),
+      inputBucket: createTokenBucket({ ratePerSec: INPUT_RATE, burst: INPUT_BURST, now: deps.now }),
+      batch: [],
+      batchFull: false,
+      batchSession: null,
+      batchBytes: 0,
+      batchTimer: null,
+      inChain: false,
+      delivery: null,
+      lastDroppedAt: -Infinity,
+      controlName: null,
       sessionId: null,
       altScreen: false,
       joining: false,
@@ -822,9 +1428,21 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
 
   function viewers(): LinkViewer[] {
     const out: LinkViewer[] = []
+    const now = deps.now()
     for (const c of conns) {
       if (c.joinedAt === null || c.ended) continue
-      out.push({ viewerId: c.viewerId, name: c.name, joinedAt: c.joinedAt, waiting: c.joinRefused && c.sessionId === null })
+      // The effective state: a flag the host has not yet been told to clear never reads as control.
+      const controlling = controlStateFor(c).state === 'controlling'
+      out.push({
+        viewerId: c.viewerId,
+        // While it controls, the name it unlocked under — the one the typing set and the owner's
+        // "took control" notice use — never a later chat name beside them.
+        name: controlling ? (c.controlName ?? c.name) : c.name,
+        joinedAt: c.joinedAt,
+        waiting: c.joinRefused && c.sessionId === null,
+        controlling,
+        typing: tracker.typing(c.viewerId, now)
+      })
     }
     return out
   }
@@ -897,6 +1515,10 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
       c.session?.close()
       ended(c)
     }
+    clearTimer(typingTimer)
+    typingTimer = null
+    typingNames = []
+    typingIds = []
     safe('onChange', deps.onChange)
   }
 
@@ -916,7 +1538,7 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     },
     postSharerChat(text) {
       const clean = sanitizeChatText(text)
-      if (!clean || record.role !== 'commenter' || stopped) return null
+      if (!clean || (record.role !== 'commenter' && record.role !== 'controller') || stopped) return null
       const msg: WatchChatMessage = { id: bytesToHex(nacl.randomBytes(8)), name: record.label, text: clean, at: deps.now(), from: 'sharer' }
       publish(msg)
       return msg
@@ -928,6 +1550,27 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
       if (sched.idle > 0 || sched.bridged >= MAX_VIEWERS_PER_LINK) return 'live'
       return sched.lastError ? 'reconnecting' : 'live'
     },
-    viewers
+    viewers,
+    controlChanged() {
+      if (stopped || record.role !== 'controller') return
+      broadcastControl()
+    },
+    passwordChanged() {
+      if (stopped || record.role !== 'controller') return
+      // A new password starts the link-wide count over (the service resets the record's too).
+      linkWrong = 0
+      controlEpoch++
+      for (const c of joinedConns()) {
+        if (!c.controlling) continue
+        loseControl(c)
+        sendControl(c, controlStateFor(c))
+      }
+      safe('onChange', deps.onChange)
+    },
+    allowControl() {
+      if (stopped || record.role !== 'controller') return
+      linkWrong = 0
+      broadcastControl()
+    }
   }
 }

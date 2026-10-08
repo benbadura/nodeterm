@@ -3,6 +3,8 @@
 // The QR payload + the authorized_keys line validation are the two bits of the pairing flow
 // with a fixed on-the-wire contract shared with the nodeterm iOS app — keep them here, pure.
 
+import { CONTROL_RE } from '../core/relay/team-admin'
+
 /**
  * The relay block optionally embedded in the QR payload (and the /pair HTTP response). Present
  * only when this host has phone-access (standing relay host) enabled + Pro, so the phone can
@@ -100,17 +102,33 @@ export function normalizeAuthorizedKeysLine(line: string): string {
 }
 
 /**
- * The attributable comment we stamp onto each paired key. Keeping it a single deterministic
- * token (`nodeterm-ios-<deviceId>`) is what lets revocation find & delete the exact line later.
+ * The attributable comment stamped onto every key paired from now on. One deterministic token
+ * (`nodeterm-mobile-<deviceId>`) is what lets revocation find & delete the exact line later.
+ * Platform-neutral: iOS and Android phones get the same stamp.
  */
+export const DEVICE_KEY_COMMENT_PREFIX = 'nodeterm-mobile-'
+
+/**
+ * The stamp used while the companion was iOS-only. Every iPhone paired before the rename still
+ * carries it in authorized_keys, and revoke MUST keep matching it — a revoke that only knew the
+ * new prefix would report the phone removed while its SSH key stayed live. Never stamped again.
+ */
+export const LEGACY_DEVICE_KEY_COMMENT_PREFIX = 'nodeterm-ios-'
+
 export function deviceCommentFor(deviceId: string): string {
-  return `nodeterm-ios-${deviceId}`
+  return `${DEVICE_KEY_COMMENT_PREFIX}${deviceId}`
+}
+
+/** Every comment a key for `deviceId` may carry: the current stamp first, then the legacy one. */
+export function deviceCommentsFor(deviceId: string): string[] {
+  return [deviceCommentFor(deviceId), `${LEGACY_DEVICE_KEY_COMMENT_PREFIX}${deviceId}`]
 }
 
 /**
- * Rewrite an incoming public-key line so its comment is exactly `nodeterm-ios-<deviceId>`,
- * replacing whatever comment the phone sent while keeping the key type + base64 blob intact.
- * The result is already normalized (single-space separated), ready for authorized_keys.
+ * Rewrite an incoming public-key line so its comment is exactly `nodeterm-mobile-<deviceId>`,
+ * replacing whatever comment the phone sent (the iOS app sends `nodeterm-ios`) while keeping the
+ * key type + base64 blob intact. The result is already normalized (single-space separated),
+ * ready for authorized_keys.
  */
 export function rewriteKeyComment(publicKey: string, deviceId: string): string {
   const parts = normalizeAuthorizedKeysLine(publicKey).split(' ')
@@ -120,18 +138,18 @@ export function rewriteKeyComment(publicKey: string, deviceId: string): string {
 }
 
 /**
- * Remove every authorized_keys line whose comment is exactly `nodeterm-ios-<deviceId>`,
- * preserving all other lines (including blanks, other keys' comments, and the trailing
- * newline) byte-for-byte. The caller writes the result back atomically.
+ * Remove every authorized_keys line whose comment is EXACTLY one of `deviceCommentsFor(deviceId)`
+ * (current or legacy stamp), preserving all other lines (including blanks, other keys' comments,
+ * and the trailing newline) byte-for-byte. The caller writes the result back atomically.
  */
 export function filterAuthorizedKeys(content: string, deviceId: string): string {
-  const target = deviceCommentFor(deviceId)
+  const targets = new Set(deviceCommentsFor(deviceId))
   return content
     .split('\n')
     .filter((line) => {
       const parts = line.trim().split(/\s+/)
       // comment = everything after the key type + base64 blob
-      return parts.slice(2).join(' ') !== target
+      return !targets.has(parts.slice(2).join(' '))
     })
     .join('\n')
 }
@@ -164,13 +182,50 @@ export interface DeviceEntry {
 /** The device shape safe to expose to the renderer (no `token`). */
 export type PublicDevice = Omit<DeviceEntry, 'token'>
 
-/** Default device name when the phone didn't send one (or sent blank). */
-export function normalizeDeviceName(name: unknown): string {
+/** The comment the shipped iOS app puts on the key it generates (nodeterm-ios PairingService). */
+export const IOS_APP_KEY_COMMENT = 'nodeterm-ios'
+
+/** A phone-sent name is shown in Settings and sent as the relay label; keep it one short line (graphemes). */
+export const DEVICE_NAME_MAX = 64
+
+const CONTROL_RE_GLOBAL = new RegExp(CONTROL_RE.source, 'gu')
+/** Zero-width characters with no visible glyph (NOT U+200D, which joins emoji). */
+const INVISIBLE_RE = /[\u200B\u200C\u2060\uFEFF]/g
+const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+
+/** The comment part of a public-key line (everything after type + blob), whitespace-collapsed. */
+export function keyCommentOf(publicKey: string): string {
+  return normalizeAuthorizedKeysLine(publicKey).split(' ').slice(2).join(' ')
+}
+
+/**
+ * The name a paired phone is listed (and relay-labelled) under.
+ *
+ * The name the phone sends wins — Android sends one. Control characters and newlines collapse to
+ * single spaces; bidi / direction marks (the repo's Trojan-Source set, `CONTROL_RE`) become spaces
+ * too, and the zero-width characters U+200B, U+200C, U+2060 and U+FEFF are removed outright (U+200D
+ * is kept: it joins legitimate emoji). The result is capped at DEVICE_NAME_MAX GRAPHEMES, so a
+ * ZWJ emoji is kept whole or cut whole, never left with a dangling joiner. A name with no visible
+ * content after that (empty, or only U+200D) counts as no name.
+ * With no usable name the fallback is the neutral 'Phone' — EXCEPT for the iOS app, which has
+ * never sent a name: it is recognised by its fixed key comment and keeps the 'iPhone' every iPhone
+ * paired so far was given. Without that branch every newly paired iPhone would silently become
+ * "Phone".
+ */
+export function normalizeDeviceName(name: unknown, publicKey = ''): string {
   if (typeof name === 'string') {
-    const trimmed = name.trim()
-    if (trimmed) return trimmed
+    const flat = name
+      .replace(CONTROL_RE_GLOBAL, ' ')
+      .replace(INVISIBLE_RE, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    const capped = Array.from(GRAPHEME_SEGMENTER.segment(flat), (g) => g.segment)
+      .slice(0, DEVICE_NAME_MAX)
+      .join('')
+      .trim()
+    if (capped.replace(/\u200D/g, '').trim()) return capped
   }
-  return 'iPhone'
+  return keyCommentOf(publicKey) === IOS_APP_KEY_COMMENT ? 'iPhone' : 'Phone'
 }
 
 /**

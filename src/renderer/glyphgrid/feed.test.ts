@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { CELL_STRIDE, FLAG_BOLD, FLAG_CURSOR, FLAG_ITALIC, FLAG_SELECTED, FLAG_UNDERLINE, FLAG_WIDE, packColor, readCell } from './cells'
+import {
+  CELL_STRIDE,
+  FLAG_BOLD,
+  FLAG_CURSOR,
+  FLAG_ITALIC,
+  FLAG_SELECTED,
+  FLAG_STRIKETHROUGH,
+  FLAG_UNDERLINE,
+  FLAG_WIDE,
+  packColor,
+  readCell
+} from './cells'
 import type { GlyphAtlas, GlyphPart } from './atlas'
 import type { DecorationReader } from './decorations'
 import { packViewportRow, setBlankCellProbe, type BlankCellReport, type CellView, type RowFeedOpts, type ThemeLanes } from './feed'
@@ -28,6 +39,7 @@ function fakeAtlas(): Pick<GlyphAtlas, 'glyphFor'> & {
   colors: Array<[number, number]>
   parts: GlyphPart[]
   underlines: boolean[]
+  strikethroughs: boolean[]
 } {
   const calls: Array<[number, boolean, boolean]> = []
   const colors: Array<[number, number]> = []
@@ -37,11 +49,13 @@ function fakeAtlas(): Pick<GlyphAtlas, 'glyphFor'> & {
   // assertions that pin `calls` verbatim stay about what they were written for.
   const parts: GlyphPart[] = []
   const underlines: boolean[] = []
+  const strikethroughs: boolean[] = []
   return {
     calls,
     colors,
     parts,
     underlines,
+    strikethroughs,
     glyphFor(
       code: number,
       bold: boolean,
@@ -49,12 +63,14 @@ function fakeAtlas(): Pick<GlyphAtlas, 'glyphFor'> & {
       fg: number,
       bg: number,
       part: GlyphPart = 'whole',
-      underline = false
+      underline = false,
+      strikethrough = false
     ): number {
       calls.push([code, bold, italic])
       colors.push([fg, bg])
       parts.push(part)
       underlines.push(underline)
+      strikethroughs.push(strikethrough)
       return 900 + calls.length
     }
   }
@@ -71,6 +87,7 @@ function makeCell(
     bold?: boolean
     italic?: boolean
     underline?: boolean
+    strikethrough?: boolean
     inverse?: boolean
     dim?: boolean
     fg?: Attr
@@ -88,6 +105,7 @@ function makeCell(
     isBold: () => (o.bold ? 1 : 0),
     isItalic: () => (o.italic ? 1 : 0),
     isUnderline: () => (o.underline ? 1 : 0),
+    isStrikethrough: () => (o.strikethrough ? 1 : 0),
     isInverse: () => (o.inverse ? 1 : 0),
     isDim: () => (o.dim ? 1 : 0),
     isFgDefault: () => is(fg, 'default'),
@@ -222,6 +240,32 @@ describe('packViewportRow — attributes', () => {
     expect(atlas.calls).toEqual([[0x43, false, true]])
     expect(readCell(out, 0).flags).toBe(FLAG_ITALIC | FLAG_UNDERLINE)
   })
+
+  /**
+   * Reported 2026-10-06: a diff viewer's removed lines (`\e[9m`) showed no strikethrough in shared
+   * mode while GPU mode drew one. The feed never read the attribute at all.
+   */
+  it('strikethrough sets FLAG_STRIKETHROUGH and asks the atlas for the STRUCK variant', () => {
+    const { out, atlas } = pack([makeCell({ code: 0x44, strikethrough: true })])
+
+    expect(readCell(out, 0).flags).toBe(FLAG_STRIKETHROUGH)
+    expect(atlas.strikethroughs).toEqual([true])
+    expect(atlas.underlines).toEqual([false])
+  })
+
+  it('strikes a SPACE inside a struck run — the line must not dash at word gaps', () => {
+    const { out, atlas } = pack([makeCell({ code: 0x20, strikethrough: true })])
+
+    expect(readCell(out, 0).glyph).not.toBe(0)
+    expect(atlas.strikethroughs).toEqual([true])
+  })
+
+  it('an undecorated space still takes the blank slot', () => {
+    const { out, atlas } = pack([makeCell({ code: 0x20 })])
+
+    expect(readCell(out, 0).glyph).toBe(0)
+    expect(atlas.calls).toEqual([])
+  })
 })
 
 describe('packViewportRow — wide and zero-width cells', () => {
@@ -257,6 +301,16 @@ describe('packViewportRow — wide and zero-width cells', () => {
       [0x4e2d, true, true],
       [0x4e2d, true, true]
     ])
+  })
+
+  it('the follower carries the lead’s strikethrough, so both halves are crossed out', () => {
+    const lead = makeCell({ code: 0x4e2d, width: 2, strikethrough: true })
+    const cont = makeCell({ code: 0, width: 0 })
+
+    const { out, atlas } = pack([lead, cont])
+
+    expect(atlas.strikethroughs).toEqual([true, true])
+    expect(readCell(out, 1).flags & FLAG_STRIKETHROUGH).toBe(FLAG_STRIKETHROUGH)
   })
 
   it('a zero-width cell with no wide lead before it still writes a blank cell (never stale)', () => {

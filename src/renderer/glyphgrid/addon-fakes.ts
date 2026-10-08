@@ -41,6 +41,7 @@ export function rowCodedCell(absRow: number, col: number): CellView {
     isBold: () => 0,
     isItalic: () => 0,
     isUnderline: () => 0,
+    isStrikethrough: () => 0,
     isInverse: () => 0,
     isDim: () => 0,
     isFgDefault: () => true,

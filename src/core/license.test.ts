@@ -617,6 +617,20 @@ describe('license detail + release', () => {
     })
   })
 
+  it('carries a google source the same way (a Play purchase bridged from a paired Android phone)', async () => {
+    storeToken()
+    await boot(vi.fn(async () => jsonResponse({ key: null, used: 0, seats: 0, source: 'google' })))
+
+    expect(await detail()).toEqual({ key: null, used: 0, seats: 0, source: 'google', error: null })
+  })
+
+  it('still degrades an unknown source word to null', async () => {
+    storeToken()
+    await boot(vi.fn(async () => jsonResponse({ key: null, used: 0, seats: 0, source: 'huawei' })))
+
+    expect((await detail()).source).toBeNull()
+  })
+
   it('a 200 with key null is a success, not the 402 inactive story', async () => {
     // A keygen policy may hide keys, and licenses predating the `key` column have none stored.
     // Reporting that as a failure would tell a paying subscriber their license is inactive.

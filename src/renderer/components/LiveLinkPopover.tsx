@@ -1,27 +1,28 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { NodeTerminalApi } from '@shared/types'
 import type { WatchLinkView } from '@shared/watch-link-types'
 import { stripBidiControls } from '@shared/watch-link-types'
 import { CHAT_TEXT_MAX, type WatchChatMessage } from '@shared/watch-link/protocol'
 import { useDialogStack } from './dialog-stack'
+import { useCopied } from './LiveLinkPassword'
+import { ControlHold, ControlSection, hasChat, kickViewer, type ControlHoldKind } from './LiveLinkControls'
 import { useMenuFlip } from '../ui/useMenuFlip'
 import {
   CHAT_NOT_SENT_MESSAGE,
   commentFromChat,
   formatClock,
   formatRemaining,
-  KICK_FAILED_MESSAGE,
-  KICK_NOT_DONE_MESSAGE,
-  KICK_NOTE,
+  kickNote,
   ROLE_LABEL,
+  ROLE_NAME,
   statusLine,
   STOP_FAILED_MESSAGE,
   viewerName,
   waitingViewers
 } from '../lib/liveLink'
 import { thisMachine } from '../lib/machineName'
-import { EMPTY_LINKS, useWatchLinks, viewLinkThread } from '../state/watchLinks'
+import { EMPTY_LINKS, useLinkThread, useWatchLinks } from '../state/watchLinks'
 import { useBoardLog } from '../state/boardLog'
 import { useProjects } from '../state/projects'
 import { sessionForProject } from '../session/session'
@@ -89,10 +90,11 @@ function commentTarget(nodeId: string): { projectId: string; api: NodeTerminalAp
 }
 
 /**
- * Per-link controls for one node: copy, stop, the viewer list with Kick, and — for a Commenter
- * link — the thread with a reply box and "Copy to card comments" (the owner's explicit act; nothing
- * a viewer writes is ever stored automatically, spec D2). Every string someone else wrote (label,
- * title, viewer names and chat) is rendered as React TEXT, bidi-stripped — never as HTML.
+ * Per-link controls for one node: copy, stop, the viewer list with Kick, and — for a Commenter or
+ * Control link — the thread with a reply box and "Copy to card comments" (the owner's explicit act;
+ * nothing a viewer writes is ever stored automatically, spec D2) plus Open chat. A Control link adds
+ * its owner controls (`ControlSection`). Every string someone else wrote (label, title, viewer names
+ * and chat) is rendered as React TEXT, bidi-stripped — never as HTML.
  *
  * It is a modal in the dialog stack, so Escape (and the board's keys) belong to it while it is
  * up — the card modal it can open over stands aside (`isTopDialog`).
@@ -111,17 +113,38 @@ export function LiveLinkPopover({
   const now = useNow(30_000)
   // Below the chip; above it when there is no room below (the dropdown case of useMenuFlip).
   const flip = useMenuFlip(anchor.bottom + 6, anchor.left, anchor.top - 6)
+  // Holds (see `ControlHold`): a counter, not state — nothing renders from it.
+  const holds = useRef(0)
+  // Only a save holds the popover: it has no link to switch away from, and a password on screen does
+  // not keep the owner from closing it (`ControlHoldKind`).
+  const hold = useCallback((kind: ControlHoldKind = 'save'): (() => void) => {
+    if (kind !== 'save') return () => {}
+    holds.current++
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      holds.current--
+    }
+  }, [])
+  /** Close unless something is held; says whether it closed. Every owner gesture comes here. */
+  const requestClose = useCallback((): boolean => {
+    if (holds.current > 0) return false
+    onClose()
+    return true
+  }, [onClose])
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape' || !isTop()) return
+      // Swallowed even while held: the Escape was meant for the popover, not what is behind it.
       e.preventDefault()
       e.stopPropagation()
-      onClose()
+      requestClose()
     }
     // Capture phase: beat the canvas/global keydown listeners (and xterm) to the Escape.
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [isTop, onClose])
+  }, [isTop, requestClose])
   useEffect(() => {
     if (links.length === 0) onClose()
   }, [links.length, onClose])
@@ -142,12 +165,12 @@ export function LiveLinkPopover({
         className="live-pop__scrim"
         onClick={(e) => {
           e.stopPropagation()
-          onClose()
+          requestClose()
         }}
         onContextMenu={(e) => {
           e.preventDefault()
           e.stopPropagation()
-          onClose()
+          requestClose()
         }}
       />
       <div
@@ -159,9 +182,11 @@ export function LiveLinkPopover({
         aria-label="Live links"
         tabIndex={-1}
       >
-        {links.map((l) => (
-          <LinkBlock key={l.linkId} link={l} now={now} nodeId={nodeId} />
-        ))}
+        <ControlHold.Provider value={hold}>
+          {links.map((l) => (
+            <LinkBlock key={l.linkId} link={l} now={now} nodeId={nodeId} requestClose={requestClose} />
+          ))}
+        </ControlHold.Provider>
       </div>
     </>,
     document.body
@@ -171,26 +196,27 @@ export function LiveLinkPopover({
 const LinkBlock = memo(function LinkBlock({
   link,
   now,
-  nodeId
+  nodeId,
+  requestClose
 }: {
   link: WatchLinkView
   now: number
   nodeId: string
+  /** Close the popover unless something in it is held; true when it closed. */
+  requestClose: () => boolean
 }): React.JSX.Element {
   const api = window.nodeTerminal.watchLink
-  const [copied, setCopied] = useState(false)
+  const [copied, copy] = useCopied()
   const [error, setError] = useState<string | null>(null)
   const status = statusLine(link)
   const waiting = waitingViewers([link]) > 0
-  useEffect(() => {
-    if (!copied) return
-    const t = setTimeout(() => setCopied(false), 1500)
-    return () => clearTimeout(t)
-  }, [copied])
   return (
     <section className="live-pop__link" data-link-id={link.linkId}>
       <header className="live-pop__head">
-        <span className="live-pop__role">{ROLE_LABEL[link.role]}</span>
+        <span>
+          <span className="live-pop__role">{ROLE_NAME[link.role]}</span>{' '}
+          <span className="live-pop__muted">{ROLE_LABEL[link.role]}</span>
+        </span>
         <span className="live-pop__time">{formatRemaining(link.expiresAt, now)}</span>
       </header>
       <p className="live-pop__muted live-pop__label">
@@ -205,13 +231,24 @@ const LinkBlock = memo(function LinkBlock({
         <button
           type="button"
           className="confirm__btn live-pop__btn"
-          onClick={() => {
-            window.nodeTerminal.clipboard.writeText(link.url)
-            setCopied(true)
-          }}
+          onClick={() => copy(link.url)}
         >
           {copied ? 'Copied!' : 'Copy link'}
         </button>
+        {hasChat(link.role) && (
+          <button
+            type="button"
+            className="confirm__btn live-pop__btn"
+            onClick={() => {
+              // The Live chat drawer (Canvas) listens; the popover gives way to it — unless a new
+              // password is still on its way to being shown here.
+              if (!requestClose()) return
+              window.dispatchEvent(new CustomEvent('nodeterm:live-chat', { detail: { linkId: link.linkId } }))
+            }}
+          >
+            Open chat
+          </button>
+        )}
         <button
           type="button"
           className="confirm__btn danger live-pop__btn"
@@ -230,6 +267,7 @@ const LinkBlock = memo(function LinkBlock({
           {error}
         </p>
       )}
+      {link.control && <ControlSection linkId={link.linkId} control={link.control} />}
       <div className="live-pop__viewers">
         {link.viewers.length === 0 ? (
           <p className="live-pop__muted">Nobody is watching right now.</p>
@@ -238,39 +276,35 @@ const LinkBlock = memo(function LinkBlock({
             <ul>
               {link.viewers.map((v, i) => (
                 <li key={v.viewerId}>
+                  {v.typing && <span className="live-pop__typing" role="img" aria-label="Typing now" title="Typing now" />}
                   <span className="live-pop__who">{viewerName(v, i)}</span>
                   <span className="live-pop__muted">
                     since {formatClock(v.joinedAt)}
+                    {v.controlling ? ' · can type' : ''}
                     {v.waiting ? ' · waiting for the terminal' : ''}
                   </span>
                   <button
                     type="button"
                     className="confirm__btn live-pop__btn live-pop__kick"
-                    title={KICK_NOTE}
-                    onClick={() => {
-                      setError(null)
-                      api.kick(link.linkId, v.viewerId).then(
-                        (ok) => {
-                          if (!ok) setError(KICK_NOT_DONE_MESSAGE)
-                        },
-                        () => setError(KICK_FAILED_MESSAGE)
-                      )
-                    }}
+                    title={kickNote(v)}
+                    onClick={() => kickViewer(api, link.linkId, v.viewerId, setError)}
                   >
                     Kick
                   </button>
                 </li>
               ))}
             </ul>
-            <p className="live-pop__muted live-pop__note">{KICK_NOTE}</p>
+            {/* While anyone controls, the note also says a kicked controller can unlock again. */}
+            <p className="live-pop__muted live-pop__note">{kickNote({ controlling: link.viewers.some((v) => v.controlling) })}</p>
           </>
         )}
       </div>
-      {link.role === 'commenter' && <ChatThread linkId={link.linkId} nodeId={nodeId} />}
+      {hasChat(link.role) && <ChatThread linkId={link.linkId} nodeId={nodeId} />}
     </section>
   )
 })
 
+/** A Commenter or Control link's thread with the owner's reply box (the drawer has its own look). */
 function ChatThread({ linkId, nodeId }: { linkId: string; nodeId: string }): React.JSX.Element {
   const api = window.nodeTerminal.watchLink
   const chat = useWatchLinks((s) => s.chats[linkId] ?? EMPTY_CHAT)
@@ -280,21 +314,8 @@ function ChatThread({ linkId, nodeId }: { linkId: string; nodeId: string }): Rea
   const [copyError, setCopyError] = useState(false)
   const [sendError, setSendError] = useState(false)
   const threadRef = useRef<HTMLOListElement>(null)
-  // While this thread is on screen, what lands in it is read as it arrives (N2).
-  useEffect(() => viewLinkThread(linkId), [linkId])
-  // Core keeps the thread in memory; ask for it once when the thread opens (a reload, or messages
-  // that arrived before this renderer subscribed). The store merges it with what was pushed.
-  useEffect(() => {
-    void api.chatHistory(linkId).then(
-      (m) => useWatchLinks.getState().setChat(linkId, m),
-      () => {}
-    )
-  }, [api, linkId])
-  // Open = read (H21): what arrived before the thread opened is read on open; what lands while it
-  // is open never counts (`viewLinkThread` above).
-  useEffect(() => {
-    useWatchLinks.getState().markRead(linkId)
-  }, [linkId])
+  // On screen = read, and core's history asked once (the thread rule, shared with the drawer).
+  useLinkThread(linkId, api)
   // Follow the newest message. Keyed on the LAST message's id, not the length — at the 200-message
   // cap the length stops changing.
   const lastId = chat.length > 0 ? chat[chat.length - 1].id : ''

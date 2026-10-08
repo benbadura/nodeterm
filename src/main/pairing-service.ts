@@ -377,8 +377,8 @@ function probeSsh(): Promise<boolean> {
 
 /**
  * Append an already-normalized public-key line to ~/.ssh/authorized_keys with the right
- * permissions. The caller stamps the attributable `nodeterm-ios-<deviceId>` comment via
- * `rewriteKeyComment` before this point.
+ * permissions. The caller stamps the attributable `nodeterm-mobile-<deviceId>` comment via
+ * `rewriteKeyComment` before this point (revoke also matches the legacy `nodeterm-ios-<id>`).
  */
 async function appendAuthorizedKey(keyLine: string): Promise<void> {
   const sshDir = path.join(os.homedir(), '.ssh')
@@ -751,7 +751,7 @@ export function createPairingService(
         // the agentToken is the phone's bearer for the host-agent WebSocket (stored in its Keychain).
         const deviceId = randomUUID()
         const agentToken = randomBytes(24).toString('base64url')
-        const name = normalizeDeviceName(body.deviceName)
+        const name = normalizeDeviceName(body.deviceName, publicKey)
         // The phone's OWN id — the key the relay backend stores its device row under, and the
         // only one it would recognize in a later revoke. Resolved here rather than at the mint
         // below so the registry entry can carry it; the fallback (phone sent none ⇒ our id) is

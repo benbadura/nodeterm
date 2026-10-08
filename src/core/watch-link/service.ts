@@ -33,6 +33,32 @@
 // the API refused once the license layer reports a change — a 7-day token expiring under a running
 // link is the ordinary case (R41).
 //
+// CONTROL LINKS (role 'controller'). The password is checked by `controlPasswordProblem` and hashed
+// (scrypt, ./password.ts) BEFORE the server row is created, so a hash that fails creates nothing; only
+// {salt, hash} is kept, never the plaintext, and nothing logged carries the password, the hash or the
+// salt. Every scrypt run of this process — the hosts' unlock checks and the owner's new passwords — goes
+// through ONE FIFO gate of SCRYPT_SLOTS (each run is ~32 MiB and ~80 ms on libuv's 4-thread pool, and
+// unlock attempts arrive from strangers): a run waits for a slot, it is never refused. The lock the
+// link host asks for (`onControlLocked`) is set on the record synchronously — the host reads the record
+// live — and is never undone by a failed write. So is the link-wide count of wrong attempts the host
+// reports (`onWrongAttempt`): it goes on the record and is written, at most WRONG_PER_LINK writes per
+// link (the last rides the lock's), so an app restart does not reset it; a new password and Allow
+// control again reset it. The owner's changes go by DIRECTION. One that NARROWS access (typing off, a
+// new password) is the owner's brake: it reaches the record and the host at once — a leaked password or
+// an unwanted typist must not wait on the disk — and is NEVER undone: a write that fails or does not
+// answer within PERSIST_TIMEOUT_MS answers 'unsaved' (in force now, undone by a restart unless a later
+// write lands — every write carries the whole list from memory, so the next one that lands saves it;
+// Stop ends it for good). One that WIDENS it (typing on, allow again) is written first, from a copy of
+// the record, and reaches the record and the host only once that write landed: nobody can unlock and
+// type during a write the owner is then told failed, which answers false. The owner is never told a
+// change was kept that the next launch would not have. A later change to the same field supersedes an
+// earlier one still being written (its late apply is skipped).
+//
+// AN UNLIMITED LINK (`ttlSeconds` 0) has `expiresAt: null`: no expiry timer, no expiry check on a host
+// change, never pruned for time at launch. It ends like any link otherwise, and when its owner's Pro
+// lapses the server refuses its host-token mint (402) — the host stops minting and the view says
+// `refused`, the same state as any refused mint.
+//
 // THE SERVER EDITION registers this same service with `unsupported: true` until it has a license layer
 // (R43): create answers `unsupported`, list answers [], nothing is loaded, hosted or revoked. The same
 // mode is what a Server Edition that does not own its data dir would need (G15).
@@ -51,6 +77,8 @@ import {
   TITLE_MAX,
   WATCH_LINK_TTLS,
   stripBidiControls,
+  type ControlSupport,
+  type ControlChangeResult,
   type CreateWatchLinkError,
   type CreateWatchLinkRequest,
   type CreateWatchLinkResult,
@@ -59,9 +87,16 @@ import {
   type WatchLinkView,
   type WatchLinkViewerView
 } from '../../shared/watch-link-types'
+import { controlPasswordProblem } from '../../shared/watch-link-password'
 import type { HostTokenResult, WatchLinkApi as WatchLinkApiClient } from './api'
-import { createLinkHost, type LinkHost, type QuietClients, type WatchPty } from './link-host'
-import { WatchLinkStoreUnreadable, type WatchLinkRecord, type WatchLinkStore } from './store'
+import { WRONG_PER_LINK, createLinkHost, type LinkHost, type QuietClients, type WatchPty } from './link-host'
+import { hashControlPassword, verifyControlPassword, type ControlPasswordHash } from './password'
+import {
+  WatchLinkStoreUnreadable,
+  type WatchLinkControlRecord,
+  type WatchLinkRecord,
+  type WatchLinkStore
+} from './store'
 import type { RelayTransport } from '../relay/relay-socket'
 
 /** setTimeout's own ceiling (a longer delay fires at once). A link lives ≤ 24 h, far below it. */
@@ -71,6 +106,8 @@ export const PERSIST_TIMEOUT_MS = 10_000
 /** The longest `init()` waits for the boot workspace load before deciding with the nodes it cannot
  *  place yet read as unknown (which keeps their links: the safe side). */
 export const WORKSPACE_READY_TIMEOUT_MS = 10_000
+/** Concurrent scrypt runs (unlock checks and new passwords) this process allows. */
+export const SCRYPT_SLOTS = 2
 
 export type WatchLinkNodeState = 'present' | 'absent' | 'unknown'
 
@@ -92,6 +129,9 @@ export interface WatchLinkServiceDeps {
   pty: WatchPty
   /** Owner clients only (`sendToOwners`). */
   emit(channel: string, ...args: unknown[]): void
+  /** Can this node's terminal take a Control link's input (`PtyManager.nodeControlSupport`)? Absent,
+   *  throwing or anything else answers `unknown`, which leaves the create to decide. */
+  controlSupport?(nodeId: string): ControlSupport
   /** This shell cannot host links (the Server Edition until it has a license layer — R43). */
   unsupported?: boolean
   now?(): number
@@ -105,6 +145,10 @@ export interface WatchLinkServiceDeps {
   createHost?: typeof createLinkHost
   /** TEST ONLY: the relay transport the link hosts dial. */
   transport?: () => RelayTransport
+  /** TEST ONLY: scrypt's hash (./password.ts). */
+  hashPassword?: (pw: string) => Promise<ControlPasswordHash>
+  /** TEST ONLY: scrypt's check (./password.ts). */
+  verifyPassword?: (pw: string, h: ControlPasswordHash) => Promise<boolean>
 }
 
 export interface WatchLinkService {
@@ -123,6 +167,18 @@ export interface WatchLinkService {
   onWorkspaceChanged(): void
   /** After the license layer reports a change: re-arm every host the API refused. */
   onEntitlementChanged(): void
+  /** A live Control link: turn typing on or off (`ControlChangeResult`). False for any other link, or
+   *  typing ON that could not be saved (then nothing changed); 'unsaved' for typing OFF that could not
+   *  be saved (it holds all the same). */
+  setControl(linkId: string, enabled: boolean): Promise<ControlChangeResult>
+  /** A live Control link: replace its password (every controller drops back to watching, the link-wide
+   *  wrong count starts over). False for a password `controlPasswordProblem` refuses, any other link,
+   *  or a hash that failed; 'unsaved' for a new password in force that could not be saved. */
+  setPassword(linkId: string, pw: string): Promise<ControlChangeResult>
+  /** A live Control link locked by wrong passwords: allow unlocking again. False as setControl. */
+  allowControl(linkId: string): Promise<boolean>
+  /** Whether this node's terminal can take a Control link's input (the create dialog asks). */
+  controlSupport(nodeId: string): ControlSupport
   /** Stop every host (`host-stopping`), keep the records for the next launch. Resolves once the
    *  last write this service issued has settled (the caller bounds it). */
   shutdown(): Promise<void>
@@ -163,18 +219,59 @@ function cleanText(raw: unknown, max: number): string | null {
   return out || null
 }
 
-function parseRequest(raw: unknown): CreateWatchLinkRequest | null {
-  if (!raw || typeof raw !== 'object') return null
+/** A create request as the owner sent it: everything checked, the password apart from the request
+ *  (only a Control link carries one; another role's `password` field is ignored). */
+type ParsedRequest = { req: Omit<CreateWatchLinkRequest, 'password'>; password: string | null }
+
+function parseRequest(raw: unknown): ParsedRequest | 'bad-request' | 'bad-password' {
+  if (!raw || typeof raw !== 'object') return 'bad-request'
   const r = raw as Record<string, unknown>
   // `isSafeNodeId` coerces: `12` passes its regex. The type check comes first.
-  if (typeof r.nodeId !== 'string' || !isSafeNodeId(r.nodeId)) return null
-  if (r.role !== 'viewer' && r.role !== 'commenter') return null
-  if (!(WATCH_LINK_TTLS as readonly unknown[]).includes(r.ttlSeconds)) return null
+  if (typeof r.nodeId !== 'string' || !isSafeNodeId(r.nodeId)) return 'bad-request'
+  if (r.role !== 'viewer' && r.role !== 'commenter' && r.role !== 'controller') return 'bad-request'
+  // 0 is Unlimited: no end time.
+  if (!(WATCH_LINK_TTLS as readonly unknown[]).includes(r.ttlSeconds)) return 'bad-request'
   const label = cleanText(r.label, LABEL_MAX)
-  if (!label) return null
+  if (!label) return 'bad-request'
   const title = cleanText(r.title, TITLE_MAX) ?? 'Terminal'
-  return { nodeId: r.nodeId, role: r.role, ttlSeconds: r.ttlSeconds as CreateWatchLinkRequest['ttlSeconds'], label, title }
+  const req: ParsedRequest['req'] = { nodeId: r.nodeId, role: r.role, ttlSeconds: r.ttlSeconds as CreateWatchLinkRequest['ttlSeconds'], label, title }
+  if (r.role !== 'controller') return { req, password: null }
+  if (controlPasswordProblem(r.password) !== null) return 'bad-password'
+  return { req, password: r.password as string }
 }
+
+/**
+ * At most `slots` tasks run at once; the rest wait, and get a slot in the order they asked (FIFO). A
+ * task's failure (a rejection, or a throw) frees its slot like a success. Nothing is ever refused.
+ */
+export function createFifoGate(slots: number): <T>(task: () => Promise<T>) => Promise<T> {
+  let active = 0
+  const waiting: (() => void)[] = []
+  const release = (): void => {
+    const next = waiting.shift()
+    if (next) next() // the slot passes straight to the next in line
+    else active--
+  }
+  return <T>(task: () => Promise<T>): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+      const run = (): void => {
+        let p: Promise<T>
+        try {
+          p = Promise.resolve(task())
+        } catch (err) {
+          p = Promise.reject(err)
+        }
+        p.then(resolve, reject).finally(release)
+      }
+      if (active < slots) {
+        active++
+        run()
+      } else waiting.push(run)
+    })
+}
+
+/** A live Control link's record, with its control state. */
+type ControlRecord = WatchLinkRecord & { control: WatchLinkControlRecord }
 
 /** A chat message as the OWNER is shown it: whatever a viewer wrote, without bidi overrides. */
 function ownerChat(msg: WatchChatMessage): WatchChatMessage {
@@ -191,6 +288,8 @@ export function sendToOwners(
 }
 
 const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+/** An error's NAME only: what failed around a password (its hash, its check) may be in the message. */
+const errorName = (err: unknown): string => (err instanceof Error ? err.name : 'not an Error')
 const TIMEOUT = Symbol('timeout')
 
 export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkService {
@@ -200,6 +299,10 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
   const createHost = deps.createHost ?? createLinkHost
   const persistTimeoutMs = deps.persistTimeoutMs ?? PERSIST_TIMEOUT_MS
   const workspaceWaitMs = deps.workspaceWaitMs ?? WORKSPACE_READY_TIMEOUT_MS
+  const hashPassword = deps.hashPassword ?? hashControlPassword
+  const verifyPassword = deps.verifyPassword ?? verifyControlPassword
+  // ONE gate for every scrypt run of this service — the process has one — whichever link asks.
+  const scrypt = createFifoGate(SCRYPT_SLOTS)
   // A wait on init covers init's own (bounded) workspace wait plus the links file's load: init's
   // bound always fires first, so a slow workspace never reads as a failed write.
   const initWaitMs = workspaceWaitMs + persistTimeoutMs
@@ -281,7 +384,9 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
           viewerId: v.viewerId,
           name: v.name === null ? null : stripBidiControls(v.name),
           joinedAt: v.joinedAt,
-          waiting: v.waiting === true
+          waiting: v.waiting === true,
+          controlling: v.controlling === true,
+          typing: v.typing === true
         }))
       } catch (err) {
         warn(`reading a link's state failed: ${errorText(err)}`)
@@ -297,7 +402,8 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
       expiresAt: r.expiresAt,
       url: formatWatchLink(r.linkId, r.secret),
       status,
-      viewers
+      viewers,
+      control: r.role === 'controller' && r.control ? { enabled: r.control.enabled, locked: r.control.locked } : null
     }
   }
   const list = (): WatchLinkView[] => (unsupported ? [] : [...records.values()].map(viewOf))
@@ -331,10 +437,12 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
   }
 
   /** Write the current records. Called, not awaited, wherever the owner must not wait on the disk;
-   *  the store snapshots at call time and serializes its writes, so disk order is call order. */
-  function persist(): Promise<boolean> {
+   *  the store snapshots at call time and serializes its writes, so disk order is call order.
+   *  `instead` is written in place of the record with its id (a change not yet applied in memory). */
+  function persist(instead?: WatchLinkRecord): Promise<boolean> {
     if (storeLatched) return Promise.resolve(true) // memory-only this run: nothing is written
-    const p = deps.store.save([...records.values(), ...writing.values()]).then(
+    const list = [...records.values(), ...writing.values()].map((x) => (instead && x.linkId === instead.linkId ? instead : x))
+    const p = deps.store.save(list).then(
       (outcome) => {
         sealRefused = outcome === 'memory-only'
         return outcome !== 'failed'
@@ -343,6 +451,32 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
     )
     lastWrite = p
     return p
+  }
+
+  function controlSupportOf(nodeId: string): ControlSupport {
+    try {
+      const s = deps.controlSupport?.(nodeId)
+      return s === 'ok' || s === 'unsupported' ? s : 'unknown'
+    } catch {
+      return 'unknown' // a check that cannot answer leaves the create to decide
+    }
+  }
+
+  /** The scrypt check of a Control link, through the gate. The record's {salt, hash} is read when the
+   *  check RUNS — a password change swaps them in place, and a check queued for a slot meanwhile must
+   *  be made against the new one. Never rejects (a failed check is a wrong password). */
+  function checkPassword(r: WatchLinkRecord, pw: string): Promise<boolean> {
+    if (r.role !== 'controller' || !r.control) return Promise.resolve(false)
+    return scrypt(() => {
+      const c = r.control
+      return c ? verifyPassword(pw, { salt: c.salt, hash: c.hash }) : Promise.resolve(false)
+    }).then(
+      (ok) => ok === true,
+      (err) => {
+        warn(`checking a control password failed (${errorName(err)})`)
+        return false
+      }
+    )
   }
 
   function revokeServer(linkId: string): void {
@@ -354,13 +488,16 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
   function armExpiry(r: WatchLinkRecord): void {
     const t = expiry.get(r.linkId)
     if (t !== undefined) clearT(t)
-    const delay = Math.min(MAX_DELAY_MS, Math.max(0, r.expiresAt - now()))
+    expiry.delete(r.linkId)
+    const at = r.expiresAt
+    if (at === null) return // an Unlimited link: no end time, no timer
+    const delay = Math.min(MAX_DELAY_MS, Math.max(0, at - now()))
     expiry.set(
       r.linkId,
       setT(() => {
         expiry.delete(r.linkId)
         if (records.get(r.linkId) !== r) return
-        if (now() < r.expiresAt) armExpiry(r) // a clamped delay: not yet
+        if (now() < at) armExpiry(r) // a clamped delay: not yet
         else end(r.linkId, 'expired', { serverRevoke: false, notify: true })
       }, delay)
     )
@@ -381,13 +518,14 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
       leave: (clientId, sessionId, viewerId) => deps.pty.leave(clientId, sessionId, viewerId),
       captureVisible: (sessionId) => deps.pty.captureVisible(sessionId),
       syncSize: (sessionId) => deps.pty.syncSize(sessionId),
-      alive: (sessionId) => deps.pty.alive(sessionId)
+      alive: (sessionId) => deps.pty.alive(sessionId),
+      input: (sessionId, chunk, isCurrent) => deps.pty.input(sessionId, chunk, isCurrent)
     }
   }
 
   function onHostChange(linkId: string): void {
     const r = records.get(linkId)
-    if (r && now() >= r.expiresAt) {
+    if (r && r.expiresAt !== null && now() >= r.expiresAt) {
       // A reconnect after a lid-close: the expiry timer may not have fired yet (G24). Deferred: this
       // runs inside the link host's own status callback, and ending the link stops that host.
       queueMicrotask(() => end(linkId, 'expired', { serverRevoke: false, notify: true }))
@@ -425,7 +563,44 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
         onChat: (msg) => safeEmit(IPC.watchLinkChat, r.linkId, ownerChat(msg)),
         onViewerJoined: (count) =>
           notice({ kind: 'joined', linkId: r.linkId, nodeId: r.nodeId, title: stripBidiControls(r.title), viewers: count }),
-        onGone: (reason) => end(r.linkId, reason, { serverRevoke: false, notify: true })
+        onGone: (reason) => end(r.linkId, reason, { serverRevoke: false, notify: true }),
+        verifyPassword: (pw) => checkPassword(r, pw),
+        onControlTaken: (name) => {
+          notice({
+            kind: 'control-taken',
+            linkId: r.linkId,
+            nodeId: r.nodeId,
+            title: stripBidiControls(r.title),
+            // A name the viewer gave itself (sanitized by the host); no bidi override reaches the owner.
+            name: stripBidiControls(String(name))
+          })
+          emitState()
+        },
+        onControlLocked: () => {
+          // SYNCHRONOUSLY, before any I/O: the host's lock rests on this flag (it reads the record live
+          // and never writes it). Never undone: a lock whose write fails still holds until quit.
+          if (r.control) r.control.locked = true
+          takeTurn(r, 'locked') // an "allow again" still being written must not land over it
+          if (records.get(r.linkId) === r) {
+            void persist().then((saved) => {
+              if (!saved) warn("a Control link's lock could not be saved; it holds until nodeterm quits")
+            })
+          }
+          notice({ kind: 'control-locked', linkId: r.linkId, nodeId: r.nodeId, title: stripBidiControls(r.title) })
+          emitState()
+        },
+        onWrongAttempt: (count) => {
+          // On the record SYNCHRONOUSLY (a later write snapshots it), as an integer 0..WRONG_PER_LINK:
+          // the store refuses to write anything else.
+          if (!r.control || typeof count !== 'number' || Number.isNaN(count)) return
+          r.control.wrong = Math.min(WRONG_PER_LINK, Math.max(0, Math.floor(count)))
+          // The count that locks rides the lock's own write (`onControlLocked`, which follows): at most
+          // WRONG_PER_LINK writes per link between resets.
+          if (r.control.wrong >= WRONG_PER_LINK || records.get(r.linkId) !== r) return
+          void persist().then((saved) => {
+            if (!saved) warn("a Control link's wrong-attempt count could not be saved; an app restart would reset it")
+          })
+        }
       })
     } catch (err) {
       warn(`a link could not be hosted: ${errorText(err)}`)
@@ -504,7 +679,7 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
     let pruned = false
     for (const r of loaded) {
       if (records.has(r.linkId)) continue
-      if (r.expiresAt <= t) {
+      if (r.expiresAt !== null && r.expiresAt <= t) {
         pruned = true
         continue
       }
@@ -530,13 +705,101 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
   const init = (): Promise<void> =>
     (initPromise ??= runInit().catch((err) => warn(`resuming live links failed: ${errorText(err)}`)))
 
+  /** The record of a LIVE Control link (listed, a controller, with its control state), or null. */
+  function liveControl(linkId: unknown): ControlRecord | null {
+    if (unsupported || stopped || typeof linkId !== 'string') return null
+    const r = records.get(linkId)
+    return r && r.role === 'controller' && r.control ? (r as ControlRecord) : null
+  }
+  function tellHost(linkId: string, fn: (h: LinkHost) => void): void {
+    const h = hosts.get(linkId)
+    if (!h) return
+    try {
+      fn(h)
+    } catch (err) {
+      warn(`telling a link host about a control change failed: ${errorText(err)}`)
+    }
+  }
+
+  /** Each owner change (and a lock) takes a TURN on the field it touches; an earlier WIDENING of the
+   *  same field still being written sees it lost its turn and does not apply (a narrowing applies at
+   *  once and is never undone, so it has nothing to skip). */
+  type ControlField = 'enabled' | 'locked' | 'password'
+  const turns = new WeakMap<WatchLinkRecord, Record<ControlField, number>>()
+  function takeTurn(r: WatchLinkRecord, f: ControlField): number {
+    const t = turns.get(r) ?? { enabled: 0, locked: 0, password: 0 }
+    turns.set(r, t)
+    return ++t[f]
+  }
+  const hasTurn = (r: WatchLinkRecord, f: ControlField, n: number): boolean => turns.get(r)?.[f] === n
+
+  /**
+   * An owner's change that NARROWS access (typing off, a new password): the owner's BRAKE. Applied in
+   * memory and told to the host AT ONCE, then written — and NEVER undone. A write that fails, or does
+   * not answer within PERSIST_TIMEOUT_MS, answers 'unsaved': the change holds until nodeterm quits, and
+   * the next write that lands (every write carries the whole list as memory holds it) saves it. Undoing
+   * it instead would hand typing back, or re-open a possibly leaked password, because a disk hiccuped.
+   */
+  async function narrowControl(
+    r: ControlRecord,
+    field: ControlField,
+    o: { apply(): void; host(h: LinkHost): void }
+  ): Promise<true | 'unsaved'> {
+    takeTurn(r, field) // a widening of this field still being written must not land over it
+    o.apply()
+    tellHost(r.linkId, o.host)
+    emitState()
+    const written = await within(persist(), persistTimeoutMs)
+    if (written === true) return true
+    warn("an owner's change to a Control link could not be saved; it holds until nodeterm quits")
+    return 'unsaved'
+  }
+
+  /**
+   * An owner's change that WIDENS access (typing on, allow again): written FIRST, from a copy of the
+   * record — the record the host reads is untouched, so nobody can unlock during the write — and
+   * applied to the record and told to the host only once that write landed. A write that fails or does
+   * not answer changes nothing in memory (the list as it is is queued behind it) and answers false. A
+   * later change to the same field wins: this one is then not applied, and the list as memory holds it
+   * is written again over this write's copy.
+   */
+  async function widenControl(
+    r: ControlRecord,
+    field: ControlField,
+    o: { change(c: WatchLinkControlRecord): void; host(h: LinkHost): void }
+  ): Promise<boolean> {
+    const turn = takeTurn(r, field)
+    const next = { ...r.control }
+    o.change(next)
+    const write = persist({ ...r, control: next })
+    const written = await within(write, persistTimeoutMs)
+    const live = liveControl(r.linkId) === r
+    if (written !== true) {
+      if (live) void persist()
+      warn("an owner's change to a Control link could not be saved; nothing changed")
+      return false
+    }
+    if (!live) return false
+    if (!hasTurn(r, field, turn)) {
+      void persist() // this write's copy is on disk; memory says what the later change made of it
+      return true
+    }
+    o.change(r.control)
+    // A write issued meanwhile snapshotted the record before this change, and lands after this one.
+    if (lastWrite !== write) void persist()
+    tellHost(r.linkId, o.host)
+    emitState()
+    return true
+  }
+
   return {
     init,
 
     async create(raw) {
       if (unsupported || stopped) return fail('unsupported')
-      const req = parseRequest(raw)
-      if (!req) return fail('bad-request')
+      const parsed = parseRequest(raw)
+      if (parsed === 'bad-request' || parsed === 'bad-password') return fail(parsed)
+      const req = parsed.req
       if (!deps.relayAllowed()) return fail('relay-unavailable')
       // The resumed links count against the cap, and init must never start a host for a link a
       // create already started (G11). Bounded: a hung disk answers, it does not hang the dialog.
@@ -546,11 +809,29 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
       }
       if (stopped) return fail('unsupported')
       if (nodeStateOf(req.nodeId) !== 'present') return fail('node-missing')
+      // Before any request: a terminal whose key bindings are session-wide (Zellij) is never typed into.
+      if (req.role === 'controller' && controlSupportOf(req.nodeId) === 'unsupported') return fail('control-unsupported')
       if (records.size + creating + opaqueHeld() >= MAX_LINKS_PER_MACHINE) return fail('limit-machine')
       const ent = deps.entitlement()
       if (!ent) return fail('not-entitled')
       creating++
       try {
+        // Hashed BEFORE the server row exists: a hash that fails creates nothing anywhere. Only the
+        // {salt, hash} goes on; the plaintext is not referenced past this.
+        let control: WatchLinkControlRecord | undefined
+        if (req.role === 'controller' && parsed.password !== null) {
+          let h: ControlPasswordHash
+          try {
+            h = await scrypt(() => hashPassword(parsed.password as string))
+          } catch (err) {
+            // `unsupported` ("can't be created here right now"): the one error that names no cause —
+            // `network` would say nodeterm's service could not be reached, which is not what happened.
+            warn(`hashing a control password failed (${errorName(err)}); nothing was created`)
+            return fail('unsupported')
+          }
+          parsed.password = null
+          control = { enabled: true, locked: false, wrong: 0, salt: h.salt, hash: h.hash }
+        }
         const secret = newWatchLinkSecret()
         const joinKeyHash = await sha256Hex(deriveWatchLinkKeys(secret).joinKey)
         const created = await deps.api.create(ent, joinKeyHash, req.ttlSeconds)
@@ -566,8 +847,10 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
           label: req.label,
           title: req.title,
           createdAt: now(),
+          // null for an Unlimited link (the API accepts a null only for a `ttlSeconds` 0 request).
           expiresAt: created.expiresAt,
-          secret
+          secret,
+          ...(control ? { control } : {})
         }
         writing.set(record.linkId, record)
         let written: boolean | typeof TIMEOUT
@@ -691,6 +974,78 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
       }
     },
 
+    async setControl(linkId, enabled) {
+      const r = liveControl(linkId)
+      if (!r || typeof enabled !== 'boolean') return false
+      const c = r.control
+      if (c.enabled === enabled) {
+        // Nothing to change here — but it is still the owner's latest word on this field: an earlier
+        // change still being written must not land over it.
+        takeTurn(r, 'enabled')
+        return true
+      }
+      if (enabled) {
+        return widenControl(r, 'enabled', {
+          change: (x) => {
+            x.enabled = true
+          },
+          host: (h) => h.controlChanged()
+        })
+      }
+      return narrowControl(r, 'enabled', {
+        apply: () => {
+          c.enabled = false
+        },
+        host: (h) => h.controlChanged()
+      })
+    },
+
+    async setPassword(linkId, pw) {
+      if (!liveControl(linkId) || controlPasswordProblem(pw) !== null) return false
+      let h: ControlPasswordHash
+      try {
+        h = await scrypt(() => hashPassword(pw))
+      } catch (err) {
+        warn(`hashing a new control password failed (${errorName(err)}); nothing changed`)
+        return false
+      }
+      // The link may have ended (or this run stopped) while the hash ran.
+      const r = liveControl(linkId)
+      if (!r) return false
+      const c = r.control
+      return narrowControl(r, 'password', {
+        apply: () => {
+          c.salt = h.salt
+          c.hash = h.hash
+          // A new password starts the link-wide wrong count over (the host resets its own).
+          c.wrong = 0
+        },
+        // Every controller drops back to watching and must unlock with the new password.
+        host: (x) => x.passwordChanged()
+      })
+    },
+
+    async allowControl(linkId) {
+      const r = liveControl(linkId)
+      if (!r) return false
+      if (!r.control.locked) {
+        takeTurn(r, 'locked')
+        return true
+      }
+      return widenControl(r, 'locked', {
+        change: (x) => {
+          x.locked = false
+          x.wrong = 0 // the count starts over with the lock (the host resets its own)
+        },
+        host: (h) => h.allowControl()
+      })
+    },
+
+    controlSupport(nodeId) {
+      if (typeof nodeId !== 'string' || !isSafeNodeId(nodeId)) return 'unknown'
+      return controlSupportOf(nodeId)
+    },
+
     shutdown() {
       if (!stopped) {
         stopped = true
@@ -748,4 +1103,13 @@ export function registerWatchLinkIpc(
     owner(sender) && str(id) && str(text) ? s.sendChat(id, text) : null)
   p.handleWithSender(IPC.watchLinkChatHistory, (sender: number, id: unknown) =>
     owner(sender) && str(id) ? s.chatHistory(id) : [])
+  p.handleWithSender(IPC.watchLinkSetControl, (sender: number, id: unknown, enabled: unknown) =>
+    owner(sender) && str(id) && typeof enabled === 'boolean' ? s.setControl(id, enabled) : false)
+  // The password is handed straight to the service, which keeps only its hash; never logged here.
+  p.handleWithSender(IPC.watchLinkSetPassword, (sender: number, id: unknown, pw: unknown) =>
+    owner(sender) && str(id) && str(pw) ? s.setPassword(id, pw) : false)
+  p.handleWithSender(IPC.watchLinkAllowControl, (sender: number, id: unknown) =>
+    owner(sender) && str(id) ? s.allowControl(id) : false)
+  p.handleWithSender(IPC.watchLinkControlSupport, (sender: number, nodeId: unknown) =>
+    owner(sender) && str(nodeId) ? s.controlSupport(nodeId) : ('unknown' satisfies ControlSupport))
 }

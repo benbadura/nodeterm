@@ -127,10 +127,12 @@ applicable here":
 
 1. **Desktop** (Electron)
 2. **Server Edition** (Linux, browser)
-3. **Mobile companion** — *nodeterm mobile*, a **private** repo (`nodeterm-ios`, SwiftUI). You
-   cannot open a PR against it, so this is normally a follow-up note rather than same-PR
-   work: say in your PR what the mobile side would need, and **mention @eneskirca** so it
-   gets picked up there. "Not applicable" is a fine answer — just make it a stated one.
+3. **Mobile companion** — *nodeterm mobile*, two **private** repos: `nodeterm-ios` (SwiftUI) and
+   `eneskirca/nodeterm-android` (Kotlin, in development). You cannot open a PR against either, so
+   this is normally a follow-up note rather than same-PR work: say in your PR what the mobile side
+   would need, and **mention @eneskirca** so it gets picked up there. "Not applicable" is a fine
+   answer — just make it a stated one. Never assume the phone is an iPhone in desktop copy or
+   defaults.
 
 Anything reachable from `window.nodeTerminal` needs a **real** implementation in
 `src/renderer/bridge/`, or a deliberate, documented degrade. The `satisfies NodeTerminalApi` gate
@@ -187,7 +189,9 @@ opener's `ctrl-<source>-<node>` shape: rope ORDER does not survive the canvas pr
 deleted nodes, so the id is the only thing that tells a wait from an opener. A node opened by a
 control verb also RECORDS its opener (`data.openedBy`); readers that ask "who opened this"
 (`stationsByOpener`, the station-failure notice) prefer that record and still require the opener's
-rope to exist.
+rope to exist. In the renderer that rule is ONE function, `openerByTarget` (`lib/teamProgress.ts`):
+team progress and Tidy canvas both read it, and so must anything new that asks "who opened this
+node" — and pass the rope `id` through, or every wait reads as an opener.
 
 Before adding a GitHub read, check what the existing poll already fetches. Pull request cards
 needed no new request at all: `/repos/{repo}/issues` returns pull requests, and the client used to
@@ -498,6 +502,19 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   the relay, so a key that works locks it onto a path that cannot work. CLAUDE.md, "Remote access",
   has the details.
 
+- **A relay attach never decides where a session runs from what the phone sends.** The phone's
+  `pty.attach` goes through `PtyManager.prepareRelayAttach`, which routes an SSH project's node over
+  its project's master or refuses it, and gives a local node the env the desktop would. Never spawn
+  a session for a phone-named node id directly (`attachDetached` / `createDetached`): that is how an
+  SSH node became a local shell in this machine's `$HOME`. CLAUDE.md, "A remote node is NEVER
+  spawned locally".
+
+- **Phone keys and store links are platform-neutral.** New paired keys are stamped
+  `nodeterm-mobile-<id>`, but revoke must keep matching the legacy `nodeterm-ios-<id>` stamp every
+  existing iPhone carries (`src/main/pairing-core.ts`). Link to a store only through
+  `mobileStoreLinks()` in `src/renderer/lib/links.ts` — the Play link stays hidden behind
+  `ANDROID_APP_PUBLISHED` until the listing exists, and a guard test refuses direct store URLs anywhere else in the renderer.
+
 - **Relay pins are per role, and a revoke is one call.** Pin a peer only through its role's store
   in `src/main/remote/approved-devices.ts` (`phonePins` is the only one anything auto-admits from —
   never write a desktop peer there), and revoke only through `src/main/remote/peer-revoke.ts`, which
@@ -539,7 +556,9 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   canvas sync and the canvas authority would publish it. `src/shared/watch-link/` is copied byte for
   byte into the viewer page's repo: import only siblings and `tweetnacl`, write type imports as
   `import type` (`isomorphism.guard.test.ts` fails otherwise), and expect a change there to need a
-  re-vendor. `docs/live-links.md`.
+  re-vendor. A new viewer CAST is refused until `watcherAccess` admits it on purpose, and a Control
+  link's typed bytes reach only the node's pane through `PtyManager.controlInput` — never written into a
+  tmux client's pty (the prefix would reach tmux) and never on a command line. `docs/live-links.md`.
 
 - **A change to canvas content that does not travel as a `canvas:mut` op is lost on a hosted core —
   route new content edits through the op vocabulary (`src/shared/canvas-content.ts`).** On a Server
@@ -1089,6 +1108,16 @@ Grok billing diagnostics must keep HTTP codes and safe failure categories per bi
 
 ## User-owned agent settings
 
+**Nothing writes into an agent's global config except `src/core/agent-integrations.ts`** (issue
+#744). Hooks, skills and anything else under `~/.claude`, `~/.codex`, `~/.gemini`, `~/.grok`,
+`~/.copilot`, opencode's config dir, `~/.agents` — locally or on an SSH host — are installed only
+for an agent the user ENABLED in `settings.agentIntegrations`, removed when they decline, and left
+alone while they have not answered. Do not add a direct call to an installer; add the artifact to
+the lifecycle (local) or to the `RemoteHooks` artifact plan (SSH), and give it a removal that
+deletes only what nodeterm wrote. `src/core/agent-integrations-wiring.test.ts` fails on a new call
+site. Do not merge text into `AGENTS.md` / `GEMINI.md` — agents get skills (progressive disclosure)
+instead; the old blocks crowded codex's 32 KiB instruction budget.
+
 Claude/Gemini settings must go through the guarded transactions in
 `src/core/agents/hooks/{settings-file,remote-settings-file}.ts`. Confirmed absence or a successfully read empty/whitespace file may start from `{}`;
 malformed, non-object and unreadable files must survive unchanged.
@@ -1150,7 +1179,21 @@ not the ssh binary. If you add an ssh call site, route it through `useNativeSsh(
 others, and if you add an ssh option to `control-master.ts`, teach `ssh-argv.ts` about it (the
 parser refuses unknown options on purpose). Test from macOS/Linux with `NODETERM_NATIVE_SSH=1`.
 
+**A dependency with a native addon that the Server Edition reaches is `--external:` in
+`server:build`.** Hosts build the bundle after `npm ci --ignore-scripts`, so no addon is compiled
+there, and esbuild fails on a `.node` require it cannot resolve (or, where the addon IS compiled,
+on a file it has no loader for). No CI job builds the server bundle, but
+`src/server/server-build.test.ts` builds it in both views and goes red. The server runs from a
+`node_modules` tree, so an external is resolved at runtime.
+
 ## Testing
+
+**Run the suite with a scratch `HOME`, and know what else points at your real config.** The worker
+setup (`test/setup/agent-env.ts`) strips `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME`,
+`COPILOT_HOME`, `GEMINI_CLI_HOME`, `XDG_CONFIG_HOME` and the `NODETERM_*` session variables, because
+a suite run from inside a nodeterm agent session inherits them and code under test resolves the
+LIVE agent config dir from them — a scratch `HOME` alone did not stop a test from rewriting the
+running session's own skills and hooks (#744). A test that needs one sets it itself.
 
 **Screenshot paste has one route per gesture.** On macOS, Cmd+V saves/uploads a file and
 pastes its path; Ctrl+V belongs to the foreground program. A node's configured agent is not

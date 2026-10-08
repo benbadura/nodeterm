@@ -30,7 +30,7 @@ import { IPC } from '../../shared/ipc'
 import { REF_MAX_LEN } from '../../shared/presence'
 import type { CanvasMutation, CanvasState, DirEntry, KanbanColumn, KanbanLabel, PtyCreateOptions } from '../../shared/types'
 import type { AgentId } from '../../shared/agents/config'
-import { PtyManager, type DetachedSinks } from '../../core/pty-manager'
+import { PtyManager, type DetachedSinks, type RelayAttachPrep } from '../../core/pty-manager'
 import * as fsOps from '../../core/fs-ops'
 import { TITLE_MAX, type RemoteNodeInput } from '../../core/project-node-append'
 import { parseCardLabelEdit, type CardLabelEdit } from '../../core/project-kanban-write'
@@ -73,16 +73,15 @@ const FRESH_PROBE_BUDGET_MS = 750
 // The slice of pty-manager the host needs. PtyManager satisfies this; tests pass a fake.
 export interface HostPtyManager {
   createDetached(options: PtyCreateOptions, sinks: DetachedSinks): string
-  /** Attach a relay-served PTY to the EXISTING tmux session for a node id (create if absent). */
-  attachDetached(
-    persistKey: string,
-    sinks: DetachedSinks,
-    options?: Omit<PtyCreateOptions, 'persistKey'>
-  ): string
-  /** Current visible screen of a node's tmux session, for the attach snapshot. */
-  captureSnapshot(persistKey: string): Promise<string>
-  /** Does a tmux session for this node id exist RIGHT NOW? Asked before `attachDetached`, which
-   *  CREATES one when it doesn't — so the client can tell a warm join from a cold start. */
+  /** Decide where (and with what env) a relay attach for a node id runs, from this machine's own
+   *  records — see `PtyManager.prepareRelayAttach`. Replaces the bare local `attachDetached`, which
+   *  created a LOCAL session for a remote node. */
+  prepareRelayAttach(
+    nodeId: string,
+    size: { cols: number; rows: number },
+    hint?: { projectId?: string }
+  ): Promise<RelayAttachPrep>
+  /** Does a session for this node id exist RIGHT NOW? (The destroy path's outcome check.) */
   sessionExists(persistKey: string): Promise<boolean>
   /** `clientId` identifies WHO typed (the bridged phone's presence peer), so the keystroke can be
    *  attributed to it — null when this session has no peer, which just means it is not badged. */
@@ -388,10 +387,12 @@ export function createHostHandlers(
   /**
    * Attach a mirrored terminal to the host's tmux session for `nodeId`: respond with the streamId
    * (and whether the session had to be CREATED — `fresh`), send a SNAPSHOT of the current screen
-   * (so the client paints it before any live output), then start streaming live output via
-   * `attachDetached`. Falls back to plain create semantics when no session exists yet
-   * (attachDetached creates one; the snapshot is empty) — which is exactly what `fresh` reports,
-   * so the client can run its cold restore instead of sitting in a bare login shell.
+   * (so the client paints it before any live output), then start streaming live output. Falls
+   * back to create semantics when no session exists yet (the attach creates one, with the env the
+   * desktop would give that node; the snapshot is empty) — which is exactly what `fresh` reports,
+   * so the client can run its cold restore instead of sitting in a bare login shell. A node whose
+   * session lives on a remote host with no live master is REFUSED (`{message, reason}`), never
+   * started locally.
    */
   function handleAttach(req: RpcRequest): void {
     const p = asRecord(req.params)
@@ -418,43 +419,67 @@ export function createHostHandlers(
       /* viewer bookkeeping must never break the attach */
     }
 
-    // `fresh` — did this attach CREATE the session, or join a live one? It has to be asked BEFORE
-    // `attachDetached`, whose `tmux new-session -A` creates when the session is gone; afterwards
-    // it always exists and the answer is meaningless. Without it a mirrored client could not tell
-    // "I joined your running agent" from "I just made you an empty login shell in $HOME", which is
-    // what put a bare `~ %` prompt under a Claude node's title on the phone once the host's tmux
-    // server had died. The agent transport has reported this all along; the relay did not.
-    //
-    // Bounded, and fail-safe toward "warm": a probe that is slow or unprobeable answers `false`,
-    // so a client that cold-restores on `fresh` types nothing into a session that may be live.
-    // The bound matters because this now precedes the RPC response and `has-session` can sit on
-    // the 6 s probe timeout when tmux itself is wedged.
+    // WHERE this attach runs, and with what env, is decided by core from this machine's own
+    // records (`PtyManager.prepareRelayAttach`): a node of an SSH project runs over that project's
+    // ControlMaster or is REFUSED — never a local `nt-<id>` wearing a remote node's identity — and a
+    // local node gets the env the desktop would give it. The phone's optional `projectId` can only
+    // choose among those records or refuse; it never routes a node anywhere on its own.
+    const projectHint = str(p.projectId)
     void (async () => {
+      let prep: RelayAttachPrep
+      try {
+        prep = await pty.prepareRelayAttach(nodeId, { cols, rows }, { projectId: projectHint })
+      } catch {
+        prep = { kind: 'refused', reason: 'not-connected', message: 'Could not prepare this session.' }
+      }
+      if (prep.kind === 'refused') {
+        // Nothing was spawned and no streamId was ever handed out: release the reservation and
+        // answer with the reason, so the phone shows a sentence instead of a bare shell.
+        dropStream(streamId)
+        socket.respond(req.id, false, { message: prep.message, reason: prep.reason })
+        return
+      }
+      // `fresh` — did this attach CREATE the session, or join a live one? It has to be asked BEFORE
+      // `attach`, whose `tmux new-session -A` creates when the session is gone; afterwards it always
+      // exists and the answer is meaningless. Without it a mirrored client could not tell "I joined
+      // your running agent" from "I just made you an empty login shell", which is what put a bare
+      // `~ %` prompt under a Claude node's title on the phone once the host's tmux server had died.
+      //
+      // Bounded, and fail-safe toward "warm": a probe that is slow or unprobeable answers `false`,
+      // so a client that cold-restores on `fresh` types nothing into a session that may be live.
+      // The bound matters because this precedes the RPC response and a probe can sit on its
+      // timeout when tmux (or, for a remote node, the master) is wedged.
       const existed = await Promise.race([
-        pty.sessionExists(nodeId).catch(() => true),
+        prep.sessionExists().catch(() => true),
         new Promise<boolean>((r) => setTimeout(() => r(true), FRESH_PROBE_BUDGET_MS))
       ])
       socket.respond(req.id, true, { streamId, fresh: !existed })
-      return pty.captureSnapshot(nodeId).catch(() => '')
-    })()
-      .then((snapshot) => {
-        // The stream may have been killed/closed while the capture was in flight.
-        if (!streams.has(streamId)) return
-        // Snapshot first (current screen) — then live output begins on attach.
-        sendSnapshot(streamId, stream, snapshot)
-        try {
-          stream.sessionId = pty.attachDetached(nodeId, sinks, { cols, rows })
-        } catch {
-          // Attach failed (e.g. tmux unavailable) — surface as an exit so the client tears down.
-          socket.sendFrame(
-            OP.Error,
-            streamId,
-            stream.seq++,
-            textEncoder.encode(JSON.stringify({ exitCode: 1 }))
-          )
-          dropStream(streamId)
+      const snapshot = await prep.snapshot().catch(() => '')
+      // The stream may have been killed/closed while the capture was in flight.
+      if (!streams.has(streamId)) return
+      // Snapshot first (current screen) — then live output begins on attach.
+      sendSnapshot(streamId, stream, snapshot)
+      try {
+        const sessionId = await prep.attach(sinks)
+        if (!streams.has(streamId)) {
+          // Closed while the spawn was in flight (a remote spawn awaits the master's pacing gate):
+          // release the client we just made; the session itself keeps running.
+          pty.kill(null, sessionId)
+          return
         }
-      })
+        stream.sessionId = sessionId
+      } catch {
+        // Attach failed (e.g. tmux unavailable, master gone) — surface as an exit so the client
+        // tears down.
+        socket.sendFrame(
+          OP.Error,
+          streamId,
+          stream.seq++,
+          textEncoder.encode(JSON.stringify({ exitCode: 1 }))
+        )
+        dropStream(streamId)
+      }
+    })()
   }
 
   // Serve a `fs.*` RPC by calling the shared fs-ops on the host's real filesystem and responding

@@ -8,11 +8,14 @@ import { barFillPercent, contextFillColor, contextPillText, formatModelLabel, fo
  * Per-Claude-node context-window meter. A small header pill (mini-bar + "NN%") that toggles
  * a popover with token figures and model. Renders nothing until the session has usage data.
  */
-export function ContextMeter({ sessionId, nodeId, remote = false, agentId }: {
+export function ContextMeter({ sessionId, nodeId, remote = false, agentId, fromLaunchId = false }: {
   sessionId: string | null
   nodeId?: string
   remote?: boolean
   agentId?: string
+  /** `sessionId` is the node's persisted launch id, not a hook-confirmed one
+   *  (lib/transcriptSession.ts): the popover says so, since it may be an older session. */
+  fromLaunchId?: boolean
 }): JSX.Element | null {
   const scoped = remote && !!agentId && capabilityAgentId(agentId) === 'codex'
   // A copied rollout has the same session id on two hosts. SSH Codex observations belong
@@ -57,6 +60,9 @@ export function ContextMeter({ sessionId, nodeId, remote = false, agentId }: {
                 gemini joined USAGE_CAPABLE — a codex popover would have claimed to be claude. */}
             {usage.model ? `${usage.model} · ` : ''}Updated {formatTimeAgo(usage.updatedAt)}
           </div>
+          {fromLaunchId && (
+            <div className="ctx-popover__sub">From the session this node was started with.</div>
+          )}
         </div>
       )}
       <button

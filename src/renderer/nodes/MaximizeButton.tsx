@@ -2,7 +2,8 @@
 // the NODE to fill the visible canvas — a real resize through the normal resize path, so a
 // terminal reflows and gains rows (the camera never moves; canvas zoom is a CSS transform and
 // magnifying an 80×24 shows no extra line). The second click restores the exact previous rect.
-// Shared by the terminal, editor and diff nodes; the transforms live in state/workspace.ts so
+// Shared by every node kind the node.maximize chord accepts that has a header (terminal, editor,
+// diff, browser, web, video, files); the transforms live in state/workspace.ts so
 // grouped nodes re-fit their ancestor frames in the same tick.
 
 import { useReactFlow, useStoreApi } from '@xyflow/react'

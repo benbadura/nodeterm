@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import {
+  arrangeNodes,
+  endMaximizeOnUserGeometry,
+  movedGestureEnds,
+  tidyCanvas,
   flowToNodeStates,
   maximizeNodeToRect,
   nodeStatesToFlow,
@@ -9,6 +13,7 @@ import {
 } from './workspace'
 import type { CanvasNode } from './workspace'
 import { maximizeTargetRect } from '../lib/nodeMaximize'
+import { NODE_MIN_SIZES } from '../lib/nodeSizing'
 
 // Maximize-to-viewport (issue #399): the node is RESIZED to the visible canvas and toggles back
 // to the exact rect it had — the restore is the half users cannot do by hand, so it is the half
@@ -269,5 +274,63 @@ describe('placeNodeInRect (zone snap, issue #394 v1)', () => {
     expect(placeNodeInRect([group('g', { x: 0, y: 0 })], 'g', RECT)[0].width).toBe(600)
     expect(placeNodeInRect([collapsed], 'c', RECT)[0].width).toBe(320)
     expect(placeNodeInRect([term('a', { x: 1, y: 2 })], 'nope', RECT)).toEqual([term('a', { x: 1, y: 2 })])
+  })
+})
+
+describe('leaving maximize mode', () => {
+  it('a user drag-stop or a real resize-end drops premaxRect where the node stands', () => {
+    const maxed = maximizeNodeToRect([term('a', { x: 40, y: 60 }), term('b', { x: 900, y: 0 })], 'a', RECT)
+    const ended = (changes: Parameters<typeof movedGestureEnds>[0], resizing = new Set<string>()) =>
+      endMaximizeOnUserGeometry(maxed, movedGestureEnds(changes, resizing))
+    // Mid-gesture and re-measure changes carry no end flag: mode stays on.
+    expect(ended([{ type: 'position', id: 'a', dragging: true }])).toBe(maxed)
+    expect(ended([{ type: 'dimensions', id: 'a' }])).toBe(maxed)
+    // A drag end (React Flow sends it only when positions changed) ends maximize mode in place.
+    const dragged = ended([{ type: 'position', id: 'a', dragging: false }])[0]
+    expect(dragged.data.premaxRect).toBeUndefined()
+    expect(dragged.position).toEqual(maxed[0].position)
+    // A resize end ends it only after live resizing changes, which may arrive in earlier batches.
+    const resizing = new Set<string>()
+    expect(ended([{ type: 'dimensions', id: 'a', resizing: true }], resizing)).toBe(maxed)
+    expect(ended([{ type: 'dimensions', id: 'a', resizing: false }], resizing)[0].data.premaxRect).toBeUndefined()
+    expect(resizing.size).toBe(0)
+  })
+
+  it('a plain click on a grab band (resize end with no resize) keeps maximize mode and Restore', () => {
+    const maxed = maximizeNodeToRect([term('a', { x: 40, y: 60 })], 'a', RECT)
+    const ids = movedGestureEnds([{ type: 'dimensions', id: 'a', resizing: false }], new Set())
+    expect(ids.size).toBe(0)
+    expect(endMaximizeOnUserGeometry(maxed, ids)).toBe(maxed)
+  })
+
+  it('tidy and arrange restore maximized nodes before packing', () => {
+    const maxed = maximizeNodeToRect([term('a', { x: 40, y: 60 }), term('b', { x: 900, y: 0 })], 'a', RECT)
+    for (const next of [tidyCanvas(maxed), arrangeNodes(maxed, ['a', 'b'])]) {
+      const a = next.find((n) => n.id === 'a')!
+      expect(a.data.premaxRect).toBeUndefined()
+      expect(a.width).toBe(320)
+      expect(a.height).toBe(240)
+    }
+  })
+})
+
+describe('NODE_MIN_SIZES clamp (programmatic resizes bypass the NodeResizer)', () => {
+  // A third zone of a zoomed-in viewport is narrower than a terminal's 260 floor.
+  const TINY = { x: 10, y: 20, width: 200, height: 100 }
+
+  it('zone snap and maximize never shrink a node below its kind minimum', () => {
+    const min = NODE_MIN_SIZES.terminal
+    for (const place of [placeNodeInRect, maximizeNodeToRect]) {
+      const a = place([term('a', { x: 0, y: 0 })], 'a', TINY)[0]
+      expect(a.position).toEqual({ x: 10, y: 20 })
+      expect(a.width).toBe(min.width)
+      expect(a.height).toBe(min.height)
+      expect(a.data.expandedHeight).toBe(min.height)
+    }
+  })
+
+  it('a clamped maximized node refits idempotently', () => {
+    const maxed = maximizeNodeToRect([term('a', { x: 0, y: 0 })], 'a', TINY)
+    expect(refitMaximizedNode(maxed, 'a', TINY)).toBe(maxed)
   })
 })

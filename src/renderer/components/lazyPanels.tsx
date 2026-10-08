@@ -48,6 +48,9 @@ export const SourceControlPanel = withSuspense(
 export const ExplorerPanel = withSuspense(
   lazy(() => import('./ExplorerPanel').then((m) => ({ default: m.ExplorerPanel })))
 )
+export const LiveChatDrawer = withSuspense(
+  lazy(() => import('./LiveChatDrawer').then((m) => ({ default: m.LiveChatDrawer })))
+)
 export const ShortcutsPanel = withSuspense(
   lazy(() => import('./ShortcutsPanel').then((m) => ({ default: m.ShortcutsPanel })))
 )

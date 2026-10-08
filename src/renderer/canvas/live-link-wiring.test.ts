@@ -28,6 +28,16 @@ describe('Canvas live-link wiring', () => {
     expect(src).toMatch(/startWatchLinkSync\(window\.nodeTerminal,[\s\S]{0,400}?\n {4}\[\]\n {2}\)/)
   })
 
+  it('notices: the strip and the OS notification come from ONE decision (liveLinkNoticeEffect)', () => {
+    const sync = src.slice(src.indexOf('startWatchLinkSync(window.nodeTerminal,'))
+    const body = sync.slice(0, 400)
+    // The consent gate, the per-link cooldown and the copy are the lib's (behaviour-tested there):
+    // Canvas hands it the LIVE settings and the clock, and does what it answers.
+    expect(body).toContain('liveLinkNoticeEffect(n, useSettings.getState().settings, Date.now(), liveNotifyAtRef.current)')
+    expect(body).toContain("if (fx.strip) setNotice({ kind: 'info', ...fx.strip })")
+    expect(body).toContain('if (fx.os) void window.nodeTerminal.notify(fx.os)')
+  })
+
   it('the dialog is shown ONLY through openLiveLink (availability, then the Pro gate)', () => {
     // The only writers of the dialog state: the opener's `show`, and close.
     expect(count('setLiveLinkDialog(')).toBe(1) // closeLiveLinkDialog → setLiveLinkDialog(null)
@@ -51,8 +61,16 @@ describe('Canvas live-link wiring', () => {
     expect(src).toContain('prepare={liveLinkPrepareFor(liveLinkDialog)}')
   })
 
-  it("R63: the dialog knows an SSH project's node from its project (the host's tmux serves its viewers)", () => {
-    expect(src).toContain('remoteNode={!!useProjects.getState().getProject(liveLinkDialog.projectId)?.ssh}')
+  it("R63 and the Control warning: where the NODE runs — its own SSH binding, then its project's", () => {
+    // One decision (lib/liveLinkEntry, behaviour-tested there) gives the dialog both facts: a node
+    // attached to an SSH host in a LOCAL project, or a standalone ssh node, is not "this machine".
+    expect(src).toContain('{...liveLinkRemoteFor(liveLinkDialog)}')
+    const remote = callback('liveLinkRemoteFor')
+    expect(remote).toContain('liveLinkRemoteFacts({')
+    expect(remote).toContain('live: nodesRef.current,')
+    expect(remote).toContain('stored: project?.nodes,')
+    expect(remote).toContain('projectSsh: project?.ssh?.server')
+    expect(src).not.toContain('remoteNode={!!useProjects.getState().getProject(liveLinkDialog.projectId)?.ssh}')
     // …and reads THIS machine's session protection from the local core, never a relay peer's.
     expect(src).toContain('readPersistence={readLocalPersistence}')
     expect(callback('readLocalPersistence')).toContain('localSession.api.pty.tmuxStatus()')
@@ -106,5 +124,53 @@ describe('Canvas live-link wiring', () => {
   it('the card modal\'s action reaches the opener with its project', () => {
     expect(src).toContain("window.addEventListener('nodeterm:live-link', on)")
     expect(src).toMatch(/openLiveLinkFor\(\{ nodeId: d\.nodeId, title, projectId: d\.projectId \}\)/)
+  })
+
+  // ── The Live chat drawer (Task 8) ──
+  it('the drawer is lazy-loaded like the Explorer and mounted only while open', () => {
+    const lazyImport = src.slice(0, src.indexOf("} from '../components/lazyPanels'"))
+    expect(lazyImport.slice(lazyImport.lastIndexOf('import {'))).toContain('LiveChatDrawer')
+    expect(src).toMatch(/\{liveChatShown\(liveChat, liveLinkCount\) && \(\s*<LiveChatDrawer/)
+  })
+
+  it('a pinned drawer is rendered only while a link is live (ruling, concern 3): Canvas reads the COUNT', () => {
+    // A primitive selector: a push about one link's viewers does not re-render the canvas.
+    expect(src).toContain('const liveLinkCount = useWatchLinks((s) => s.links.length)')
+    // `beside` follows the drawer actually on screen, not just the pin.
+    const mount = src.slice(src.indexOf('<LiveChatDrawer'))
+    expect(mount.slice(0, mount.indexOf('/>'))).toContain('beside={liveChat.pinned && explorerOpen && explorer.pinned && !liveChatRaised}')
+  })
+
+  it('raised only over a card modal on an open board, and never over Settings (hardening 3/4)', () => {
+    // Settings (z 55) stays on top: the drawer is not lifted to 57 while it is open. Raised, the
+    // drawer is not docked beside the Explorer either — the Explorer sits under the card modal.
+    expect(src).toContain('const liveChatRaised = cardModalOpen && kanbanOpen && !settingsOpen')
+  })
+
+  it('raised while a card modal is open, beside only when BOTH drawers are pinned', () => {
+    const mount = src.slice(src.indexOf('<LiveChatDrawer'))
+    const props = mount.slice(0, mount.indexOf('/>'))
+    expect(props).toContain('linkId={liveChat.linkId}')
+    expect(props).toContain('pinned={liveChat.pinned}')
+    expect(props).toContain('raised={liveChatRaised}')
+    expect(props).toContain('beside={liveChat.pinned && explorerOpen && explorer.pinned && !liveChatRaised}')
+    expect(props).toContain('onGoToNode={goToLiveChatNode}')
+    // The card modal's open state is published where every board reports it.
+    expect(callback('setKanbanModalNode')).toContain('setCardModalOpen(id !== null)')
+  })
+
+  it('the pin is persisted by the toggle; Go to terminal travels (closing a modal drawer first)', () => {
+    expect(callback('toggleLiveChatPin')).toContain('writeLiveChatPinned(next.pinned)')
+    const go = callback('goToLiveChatNode')
+    expect(go).toContain("if (!liveChatRef.current.pinned) setLiveChat((s) => nextLiveChat(s, { kind: 'close' }))")
+    expect(go).toContain('travelToNode(nodeId)')
+    expect(callback('pickLiveChatLink')).toContain('writeLiveChatLink(linkId)')
+  })
+
+  it('the palette opens it; nothing about chat raises an OS notification', () => {
+    const cmds = src.slice(src.indexOf('...liveLinkCommands({'))
+    expect(cmds.slice(0, 600)).toContain("openChat: () => setLiveChat((s) => nextLiveChat(s, { kind: 'open' })),")
+    const drawerSrc = readFileSync(join(__dirname, '../components/LiveChatDrawer.tsx'), 'utf8').replace(/\r\n/g, '\n')
+    expect(drawerSrc).not.toMatch(/notify\(/)
   })
 })

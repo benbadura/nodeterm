@@ -7,7 +7,6 @@ import {
   CHAT_NOT_SENT_MESSAGE,
   chipView,
   formatUntil,
-  LIVE_LINK_WARNING,
   watchableOnlyWhileOpen,
   commentFromChat,
   createErrorMessage,
@@ -29,7 +28,27 @@ import {
   STOP_FAILED_MESSAGE,
   stopAllConfirmMessage,
   TTL_OPTIONS,
-  viewerName
+  viewerName,
+  CONTROL_LOCKED_TEXT,
+  CONTROL_UNSUPPORTED_REASON,
+  controlWarning,
+  controlWarningMachine,
+  controlWarningText,
+  controlTakenText,
+  LIVE_LINK_EXPOSURE,
+  liveLinkNoticeEffect,
+  PASSWORD_SEPARATE_NOTE,
+  PASSWORD_SHOWN_ONCE,
+  passwordProblemText,
+  ROLE_CHOICE,
+  ROLE_NAME,
+  ROLE_ORDER,
+  typingNames,
+  UNLIMITED_NOTE,
+  CONTROL_CHANGE_UNSAVED_MESSAGE,
+  KICK_CONTROLLER_NOTE,
+  KICK_NOTE,
+  kickNote
 } from './liveLink'
 import type { CreateWatchLinkError, WatchLinkView } from '@shared/watch-link-types'
 import { DEFAULT_WATCH_LINK_TTL, WATCH_LINK_TTLS } from '@shared/watch-link-types'
@@ -49,9 +68,10 @@ const link = (over: Partial<WatchLinkView> = {}): WatchLinkView => ({
   url: 'u',
   status: 'live',
   viewers: [],
+  control: null,
   ...over
 })
-const viewer = (id: string) => ({ viewerId: id, name: null, joinedAt: 0, waiting: false })
+const viewer = (id: string) => ({ viewerId: id, name: null, joinedAt: 0, waiting: false, controlling: false, typing: false })
 
 const RELAY_SENTENCE = 'Live links are created on the machine that runs this terminal.'
 const R43 = 'Live links need a Pro license on this server — not available in the Server Edition yet'
@@ -67,7 +87,10 @@ const ALL_ERRORS: CreateWatchLinkError[] = [
   'node-missing',
   'bad-request',
   'persist-failed',
-  'unsupported'
+  'unsupported',
+  'ttl-unsupported',
+  'control-unsupported',
+  'bad-password'
 ]
 
 describe('chipView', () => {
@@ -150,6 +173,14 @@ describe('time', () => {
     expect(formatRemaining(24 * 60 * MIN - 1, 0)).toBe('ends in 23 h 59 min')
     expect(formatRemaining(24 * 60 * MIN, 0)).toBe('ends in 24 h')
   })
+  it('an Unlimited link has no end time', () => {
+    expect(formatRemaining(null, 5)).toBe('No end time')
+    expect(formatUntil(null, 5)).toBe('you stop it')
+    // "now" defaults to the clock.
+    expect(formatRemaining(null)).toBe('No end time')
+    expect(formatUntil(null)).toBe('you stop it')
+    expect(formatRemaining(Date.now() + 42 * 60_000 + 30_000)).toBe('ends in 42 min')
+  })
   it('a clock time is hours and minutes, never seconds (H25)', () => {
     const at = new Date(2026, 9, 1, 15, 42, 37).getTime()
     expect(formatClock(at)).toBe(new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))
@@ -195,6 +226,15 @@ describe('createErrorMessage', () => {
     expect(createErrorMessage('not-entitled', 'desktop')).toBe('Live links need an active Pro plan.')
     expect(createErrorMessage('limit-machine', 'desktop')).toBe('Stop a live link first — 5 can be active at once.')
     expect(createErrorMessage('relay-unavailable', 'desktop')).toBe('Live links need the installed app.')
+  })
+
+  it('the Unlimited and Control refusals', () => {
+    expect(createErrorMessage('ttl-unsupported', 'desktop')).toBe('Unlimited links need a newer server. Pick an end time.')
+    expect(createErrorMessage('control-unsupported', 'desktop')).toBe(CONTROL_UNSUPPORTED_REASON)
+    expect(CONTROL_UNSUPPORTED_REASON).toBe(
+      "Control isn't available for this terminal: its Zellij session's key bindings would reach every session."
+    )
+    expect(createErrorMessage('bad-password', 'desktop')).toBe('The password must be 8 to 128 characters, with no line breaks.')
   })
 })
 
@@ -249,10 +289,22 @@ describe('noticeText', () => {
 describe('fixed lists (H19)', () => {
   it('TTL options come from the shared list, in order, with the labels the spec names', () => {
     expect(TTL_OPTIONS.map((o) => o.value)).toEqual([...WATCH_LINK_TTLS])
-    expect(TTL_OPTIONS.map((o) => o.value)).toEqual([900, 3600, 28800, 86400])
-    expect(TTL_OPTIONS.map((o) => o.label)).toEqual(['15 min', '1 hour', '8 hours', '24 hours'])
+    // Unlimited is offered, last.
+    expect(TTL_OPTIONS.map((o) => o.value)).toEqual([900, 3600, 28800, 86400, 0])
+    // Lowercase: the dialog's row reads "Expires in 1 hour" / "Expires never".
+    expect(TTL_OPTIONS.map((o) => o.label)).toEqual(['in 15 minutes', 'in 1 hour', 'in 8 hours', 'in 24 hours', 'never'])
+    // Only "never" carries a hint, and it is the Unlimited note.
+    expect(TTL_OPTIONS.map((o) => o.hint)).toEqual([undefined, undefined, undefined, undefined, UNLIMITED_NOTE])
     expect(DEFAULT_TTL).toBe(DEFAULT_WATCH_LINK_TTL)
-    expect(ROLE_LABEL).toEqual({ viewer: 'Can watch', commenter: 'Can watch and chat' })
+    expect(ROLE_LABEL).toEqual({ viewer: 'Can watch', commenter: 'Can watch and chat', controller: 'Can watch, chat and type' })
+    expect(ROLE_NAME).toEqual({ viewer: 'Viewer', commenter: 'Commenter', controller: 'Control' })
+    // The create dialog's menu: the verb the link grants, in the spec's order; Control names its password.
+    expect(ROLE_ORDER).toEqual(['viewer', 'commenter', 'controller'])
+    expect(ROLE_CHOICE).toEqual({
+      viewer: { label: 'can watch', hint: 'Sees the terminal' },
+      commenter: { label: 'can chat', hint: 'Watches and chats with you' },
+      controller: { label: 'can type', hint: 'Also types, with a password' }
+    })
   })
 })
 
@@ -276,9 +328,9 @@ describe('copy Task 17 reads (R47, R48, R52, H11, H23, H26)', () => {
 
 describe('viewerName', () => {
   it('a viewer who has not chatted is numbered; a name loses its bidi controls', () => {
-    expect(viewerName({ viewerId: 'a', name: null, joinedAt: 0, waiting: false }, 0)).toBe('Viewer 1')
-    expect(viewerName({ viewerId: 'a', name: '  ', joinedAt: 0, waiting: false }, 2)).toBe('Viewer 3')
-    expect(viewerName({ viewerId: 'a', name: 'Bob\u2066', joinedAt: 0, waiting: false }, 0)).toBe('Bob')
+    expect(viewerName({ viewerId: 'a', name: null, joinedAt: 0, waiting: false, controlling: false, typing: false }, 0)).toBe('Viewer 1')
+    expect(viewerName({ viewerId: 'a', name: '  ', joinedAt: 0, waiting: false, controlling: false, typing: false }, 2)).toBe('Viewer 3')
+    expect(viewerName({ viewerId: 'a', name: 'Bob\u2066', joinedAt: 0, waiting: false, controlling: false, typing: false }, 0)).toBe('Bob')
   })
 })
 
@@ -338,7 +390,205 @@ describe('watchableOnlyWhileOpen', () => {
 // R64/M3: the stream follows the terminal CLIENT, so tmux's chooser and a session switch reach viewers.
 describe('the create warning', () => {
   it("names tmux's session chooser and a session switch", () => {
-    expect(LIVE_LINK_WARNING).toMatch(/session chooser/)
-    expect(LIVE_LINK_WARNING).toMatch(/switch sessions/)
+    expect(LIVE_LINK_EXPOSURE).toMatch(/session chooser/)
+    expect(LIVE_LINK_EXPOSURE).toMatch(/switch sessions/)
+    // What every viewer gets, said in the one sentence the dialog keeps for it.
+    expect(LIVE_LINK_EXPOSURE).toMatch(/scrollback/)
+    expect(LIVE_LINK_EXPOSURE).toMatch(/anything printed later/)
+  })
+})
+
+// ---- Control and Unlimited (spec 2026-10-03) -----------------------------------------------------
+
+describe('Control and Unlimited copy', () => {
+  it('is the exact ruled text', () => {
+    // Spec §2.7, with the machine named truthfully (ruling 2): this machine's noun for a local node…
+    expect(controlWarningText(controlWarningMachine(null))).toBe(
+      'With this link and the password, anyone can type here as you: run any command on this computer, or instruct the agent in this terminal.'
+    )
+    // …and the host for an SSH project's node, whose shell runs there.
+    expect(controlWarningText(controlWarningMachine({ user: 'ada', host: 'build.example' }))).toBe(
+      'With this link and the password, anyone can type here as you: run any command on ada@build.example, or instruct the agent in this terminal.'
+    )
+    // "and" is the emphasised word: the parts say where it is.
+    expect(controlWarning('x')[1]).toBe('and')
+    expect(controlWarning('x').join('')).toBe(controlWarningText('x'))
+    // The exposure sentence is shown for every role, Control included, so it must not claim nobody types.
+    expect(LIVE_LINK_EXPOSURE).not.toMatch(/type/)
+    expect(PASSWORD_SEPARATE_NOTE).toBe('Send the password separately from the link.')
+    expect(PASSWORD_SHOWN_ONCE).toBe(
+      'This is the only time the password is shown. Change it later from the LIVE chip.'
+    )
+    expect(UNLIMITED_NOTE).toBe('This link works until you stop it.')
+    expect(CONTROL_LOCKED_TEXT).toBe('Control locked after 10 wrong passwords.')
+  })
+
+  it('names every password problem the shared validator can find, and nothing for a good one', () => {
+    expect(passwordProblemText('short')).toBe('Use at least 8 characters.')
+    expect(passwordProblemText('')).toBe('Use at least 8 characters.')
+    expect(passwordProblemText('x'.repeat(129))).toBe('Use at most 128 characters.')
+    expect(passwordProblemText('longenough\nx')).toBe('Line breaks and control characters are not allowed.')
+    expect(passwordProblemText('longenough')).toBeNull()
+    // Code points, as a person counts: eight emoji are eight characters.
+    expect(passwordProblemText('\u{1F600}'.repeat(8))).toBeNull()
+  })
+})
+
+describe('controlWarningMachine', () => {
+  it("names the SSH host as user@host, bidi stripped; a host alone without a user; else this machine's noun", () => {
+    expect(controlWarningMachine(undefined)).toBe('this computer')
+    expect(controlWarningMachine({ user: 'ada', host: 'build.example' })).toBe('ada@build.example')
+    expect(controlWarningMachine({ user: '', host: 'build.example' })).toBe('build.example')
+    expect(controlWarningMachine({ user: 'a\u202eda', host: 'bu\u2066ild' })).toBe('ada@build')
+  })
+})
+
+describe('who is typing', () => {
+  const typing = (id: string, name: string | null) => ({ ...viewer(id), name, controlling: true, typing: true })
+
+  it('typingNames lists the typing viewers of every link, bidi stripped, in list order', () => {
+    expect(typingNames([link({ viewers: [viewer('a')] })])).toEqual([])
+    expect(
+      typingNames([
+        link({ viewers: [viewer('a'), typing('b', 'Mert')] }),
+        link({ linkId: 'M', viewers: [typing('c', 'Ay‮şe'), { ...viewer('d'), controlling: true }] })
+      ])
+    ).toEqual(['Mert', 'Ayşe'])
+  })
+
+  it('the chip counts who types, and its title names them as claims', () => {
+    expect(chipView([link({ viewers: [viewer('a'), typing('b', 'Mert'), viewer('c')] })])).toEqual({
+      label: 'LIVE · 3 · 1 typing',
+      tone: 'live',
+      title: '“Mert” is typing. This terminal is shared by a live link — 3 watching.'
+    })
+    expect(chipView([link({ viewers: [typing('a', 'Mert'), typing('b', 'Ayşe')] })]).title).toBe(
+      '“Mert” and “Ayşe” are typing. This terminal is shared by a live link — 2 watching.'
+    )
+    expect(chipView([link({ viewers: [typing('a', 'A'), typing('b', 'B'), typing('c', 'C')] })])).toMatchObject({
+      label: 'LIVE · 3 · 3 typing',
+      title: '“A”, “B” and “C” are typing. This terminal is shared by a live link — 3 watching.'
+    })
+  })
+
+  it('only a name the viewer gave itself is quoted: the "Viewer N" placeholder is ours, not a claim', () => {
+    const nameless = (id: string, name: string | null) => ({ ...viewer(id), name, controlling: true, typing: true })
+    expect(chipView([link({ viewers: [nameless('a', null)] })]).title).toBe(
+      'Viewer 1 is typing. This terminal is shared by a live link — 1 watching.'
+    )
+    expect(chipView([link({ viewers: [typing('a', 'Mert'), nameless('b', '  ')] })]).title).toBe(
+      '\u201cMert\u201d and Viewer 2 are typing. This terminal is shared by a live link — 2 watching.'
+    )
+    // A viewer who CALLS itself "Viewer 1" made a claim like any other: quoted.
+    expect(chipView([link({ viewers: [typing('a', 'Viewer 1')] })]).title).toBe(
+      '\u201cViewer 1\u201d is typing. This terminal is shared by a live link — 1 watching.'
+    )
+  })
+
+  it('the worst state still wins: refused > offline > waiting > typing > count', () => {
+    const t = typing('t', 'Mert')
+    const w = { ...viewer('w'), waiting: true }
+    expect(chipView([link({ status: 'refused', viewers: [t] })]).label).toBe('LIVE · refused')
+    expect(chipView([link({ status: 'reconnecting', viewers: [t] })]).label).toBe('LIVE · offline')
+    expect(chipView([link({ viewers: [t, w] })]).label).toBe('LIVE · 1 waiting')
+    expect(chipView([link({ viewers: [t] })]).label).toBe('LIVE · 1 · 1 typing')
+    expect(chipView([link({ viewers: [{ ...t, typing: false }] })]).label).toBe('LIVE · 1')
+  })
+})
+
+describe('control notices', () => {
+  it('control-taken quotes the name the viewer gave itself: a claim, not an identity', () => {
+    expect(controlTakenText({ name: 'Mert', title: 'api-server' })).toBe(
+      'Someone using the name “Mert” can now type in api-server.'
+    )
+    expect(controlTakenText({ name: 'Me‮rt', title: 'api⁧-server' })).toBe(
+      'Someone using the name “Mert” can now type in api-server.'
+    )
+    // No name to quote: say only what is known.
+    expect(controlTakenText({ name: ' ‮ ', title: 'api-server' })).toBe('Someone can now type in api-server.')
+    expect(noticeText({ kind: 'control-taken', linkId: 'L', nodeId: 'n', title: 'api-server', name: 'Mert' })).toBe(
+      'Someone using the name “Mert” can now type in api-server.'
+    )
+  })
+
+  it('control-locked says how to undo it', () => {
+    expect(noticeText({ kind: 'control-locked', linkId: 'L', nodeId: 'n', title: 'api‮-server' })).toBe(
+      'Control of api-server was locked after 10 wrong passwords. Allow it again from the LIVE chip.'
+    )
+  })
+})
+
+describe('final review copy', () => {
+  it("an owner's narrowing change that could not be saved: applied, undone by a restart, Stop ends it", () => {
+    expect(CONTROL_CHANGE_UNSAVED_MESSAGE).toBe(
+      "Applied, but couldn't be saved — it will undo when nodeterm restarts. Stop the link to end it for good."
+    )
+  })
+
+  it('the Kick note of a viewer who is controlling says they can unlock again, and how to keep them out', () => {
+    expect(KICK_CONTROLLER_NOTE).toBe('They can unlock again — change the password or turn typing off to keep them out.')
+    expect(kickNote({ controlling: false })).toBe(KICK_NOTE)
+    expect(kickNote({ controlling: true })).toBe(`${KICK_NOTE} ${KICK_CONTROLLER_NOTE}`)
+  })
+})
+
+describe('liveLinkNoticeEffect', () => {
+  const CONSENT = { notifyOnClaudeDone: true, notifyConsentAsked: true }
+  const taken = (linkId = 'L') =>
+    ({ kind: 'control-taken', linkId, nodeId: 'n', title: 'api-server', name: 'Mert' }) as const
+
+  it('every kind lands in the info strip; not-persistent and control-locked stay on screen', () => {
+    expect(liveLinkNoticeEffect({ kind: 'joined', linkId: 'L', nodeId: 'n', title: 't', viewers: 1 }, CONSENT, 0, new Map())).toEqual({
+      strip: { text: 'Someone started watching t (1 watching).', sticky: false },
+      os: null
+    })
+    expect(liveLinkNoticeEffect({ kind: 'not-persistent' }, CONSENT, 0, new Map()).strip?.sticky).toBe(true)
+    expect(
+      liveLinkNoticeEffect({ kind: 'control-locked', linkId: 'L', nodeId: 'n', title: 't' }, CONSENT, 0, new Map())
+    ).toEqual({
+      strip: { text: 'Control of t was locked after 10 wrong passwords. Allow it again from the LIVE chip.', sticky: true },
+      os: null
+    })
+    expect(liveLinkNoticeEffect({ kind: 'from-a-newer-core' } as never, CONSENT, 0, new Map())).toEqual({ strip: null, os: null })
+  })
+
+  // Final review, Minor 7: someone taking control of a terminal is a SECURITY event, not an agent
+  // finishing: it notifies once the one-time notification question was answered, whatever the
+  // agent-done preference says.
+  it('control-taken also raises an OS notification, gated on the notification consent only', () => {
+    const text = 'Someone using the name “Mert” can now type in api-server.'
+    expect(liveLinkNoticeEffect(taken(), CONSENT, 0, new Map())).toEqual({
+      strip: { text, sticky: false },
+      os: { title: 'Live link', body: text, nodeId: 'n' }
+    })
+    // The agent-done preference off: still notified (the caller hands over the whole settings).
+    const agentDoneOff = { notifyOnClaudeDone: false, notifyConsentAsked: true }
+    expect(liveLinkNoticeEffect(taken(), agentDoneOff, 0, new Map()).os).toEqual({
+      title: 'Live link',
+      body: text,
+      nodeId: 'n'
+    })
+    // The consent question not answered yet: no OS notification (it would raise the OS prompt out of
+    // nowhere), whatever the preference says.
+    for (const prefs of [{ notifyOnClaudeDone: true, notifyConsentAsked: false }, {}]) {
+      const fx = liveLinkNoticeEffect(taken(), prefs, 0, new Map())
+      expect(fx.os, JSON.stringify(prefs)).toBeNull()
+      expect(fx.strip?.text).toBe(text)
+    }
+  })
+
+  it('one OS notification per link per 5 s; the strip still says it every time', () => {
+    const at = new Map<string, number>()
+    expect(liveLinkNoticeEffect(taken(), CONSENT, 1000, at).os).not.toBeNull()
+    const again = liveLinkNoticeEffect(taken(), CONSENT, 5999, at)
+    expect(again.os).toBeNull()
+    expect(again.strip).not.toBeNull()
+    // Another link is its own.
+    expect(liveLinkNoticeEffect(taken('M'), CONSENT, 2000, at).os).not.toBeNull()
+    expect(liveLinkNoticeEffect(taken(), CONSENT, 6000, at).os).not.toBeNull()
+    // A notification the consent gate held back does not start the cooldown.
+    const held = new Map<string, number>()
+    liveLinkNoticeEffect(taken(), {}, 0, held)
+    expect(liveLinkNoticeEffect(taken(), CONSENT, 1, held).os).not.toBeNull()
   })
 })

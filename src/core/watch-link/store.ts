@@ -37,12 +37,40 @@
 // every secret it read or sealed this run and reuses it on every write (it never re-seals), so when
 // `seal` starts throwing only a link it NEVER sealed is left out (reported 'memory-only'); links read
 // at boot and links sealed earlier stay on disk, and a link no longer in the list is still dropped.
+//
+// A CONTROL LINK (role 'controller') carries `control`: whether typing is on, the password's scrypt
+// salt and hash (./password.ts — never the plaintext), whether wrong attempts locked it, and the
+// link-wide count of wrong attempts toward that lock (`wrong`, 0..CONTROL_WRONG_MAX — persisted, so an
+// app restart does not hand an attacker who holds the link fresh guesses; a file written before the
+// count existed reads as 0). It is
+// written as it is, not sealed: the hash is scrypt'd, and anyone who can read this 0600 file under
+// userData is already this user. `control` is present IFF the role is 'controller', and a load drops
+// any entry that breaks that rule: a hand-edited file cannot give a viewer link a password, and a
+// controller link with no password is not a link this build can host. A save refuses ('failed', the
+// file untouched) a list holding such a record: it would be written only for the next load to drop it.
+//
+// AN UNLIMITED LINK has `expiresAt: null`: it lives until it is stopped. An opaque one is carried
+// until it is discarded, never dropped for time.
 import { promises as fs } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { renameAtomic, writeFileAtomic } from '../fs-atomic'
 import { LINK_ID_RE } from '../../shared/watch-link/link'
 import type { WatchLinkRole } from '../../shared/watch-link/protocol'
 import { isSafeNodeId } from '../../shared/safe-id'
+
+/** Wrong unlock attempts across a Control link that lock it (link-host.ts `WRONG_PER_LINK`). */
+export const CONTROL_WRONG_MAX = 10
+
+/** A Control link's typing state. The salt and hash are base64 (16 and 32 bytes). */
+export interface WatchLinkControlRecord {
+  enabled: boolean
+  salt: string
+  hash: string
+  locked: boolean
+  /** Wrong unlock attempts across the link since the last reset (a new password, Allow control
+   *  again): an integer 0..CONTROL_WRONG_MAX. */
+  wrong: number
+}
 
 export interface WatchLinkRecord {
   linkId: string
@@ -51,8 +79,11 @@ export interface WatchLinkRecord {
   label: string
   title: string
   createdAt: number
-  expiresAt: number
+  /** Epoch ms; `null` for an Unlimited link (no end time). */
+  expiresAt: number | null
   secret: Uint8Array
+  /** Present IFF `role === 'controller'`. */
+  control?: WatchLinkControlRecord
 }
 export type SaveOutcome = 'saved' | 'memory-only' | 'failed'
 
@@ -85,7 +116,8 @@ interface FileEntry {
   label: string
   title: string
   createdAt: number
-  expiresAt: number
+  expiresAt: number | null
+  control?: WatchLinkControlRecord
   secret: string
   sealed: boolean
 }
@@ -95,10 +127,14 @@ export const MAX_FILE_BYTES = 1024 * 1024
 /** Entries past this are dropped on read. */
 export const MAX_ENTRIES = 200
 const SECRET_BYTES = 32
+const CONTROL_SALT_BYTES = 16
+const CONTROL_HASH_BYTES = 32
 const noop = (): void => {}
 
 const str = (v: unknown, max: number): v is string => typeof v === 'string' && v.length <= max
 const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+/** An expiry that has not passed at `t`: never one of an Unlimited link (`null`). */
+const live = (expiresAt: number | null, t: number): boolean => expiresAt === null || expiresAt > t
 const codeOf = (e: unknown): string =>
   typeof e === 'object' && e && 'code' in e ? String((e as { code: unknown }).code) : ''
 
@@ -109,6 +145,25 @@ function decodeSecret(text: string): Uint8Array | null {
   if (bytes.length !== SECRET_BYTES) return null
   if (bytes.toString('base64') !== text) return null
   return new Uint8Array(bytes)
+}
+
+/** Canonical base64 of exactly `bytes` bytes (the same rule as `decodeSecret`). */
+function isB64Of(v: unknown, bytes: number): v is string {
+  if (typeof v !== 'string' || v.length > 64) return false
+  const b = Buffer.from(v, 'base64')
+  return b.length === bytes && b.toString('base64') === v
+}
+
+/** A Control link's `control`, rebuilt from its five fields (nothing else is carried), or null. An
+ *  absent `wrong` is 0 (a file written before the count was persisted); a present one must be an
+ *  integer 0..CONTROL_WRONG_MAX. */
+function readControl(v: unknown): WatchLinkControlRecord | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null
+  const { enabled, salt, hash, locked, wrong = 0 } = v as Record<string, unknown>
+  if (typeof enabled !== 'boolean' || typeof locked !== 'boolean') return null
+  if (!isB64Of(salt, CONTROL_SALT_BYTES) || !isB64Of(hash, CONTROL_HASH_BYTES)) return null
+  if (!Number.isInteger(wrong) || (wrong as number) < 0 || (wrong as number) > CONTROL_WRONG_MAX) return null
+  return { enabled, salt, hash, locked, wrong: wrong as number }
 }
 
 export class WatchLinkStore {
@@ -144,7 +199,7 @@ export class WatchLinkStore {
    *  keychain could create five more and the next launch would find ten. */
   opaqueCount(): number {
     const t = (this.o.now ?? Date.now)()
-    return this.opaque.filter((e) => e.expiresAt > t).length
+    return this.opaque.filter((e) => live(e.expiresAt, t)).length
   }
 
   load(): Promise<WatchLinkRecord[]> {
@@ -193,20 +248,29 @@ export class WatchLinkStore {
       if (!e || !str(e.linkId, 22) || !LINK_ID_RE.test(e.linkId)) continue
       // `isSafeNodeId` does not check the type: `12` and `["n1"]` pass its regex by coercion.
       if (typeof e.nodeId !== 'string' || !isSafeNodeId(e.nodeId)) continue
-      if (e.role !== 'viewer' && e.role !== 'commenter') continue
-      if (!str(e.label, 40) || !str(e.title, 80) || !num(e.createdAt) || !num(e.expiresAt) || typeof e.secret !== 'string') continue
+      if (e.role !== 'viewer' && e.role !== 'commenter' && e.role !== 'controller') continue
+      // `control` exactly when the role is 'controller', and then well-formed.
+      let control: WatchLinkControlRecord | null = null
+      if (e.role === 'controller') {
+        control = readControl(e.control)
+        if (!control) continue
+      } else if (e.control !== undefined) continue
+      if (!str(e.label, 40) || !str(e.title, 80) || !num(e.createdAt) || typeof e.secret !== 'string') continue
+      if (e.expiresAt !== null && !num(e.expiresAt)) continue
+      const expiresAt: number | null = e.expiresAt
+      const extra = control ? { control } : {}
       const sealed = e.sealed === true
       const secret = this.readSecret(e.secret, sealed)
       if (secret === 'refused') {
         opaque.push({
           linkId: e.linkId, nodeId: e.nodeId, role: e.role, label: e.label, title: e.title,
-          createdAt: e.createdAt, expiresAt: e.expiresAt, secret: e.secret, sealed: true
+          createdAt: e.createdAt, expiresAt, ...extra, secret: e.secret, sealed: true
         })
         continue
       }
       if (!secret) continue
       if (sealed) sealedForms.set(e.linkId, { digest: digestOf(secret), sealed: e.secret })
-      out.push({ linkId: e.linkId, nodeId: e.nodeId, role: e.role, label: e.label, title: e.title, createdAt: e.createdAt, expiresAt: e.expiresAt, secret })
+      out.push({ linkId: e.linkId, nodeId: e.nodeId, role: e.role, label: e.label, title: e.title, createdAt: e.createdAt, expiresAt, secret, ...extra })
     }
     this.opaque = opaque
     this.sealedForms = sealedForms
@@ -244,16 +308,22 @@ export class WatchLinkStore {
     return this.o.seal ? null : decodeSecret(stored)
   }
 
-  /** The opaque entries this write carries: none past its own expiry (dropped for good), none a live
-   *  record replaces. */
-  private carriedOpaque(live: readonly FileEntry[]): FileEntry[] {
+  /** The opaque entries this write carries: none past its own expiry (dropped for good; an Unlimited
+   *  one has none), none a live record replaces. */
+  private carriedOpaque(written: readonly FileEntry[]): FileEntry[] {
     const t = (this.o.now ?? Date.now)()
-    this.opaque = this.opaque.filter((e) => e.expiresAt > t)
-    const ids = new Set(live.map((e) => e.linkId))
+    this.opaque = this.opaque.filter((e) => live(e.expiresAt, t))
+    const ids = new Set(written.map((e) => e.linkId))
     return this.opaque.filter((e) => !ids.has(e.linkId))
   }
 
   async save(records: readonly WatchLinkRecord[]): Promise<SaveOutcome> {
+    // `control` IFF the role is 'controller', and then well-formed — at WRITE time as on load: a record
+    // the next load would drop is never written. The whole save fails and the file stays as it was:
+    // such a record is a bug, and a link the next run silently loses is the worst way to find it.
+    for (const r of records) {
+      if (r.role === 'controller' ? !readControl(r.control) : r.control !== undefined) return 'failed'
+    }
     const links: FileEntry[] = []
     let outcome: SaveOutcome = 'saved'
     // Only the records in THIS list keep a cached sealed form: a stopped link's goes with it.
@@ -281,9 +351,13 @@ export class WatchLinkStore {
           }
           sealedNext.set(r.linkId, { digest, sealed: secret })
         }
+        // Only the five control fields are written (as `readControl` read them above): nothing else that
+        // rides on the object reaches disk.
+        const c = r.control ? readControl(r.control) : null
+        const control = c ? { control: c } : {}
         links.push({
           linkId: r.linkId, nodeId: r.nodeId, role: r.role, label: r.label, title: r.title,
-          createdAt: r.createdAt, expiresAt: r.expiresAt, secret, sealed: !!this.o.seal
+          createdAt: r.createdAt, expiresAt: r.expiresAt, ...control, secret, sealed: !!this.o.seal
         })
       }
     } catch {

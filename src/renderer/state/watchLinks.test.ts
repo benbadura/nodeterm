@@ -13,6 +13,7 @@ const link = (id: string, nodeId: string, over: Partial<WatchLinkView> = {}): Wa
   url: 'u',
   status: 'live',
   viewers: [],
+  control: null,
   ...over
 })
 const msg = (id: string, from: 'viewer' | 'sharer' = 'viewer', at = 0): WatchChatMessage => ({
@@ -39,13 +40,13 @@ describe('watchLinks store', () => {
     s.setLinks([link('a', 'n1'), link('c', 'n2')])
     const before = useWatchLinks.getState()
     // A fresh deserialized list (new objects, same content) except n2's link gained a viewer.
-    s.setLinks([link('a', 'n1'), link('c', 'n2', { viewers: [{ viewerId: 'v', name: null, joinedAt: 1, waiting: false }] })])
+    s.setLinks([link('a', 'n1'), link('c', 'n2', { viewers: [{ viewerId: 'v', name: null, joinedAt: 1, waiting: false, controlling: false, typing: false }] })])
     const after = useWatchLinks.getState()
     expect(after.byNode.n1).toBe(before.byNode.n1)
     expect(after.byNode.n1[0]).toBe(before.byNode.n1[0])
     expect(after.byNode.n2).not.toBe(before.byNode.n2)
     // A push identical in content changes nothing at all.
-    s.setLinks([link('a', 'n1'), link('c', 'n2', { viewers: [{ viewerId: 'v', name: null, joinedAt: 1, waiting: false }] })])
+    s.setLinks([link('a', 'n1'), link('c', 'n2', { viewers: [{ viewerId: 'v', name: null, joinedAt: 1, waiting: false, controlling: false, typing: false }] })])
     expect(useWatchLinks.getState()).toBe(after)
   })
 
@@ -53,7 +54,7 @@ describe('watchLinks store', () => {
     // A fixture with every field of the type, iterated by key: a field added to WatchLinkView (and
     // to this fixture, which the type forces) is covered without editing the comparison.
     const base: WatchLinkView = link('a', 'n1', {
-      viewers: [{ viewerId: 'v', name: 'Eve', joinedAt: 5, waiting: false }]
+      viewers: [{ viewerId: 'v', name: 'Eve', joinedAt: 5, waiting: false, controlling: false, typing: false }]
     })
     const bump = (v: unknown): unknown =>
       typeof v === 'number'
@@ -64,7 +65,9 @@ describe('watchLinks store', () => {
             ? !v
             : Array.isArray(v)
               ? []
-              : v
+              : v === null
+                ? { changed: true }
+                : v
     for (const key of Object.keys(base) as (keyof WatchLinkView)[]) {
       useWatchLinks.setState({ links: [], byNode: {}, chats: {}, unread: {}, hydrated: false })
       useWatchLinks.getState().setLinks([base])
@@ -269,5 +272,29 @@ describe('startWatchLinkSync', () => {
     await Promise.resolve()
     expect(useWatchLinks.getState().links).toHaveLength(0)
     stop2()
+  })
+})
+
+describe('watchLinks store — Control links', () => {
+  it('counts a Control link\'s viewer messages exactly like a Commenter link\'s', () => {
+    const s = useWatchLinks.getState()
+    s.setLinks([link('c', 'n1', { role: 'controller', control: { enabled: true, locked: false } })])
+    s.addChat('c', msg('1'))
+    s.addChat('c', msg('2', 'sharer'))
+    s.addChat('c', msg('3'))
+    expect(useWatchLinks.getState().unread.c).toBe(2)
+    const sig = liveChipSig(useWatchLinks.getState(), 'n1')
+    expect(sig.endsWith('\u00012')).toBe(true)
+    useWatchLinks.getState().markRead('c')
+    expect(useWatchLinks.getState().unread.c).toBe(0)
+  })
+
+  it('the chip signature follows who is typing', () => {
+    const s = useWatchLinks.getState()
+    const v = { viewerId: 'v', name: 'Mert', joinedAt: 0, waiting: false, controlling: true, typing: false }
+    s.setLinks([link('c', 'n1', { role: 'controller', control: { enabled: true, locked: false }, viewers: [v] })])
+    const idle = liveChipSig(useWatchLinks.getState(), 'n1')
+    s.setLinks([link('c', 'n1', { role: 'controller', control: { enabled: true, locked: false }, viewers: [{ ...v, typing: true }] })])
+    expect(liveChipSig(useWatchLinks.getState(), 'n1')).not.toBe(idle)
   })
 })

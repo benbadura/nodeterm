@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   VISIBLE_CAPTURE_FORMAT,
-  exactPaneTarget,
+  capturePaneTarget,
   localCaptureVisibleArgs,
   parseVisibleCapture,
   unavailableCapture,
@@ -30,11 +30,11 @@ describe('visibleCaptureRoute', () => {
   })
 })
 
-describe('exactPaneTarget', () => {
+describe('capturePaneTarget', () => {
   it('is the exact-session, active-pane spelling measured on tmux 3.4', () => {
     // `=name` alone is "can't find pane" for capture-pane (and silently EMPTY for display-message);
     // a bare `name` prefix-matches another node's session. Only `=name:` is exact AND resolves.
-    expect(exactPaneTarget('nt-abc')).toBe('=nt-abc:')
+    expect(capturePaneTarget('nt-abc')).toBe('=nt-abc:')
   })
 })
 

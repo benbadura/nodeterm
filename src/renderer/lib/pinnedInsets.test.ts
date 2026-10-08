@@ -33,6 +33,11 @@ describe('insetsForPanels', () => {
     })
   })
 
+  it('two right-hugging pinned drawers side by side (Explorer, Live chat docked to its left) inset up to the far one', () => {
+    // Explorer: 320px at right gap 22 → x 858–1178; Live chat beside it, 8px further left → 530–850.
+    expect(insetsForPanels(WRAP, [rect(858, 1178), rect(530, 850)])).toEqual({ left: 0, right: 670 })
+  })
+
   it('keeps the widest panel per edge rather than summing them', () => {
     expect(insetsForPanels(WRAP, [rect(14, 314), rect(14, 474)])).toEqual({ left: 474, right: 0 })
   })

@@ -13,6 +13,7 @@ import {
   FLAG_CURSOR,
   FLAG_ITALIC,
   FLAG_SELECTED,
+  FLAG_STRIKETHROUGH,
   FLAG_UNDERLINE,
   FLAG_WIDE,
   packColor,
@@ -31,6 +32,7 @@ export interface CellView {
   isBold(): number
   isItalic(): number
   isUnderline(): number
+  isStrikethrough(): number
   isInverse(): number
   isDim(): number
   isFgDefault(): boolean
@@ -150,10 +152,10 @@ function isRenderableCode(code: number): boolean {
  * Is this a BLANK the atlas can still be asked to paint — i.e. a space, or the 0 an empty cell
  * reports?
  *
- * Only reached for an UNDERLINED cell (see the request site). A blank normally short-circuits to
- * the blank slot, and must keep doing so: it is the most common cell on the canvas, and a slot per
- * space-with-these-colours would burn the page for pixels that are pure background. An underline is
- * the one thing that makes a blank cell carry ink.
+ * Only reached for an UNDERLINED or STRUCK cell (see the request site). A blank normally
+ * short-circuits to the blank slot, and must keep doing so: it is the most common cell on the
+ * canvas, and a slot per space-with-these-colours would burn the page for pixels that are pure
+ * background. A line decoration is the one thing that makes a blank cell carry ink.
  */
 function drawableBlank(code: number): boolean {
   return code === 0x20 || code === 0
@@ -333,6 +335,7 @@ export function packViewportRow(
   let carryCode = 0
   let carryBold = false
   let carryItalic = false
+  let carryStrikethrough = false
   /** Was the wide lead we are carrying from the one the BLOCK cursor covers? Separate from the
    *  colour carry because the colours are captured PRE-override and the cursor is applied post — the
    *  follower has to re-apply it, not inherit an already-overridden pair. */
@@ -392,6 +395,9 @@ export function packViewportRow(
           code = carryCode
           bold = carryBold
           italic = carryItalic
+          // Unlike underline (still Phase 2), a strikethrough IS carried: a struck double-width
+          // character with only its left half crossed out reads as two different characters.
+          if (carryStrikethrough) flags |= FLAG_STRIKETHROUGH
           part = 'wide-right'
         }
         carryPending = false
@@ -405,6 +411,7 @@ export function packViewportRow(
         if (bold) flags |= FLAG_BOLD
         if (italic) flags |= FLAG_ITALIC
         if (cell.isUnderline() !== 0) flags |= FLAG_UNDERLINE
+        if (cell.isStrikethrough() !== 0) flags |= FLAG_STRIKETHROUGH
         if (width === 2) {
           flags |= FLAG_WIDE
           // The LEFT half of a two-cell character, which is a different request from 'whole' even
@@ -422,6 +429,7 @@ export function packViewportRow(
           carryCode = code
           carryBold = bold
           carryItalic = italic
+          carryStrikethrough = (flags & FLAG_STRIKETHROUGH) !== 0
         } else {
           carryPending = false
           carryCursor = false
@@ -463,9 +471,12 @@ export function packViewportRow(
     // word gap. `isRenderableCode` still guards the CRASH cases — a lone surrogate or a control
     // code is refused whatever its underline says — so this only widens it to the blanks the atlas
     // knows how to answer.
+    //
+    // A strikethrough follows the same rule for the same reason: a struck run crosses its spaces.
     const underlined = (flags & FLAG_UNDERLINE) !== 0
-    const wantsSlot = isRenderableCode(code) || (underlined && drawableBlank(code))
-    const glyph = wantsSlot ? atlas.glyphFor(code, bold, italic, fg, bg, part, underlined) : 0
+    const struck = (flags & FLAG_STRIKETHROUGH) !== 0
+    const wantsSlot = isRenderableCode(code) || ((underlined || struck) && drawableBlank(code))
+    const glyph = wantsSlot ? atlas.glyphFor(code, bold, italic, fg, bg, part, underlined, struck) : 0
     // A cell that HOLDS something and still draws nothing is the defect under investigation. A
     // space is excluded because that is the correct answer for it, not a loss.
     if (blankProbe && glyph === 0 && probeChars !== '' && probeChars !== ' ') {

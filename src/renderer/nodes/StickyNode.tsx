@@ -3,7 +3,7 @@ import { Tooltip } from '../components/Tooltip'
 import { IconChevronDown, IconChevronRight, IconClose } from '../components/icons'
 import { Handle, NodeResizer, Position, useReactFlow, type NodeProps } from '@xyflow/react'
 import { NODE_MIN_SIZES } from '../lib/nodeSizing'
-import { COLLAPSED_HEIGHT, type CanvasNode } from '../state/workspace'
+import { toggleCollapsed, type CanvasNode } from '../state/workspace'
 import { NodeColorSwatches } from '../components/NodeColorSwatches'
 import { ColumnPill } from '../components/kanban/ColumnPill'
 import { NoteMarkdown } from '../components/NoteMarkdown'
@@ -47,22 +47,7 @@ export function StickyNode({ id, data, selected }: NodeProps<CanvasNode>) {
     return () => clearInterval(t)
   }, [stampAt])
 
-  const toggleCollapse = () =>
-    setNodes((ns) =>
-      ns.map((n) => {
-        if (n.id !== id) return n
-        const next = !n.data.collapsed
-        const expandedHeight =
-          (n.data.expandedHeight as number) ?? n.measured?.height ?? (n.height as number) ?? 200
-        const height = next ? COLLAPSED_HEIGHT : expandedHeight
-        return {
-          ...n,
-          height,
-          style: { ...n.style, height },
-          data: { ...n.data, collapsed: next, expandedHeight }
-        }
-      })
-    )
+  const toggleCollapse = () => setNodes((ns) => toggleCollapsed(ns as CanvasNode[], [id]))
 
   return (
     <>

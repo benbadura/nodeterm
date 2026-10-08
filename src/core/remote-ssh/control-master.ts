@@ -18,9 +18,10 @@ import {
   type PasteDelivery
 } from '../tmux-naming'
 import { sanitizePasteText } from '../paste-injection'
+import { typedInputScript } from '../typed-input'
 import { canControlCanvas } from '../../shared/agents/config'
 import { COMBINED_PANE_MARKER, PANE_OWNER_FMT, PS_FOREGROUND_FLAGS } from '../agents/pane-owner'
-import { VISIBLE_CAPTURE_FORMAT, exactPaneTarget } from '../watch-link/capture-route'
+import { VISIBLE_CAPTURE_FORMAT, capturePaneTarget } from '../watch-link/capture-route'
 import { WATCHER_CLIENT_FLAGS, WINDOW_SIZE_FORMAT } from '../watch-link/watcher-client'
 // Dependency-free (no node-pty): safe to import from these pure builders.
 
@@ -33,8 +34,10 @@ export const RMT_TMUX_SOCKET = 'nodeterm-rmt'
  * `command not found` on any host whose ssh exec-channel PATH misses the install dir — most
  * visibly macOS with Homebrew's tmux in `/opt/homebrew/bin`. The prologue is one assignment, so
  * the command's own exit code (what `probeSaysAbsent` and every caller reads) is unchanged.
+ * Exported for the live link's pane-input builders (`watch-link/pane-input.ts`), which build their
+ * remote commands beside their local twins rather than here.
  */
-function tmuxCmd(body: string): string {
+export function tmuxCmd(body: string): string {
   return `${remoteTmuxPathPrologue()}${body}`
 }
 
@@ -359,6 +362,24 @@ export function remoteTmuxPasteArgs(
  */
 
 /**
+ * The TYPED delivery on the REMOTE server (see core/typed-input.ts): the same fixed script, run
+ * under `sh -c` so it does not depend on the user's login shell, with the text on stdin — never on
+ * the remote command line, where it would sit in the host's process list.
+ */
+export function remoteTypedArgs(
+  conn: SshConnection,
+  controlPath: string,
+  sessionId: string,
+  buffer: string
+): string[] {
+  return childArgs(
+    conn,
+    controlPath,
+    tmuxCmd(`sh -c ${posixQuote(typedInputScript('tmux', RMT_TMUX_SOCKET, sessionId, buffer))}`)
+  )
+}
+
+/**
  * A bare Enter into the remote pane — the remote half of `sendText`'s empty-payload case.
  *
  * It is not a special case invented here: `sendText('', { enter: true })` means "submit whatever
@@ -529,7 +550,7 @@ export function remoteCapturePaneArgs(conn: SshConnection, controlPath: string, 
  * `=name:` target and the `#{…}` format. Proven under a real /bin/sh in capture-visible.realsh.test.ts.
  */
 export function remoteCaptureVisibleArgs(conn: SshConnection, controlPath: string, sessionId: string): string[] {
-  const target = posixQuote(exactPaneTarget(sessionId))
+  const target = posixQuote(capturePaneTarget(sessionId))
   return childArgs(
     conn,
     controlPath,
@@ -558,7 +579,7 @@ export function remoteTmuxWatcherArgs(conn: SshConnection, controlPath: string, 
       controlPath,
       tmuxCmd(
         `tmux -L ${RMT_TMUX_SOCKET} attach-session -E -f ${posixQuote(WATCHER_CLIENT_FLAGS)} ` +
-          `-t ${posixQuote(exactPaneTarget(sessionId))}`
+          `-t ${posixQuote(capturePaneTarget(sessionId))}`
       )
     )
   ]
@@ -570,7 +591,7 @@ export function remoteWindowSizeArgs(conn: SshConnection, controlPath: string, s
     conn,
     controlPath,
     tmuxCmd(
-      `tmux -L ${RMT_TMUX_SOCKET} display-message -p -t ${posixQuote(exactPaneTarget(sessionId))} ` +
+      `tmux -L ${RMT_TMUX_SOCKET} display-message -p -t ${posixQuote(capturePaneTarget(sessionId))} ` +
         posixQuote(WINDOW_SIZE_FORMAT)
     )
   )

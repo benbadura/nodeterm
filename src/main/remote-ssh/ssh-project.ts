@@ -58,7 +58,7 @@ import { SshChildGate } from '../../core/remote-ssh/ssh-child-gate'
 import { claudeVersionProbeCommand, parseClaudeVersionProbe } from '../../core/remote-ssh/claude-version-probe'
 import { codexNoDaemonProbeCommand, parseCodexNoDaemonProbe } from '../../core/remote-ssh/codex-no-daemon-probe'
 import { codexProbeHostKey } from '../../shared/agents/codex-daemon'
-import { RemoteHooks } from './remote-hooks'
+import { NO_REMOTE_INTEGRATION, RemoteHooks, type RemoteIntegrationPlan } from './remote-hooks'
 import type { AgentToolsTrigger } from './agent-tools-freshness'
 import {
   recordTunnelRepair,
@@ -198,6 +198,13 @@ interface Runners {
    *  removed mid-run is picked up. Absent ⇒ no account dirs are checked (their skills are then
    *  only ever written when the account is added). */
   claudeAccountIdsForHost?: (hostKey: string) => string[]
+  /** What nodeterm may install on / must remove from one SSH host (`sshHostKey`), from the
+   *  agent-integration consent (issue #744, `remoteIntegrationPlan`). Absent ⇒ NOTHING is
+   *  installed and nothing removed on any host — the fail-closed direction. */
+  integrationsForHost?: (hostKey: string) => RemoteIntegrationPlan
+  /** Receipts for the skill files nodeterm wrote on hosts, so a decline can tell its own bytes
+   *  from a user's edit. Absent ⇒ only this build's exact bytes count as ours. */
+  integrationReceipts?: { get(key: string): string | undefined; set(key: string, v: string | null): void }
 }
 
 /** Backoff after a FAILED remote claude probe (no markers = claude not found on that attempt).
@@ -386,6 +393,10 @@ interface Conn {
   controlPath: string
   master: ReturnType<Runners['spawnMaster']>
   hookEndpointPath?: string
+  /** The connect's setup chain has finished on this master (the moment `connected` is emitted):
+   *  the facts below are as final as they will get. A spawn that CREATES a session before this
+   *  would create it without the hook/account env and tmux.conf, for life. */
+  setupDone?: boolean
   /** The remote path of nodeterm's tmux.conf (`<remoteHome>/.nodeterm/tmux.conf`), written +
    * source-filed at connect. Threaded to `remoteTmuxCommand`'s `-f` so cold-start remote sessions
    * get mouse/clipboard/scrollback. Undefined if the write/source failed (fail-open). */
@@ -464,7 +475,11 @@ export class SshProjectManager {
   >()
   private watchdog?: ReturnType<typeof setInterval>
   constructor(private r: Runners) {
-    this.remoteHooks = new RemoteHooks({ run: r.run })
+    this.remoteHooks = new RemoteHooks(
+      { run: r.run },
+      (conn) => r.integrationsForHost?.(sshHostKey(conn)) ?? NO_REMOTE_INTEGRATION,
+      r.integrationReceipts
+    )
   }
 
   /**
@@ -602,6 +617,47 @@ export class SshProjectManager {
       // a settings read that throws costs the account dirs this check, nothing else
     }
     void this.remoteHooks.refreshAgentTools(conn, controlPath, remoteHome, accounts, trigger).catch(() => {})
+  }
+
+  private applyIntegrationRemovals(conn: SshConnection, controlPath: string, remoteHome: string): void {
+    const plan = this.remoteHooks.planFor(conn)
+    // An unanswered host is left exactly as it is: no clean-up, no account lookup, no ssh.
+    if (!plan.decided) return
+    let accounts: string[] = []
+    try {
+      if (plan.remove.has('claude')) accounts = this.r.claudeAccountIdsForHost?.(sshHostKey(conn)) ?? []
+    } catch {
+      /* the account dirs are skipped this time */
+    }
+    void this.remoteHooks
+      .applyIntegrationRemovals(conn, controlPath, remoteHome, accounts, this.r.integrationReceipts)
+      .catch(() => {})
+  }
+
+  /** Last consent signature applied per connected project (issue #744). */
+  private integrationSigs = new Map<string, string>()
+
+  /**
+   * The user changed an agent-integration choice. For every connected project whose host's plan
+   * moved: remove what is no longer consented, and install what newly is (hooks need the verified
+   * tunnel's endpoint, so they wait for `hookEndpointPath`). Never throws, never awaited.
+   */
+  onIntegrationConsentChanged(): void {
+    for (const [projectId, c] of this.conns) {
+      if (!c.remoteHome) continue
+      const plan = this.remoteHooks.planFor(c.conn)
+      const sig = `${plan.decided}|${[...plan.install].sort().join(',')}|${[...plan.remove].sort().join(',')}`
+      if (this.integrationSigs.get(projectId) === sig) continue
+      this.integrationSigs.set(projectId, sig)
+      this.applyIntegrationRemovals(c.conn, c.controlPath, c.remoteHome)
+      if (plan.install.size && c.hookEndpointPath) {
+        const { conn, controlPath, remoteHome } = c
+        void this.remoteHooks
+          .installAgentHooks(conn, controlPath, remoteHome)
+          .then(() => this.refreshAgentTools(conn, controlPath, remoteHome, 'repair'))
+          .catch(() => {})
+      }
+    }
   }
 
   startWatchdog(intervalMs = MASTER_WATCHDOG_MS): void {
@@ -1041,6 +1097,11 @@ export class SshProjectManager {
           // Same not-awaited best-effort terms as the two installs.
           void this.materialiseNodeTokens(projectId, conn, controlPath, remoteHome)
         }
+        // Agent-integration consent (issue #744), REMOVAL side: a host the user declined (or agents
+        // they declined) loses what we wrote there, and the legacy instruction blocks older builds
+        // merged are stripped. Independent of the tunnel; not awaited (best-effort, never delays
+        // the connect). The INSTALL side rides setup() and the agent-tools check above.
+        if (remoteHome) this.applyIntegrationRemovals(conn, controlPath, remoteHome)
         // Managed-Codex runtime: upload the relay bundle + launcher and probe node/codex/curl.
         // Deliberately gated on `remoteHome` ALONE, not on `hookEndpointPath` — account isolation +
         // a shared app-server need only the launcher/relay, never the canvas hooks, and the reverse
@@ -1069,6 +1130,7 @@ export class SshProjectManager {
           entry.codexRelayScriptPath = codexRuntime?.relay
           entry.codexRelayRuntimePath = codexRuntime?.runtime
           entry.codexCliPath = codexRuntime?.codex
+          entry.setupDone = true
           this.emitStatus({ projectId, status: 'connected' })
           if (hookEndpointPath) this.hookTunnelHealth(projectId, true)
           // The tunnel is live again on a master we just established (the reuse branch returned long
@@ -1560,6 +1622,34 @@ export class SshProjectManager {
   ): { conn: SshConnection; controlPath: string; remoteCwd?: string } | undefined {
     const c = this.conns.get(projectId)
     return c ? { conn: c.conn, controlPath: c.controlPath, remoteCwd: c.remoteCwd } : undefined
+  }
+
+  /**
+   * Everything a remote SPAWN needs from this connection, for spawns the renderer did not build —
+   * today the relay host's `pty.attach` (core `prepareRelayAttach`). The same facts the renderer
+   * reads off the `connected` event (`resolveSshRemote`), read here from the entry itself.
+   * `undefined` = no master for this scope.
+   */
+  spawnRefFor(scopeId: string):
+    | {
+        conn: SshConnection
+        controlPath: string
+        hookEndpointPath?: string
+        tmuxConfPath?: string
+        remoteHome?: string
+        setupDone: boolean
+      }
+    | undefined {
+    const c = this.conns.get(scopeId)
+    if (!c) return undefined
+    return {
+      conn: c.conn,
+      controlPath: c.controlPath,
+      hookEndpointPath: c.hookEndpointPath,
+      tmuxConfPath: c.tmuxConfPath,
+      remoteHome: c.remoteHome,
+      setupDone: c.setupDone === true
+    }
   }
 
   /** Does this project already have a master, or an attempt in flight? The pre-warm's gate — it
@@ -2789,7 +2879,9 @@ export function initSshProject(
   leadPaneWidth?: () => number,
   /** The managed Claude accounts pinned to a host (see Runners.claudeAccountIdsForHost). Injected
    *  for the same reason: the settings store lives in main/index.ts. */
-  claudeAccountIdsForHost?: (hostKey: string) => string[]
+  claudeAccountIdsForHost?: (hostKey: string) => string[],
+  /** Agent-integration consent per host (see Runners.integrationsForHost / integrationReceipts). */
+  integrations?: Pick<Runners, 'integrationsForHost' | 'integrationReceipts'>
 ): SshProjectManager {
   const ssh = sshBin()
   const scp = scpBin()
@@ -2944,6 +3036,7 @@ export function initSshProject(
     codexRelaySource,
     leadPaneWidth,
     claudeAccountIdsForHost,
+    ...integrations,
     // Per-node identity for REMOTE nodes. Both come from the same module the local materialiser
     // uses, so one canvas cannot be judged by two different rules depending on where it runs.
     nodeIdsForProject: (projectId) => nodeIdsForCanvas(projectId),

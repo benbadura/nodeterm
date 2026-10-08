@@ -54,9 +54,10 @@ const link = (over: Partial<WatchLinkView> = {}): WatchLinkView => ({
   url: 'https://nodeterm.dev/s/L1#1.SECRET',
   status: 'live',
   viewers: [
-    { viewerId: 'a', name: null, joinedAt: 0, waiting: false },
-    { viewerId: 'b', name: null, joinedAt: 0, waiting: false }
+    { viewerId: 'a', name: null, joinedAt: 0, waiting: false, controlling: false, typing: false },
+    { viewerId: 'b', name: null, joinedAt: 0, waiting: false, controlling: false, typing: false }
   ],
+  control: null,
   ...over
 })
 
@@ -142,16 +143,25 @@ describe('LiveLinksSection', () => {
     expect(rows).toHaveLength(4)
     expect(rows[0].textContent).toContain('build')
     expect(rows[0].textContent).toContain('Alpha')
-    expect(rows[0].textContent).toContain('Can watch and chat')
+    // The role by its name (ruling 4), as the create dialog and the popover name it.
+    expect(rows[0].textContent).toContain('Commenter · 2 watching')
+    expect(rows[0].textContent).not.toContain('Can watch')
     expect(rows[0].textContent).toContain('2 watching')
     expect(rows[0].textContent).toContain('ends in 42 min')
     expect(rows[1].textContent).toContain('Parked (closed)')
-    expect(rows[1].textContent).toContain('Can watch')
+    expect(rows[1].textContent).toContain('Viewer · 0 watching')
     expect(rows[2].textContent).toContain('not in an open project')
     // A relay tab's project with the same node id is another machine's: never named for our link.
     expect(rows[3].textContent).toContain('not in an open project')
     expect(host.textContent).not.toContain('nodeterm.dev/s/')
     expect(host.innerHTML).not.toContain('SECRET')
+  })
+
+  it('a Control link reads "Control", and an Unlimited one has no end time', () => {
+    render()
+    setLinks([link({ role: 'controller', control: { enabled: true, locked: false }, expiresAt: null, viewers: [] })])
+    const row = host.querySelector<HTMLElement>('.live-settings__row')!
+    expect(row.textContent).toContain('Control · 0 watching · No end time')
   })
 
   // D2/M2: closing a relay tab unbinds its session, so its source reads LOCAL — but it is still the

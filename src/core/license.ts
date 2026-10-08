@@ -115,7 +115,7 @@ function seatsFrom(p: Payload | null): number {
  * different facts, and rendering the first as the second is the bug this whole route exists for. */
 const EMPTY_DETAIL: LicenseDetail = { key: null, used: 0, seats: 0, source: null, error: null }
 
-const LICENSE_SOURCES: readonly string[] = ['keygen', 'apple', 'free']
+const LICENSE_SOURCES: readonly string[] = ['keygen', 'apple', 'google', 'free']
 
 /** The source decides whether the UI offers "release other devices" at all, so an unrecognized
  * word degrades to "none stated" (action hidden) rather than reaching the renderer as data. */

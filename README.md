@@ -200,14 +200,12 @@ detects your platform. Everything is also listed at
 - **macOS** — `.dmg` for Apple Silicon and Intel, or **Homebrew**:
 
   ```bash
-  brew tap nodeterm/tap
-  brew trust nodeterm/tap        # Homebrew ≥6 refuses to load an untrusted tap
   brew install --cask nodeterm
   ```
 
-  Both first lines are required. On its own, `brew install --cask nodeterm` only searches
-  `homebrew/cask` and reports the cask as not found; without the trust grant, Homebrew ≥6
-  fails rather than prompting. The cask tracks upstream releases.
+  The cask is in the official `homebrew/cask`, so no tap is needed. If you installed from the
+  old `nodeterm/tap`, you can drop it with `brew untap nodeterm/tap`: the short name
+  `nodeterm` already resolves to the official cask.
 - **Linux (x64)** — **AppImage**, a `.deb` for Debian/Ubuntu
   (`sudo apt install ./node-terminal_*.deb`), or an `.rpm` for Fedora/RHEL
   (`sudo dnf install ./node-terminal-*.rpm`). The AppImage needs FUSE 2,

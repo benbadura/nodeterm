@@ -12,7 +12,7 @@
 // both describe the same instant: a cursor read in a second round trip could describe a screen that has
 // since scrolled.
 //
-// The target is EXACT (`exactPaneTarget`). Node ids end in a counter, so `nt-x-1` is a prefix of
+// The target is EXACT (`capturePaneTarget`). Node ids end in a counter, so `nt-x-1` is a prefix of
 // `nt-x-12`, and tmux resolves a bare target by fnmatch then PREFIX on a miss: a bare target would
 // capture ANOTHER node's screen and send it to this link's viewers. Measured on tmux 3.4, with only
 // `nt-x-12` alive:
@@ -72,8 +72,11 @@ export function visibleCaptureRoute(
 export const VISIBLE_CAPTURE_FORMAT = '#{cursor_x} #{cursor_y}'
 
 /** "Exactly this session, its active pane" — the only spelling that is exact AND resolves for a
- *  target-pane command (see the measurement at the top of this file). */
-export function exactPaneTarget(sessionName: string): string {
+ *  target-pane command (see the measurement at the top of this file). It does NOT validate the name:
+ *  every caller passes the result as one argv element or `posixQuote`s it. A target spliced UNQUOTED
+ *  into tmux command text must use pane-input.ts's `exactPaneTarget`, which refuses a name this app
+ *  did not generate (named differently so an auto-import cannot pick the wrong one). */
+export function capturePaneTarget(sessionName: string): string {
   return `=${sessionName}:`
 }
 
@@ -83,7 +86,7 @@ export function exactPaneTarget(sessionName: string): string {
  * No `-S`: capture-pane without it starts at the first VISIBLE row.
  */
 export function localCaptureVisibleArgs(socket: string, sessionName: string): string[] {
-  const target = exactPaneTarget(sessionName)
+  const target = capturePaneTarget(sessionName)
   return [
     '-L',
     socket,

@@ -780,6 +780,49 @@ Lifecycle, by intent:
   The refusal is **only** in `spawnNew` — a co-attach JOIN to a live session for that node id is
   still correct. An offline node reports itself to `SshReconnector`, so the canvas heals itself;
   `retryNow` (banner Reconnect / node Reconnect) skips the backoff and clears the refuse window.
+  **The phone's relay `pty.attach` is the other way in, and it is closed the same way**
+  (`PtyManager.prepareRelayAttach`, pure routing in `core/relay-attach-plan.ts`). It used to call
+  `attachDetached(nodeId)` → `tmux new-session -A` on the LOCAL socket for whatever id the phone
+  named, with no `sshRemote` and no `requireRemote` — so an SSH project's node opened on the phone
+  before the desktop mounted it became a local shell in this machine's `$HOME` (no context meter, ⌘M
+  fell back to Markdown, work ran on the wrong machine), and the desktop's later mount created a
+  SECOND `nt-<id>` on the host: one node id, two sessions, two machines. Rules a refactor must not
+  undo:
+  - **Where is decided from THIS machine's records, never the phone's words.** The desktop wires
+    `setRelayNodeResolver` (`workspaceStore.relayNodePlacements` — EVERY project holding the id, the
+    node as that project recorded it — plus `SshProjectManager.spawnRefFor` and the index's SSH
+    identity). A node is remote when it carries `sshRemoteTmux` + `ssh` (a host attachment routes
+    over its attachment scope, as `sshConnectionScope` does) or sits in an SSH project; a plain
+    `ssh` terminal (`ssh` without `sshRemoteTmux`) runs `ssh` locally, as the renderer does. The
+    phone's optional `projectId` may only CHOOSE among those placements, or REFUSE (an unknown id it
+    places in an SSH project) — it never routes a node anywhere on its own.
+  - **Remote = over the project's live master, with `requireRemote`, or refused** with a sentence
+    the phone shows (`{message, reason}`: `not-connected` / `no-ssh` / `still-connecting` /
+    `unregistered-remote`). Never a local fallback. A master whose connect setup has not finished
+    (`Conn.setupDone`, set exactly where `connected` is emitted) may only JOIN a session the host
+    positively lists — the renderer's `waitForSshRemote` rule: a session created before the setup
+    chain carries no hook/account env and no tmux.conf, for life.
+  - **The env is the desktop's, from the one builder.** The plan hands `spawnSession` the node's
+    recorded `agentId` / `agentModel` / `accountId` / `cwd` / `shell` / `ownerProjectId`, so
+    `buildPtyEnv` (agent id, canvas-control grant, permission wait), the account dir and project
+    overrides apply exactly as on a desktop create; no second env is written for the relay. The
+    shared pre-spawn refusals (`requireRemote`, the managed-Codex scope) are ONE helper,
+    `spawnRefusal`, used by `spawnNew` and the relay. Pane ownership is still NOT recorded for a
+    relay-created session (unchanged): the owner would be derived from project files, which is the
+    one source that ledger refuses to trust.
+  - **One id in a local AND an SSH project** (the same committed canvas opened in two folders) is
+    answered by whichever session exists: a live LOCAL one wins, otherwise the remote one.
+  - **Existing damage is reported, never killed.** A stray local `nt-<id>` the old path left for a
+    node that only lives remotely is never attached from the relay again (and the desktop's own
+    mounts already pass `requireRemote`), and a relay attach that finds one logs a `[relay] … left
+    untouched` warning. It is not killed automatically: it may hold work typed into it, and nothing
+    proves it idle. Do NOT point a user at the session-memory panel's × for it — a delete resolves
+    remoteness from the index (`planRemoteEnd`) and would end the REAL remote session too; the
+    manual cleanup is `tmux -L node-terminal kill-session -t =nt-<id>`.
+  - Server Edition: no phone relay host, no resolver wired — `prepareRelayAttach` there is the bare
+    local attach it always was. Tests: `relay-attach-plan.test.ts` (matrix),
+    `pty-relay-attach.test.ts` (real PtyManager, node-pty mocked), `remote-security.test.ts`
+    (host reply), `main/relay-attach-wiring.test.ts` (the desktop wire, at source level).
 - **Codex's auto-started shared daemon: every nodeterm Codex TUI runs `--no-daemon`** (2026-09-30).
   From codex-cli **0.157.0** the `daemon_auto_start` feature is `stable, true` (0.156.1:
   `experimental, false`; 0.148.0: no such feature): a plain `codex` TUI no longer runs in-process
@@ -1883,6 +1926,38 @@ session.
     one file. Guard on both dialects, construct in one.
   - **Mobile**: N/A — *nodeterm mobile* attaches to tmux sessions over the transport protocol and
     has no canvas or file-browsing concept; adding one means extending that protocol.
+- **Run node** (a `terminal` node carrying `data.runConfig`, NOT a new NodeKind;
+  `@shared/run-config`, `core/run-service.ts`, `nodes/RunBar.tsx`) — VS Code's "Run Without
+  Debugging" for any `.vscode/launch.json` configuration. The toolbar picks a folder (defaults to
+  the project's; sibling and `*.worktrees/*` folders with a launch.json or a Flutter pubspec are
+  offered), a configuration or compound (stored by NAME, re-read at every run) and, for Flutter, a
+  device. **launch.json runs nothing by itself** — each `type` belongs to an extension — so
+  `planLaunch` is the table of what each extension would run: dart (flutter run / flutter test /
+  dart run / dart test), node/pwa-node/node-terminal, python/debugpy, go, php, coreclr,
+  lldb/cppdbg, and chrome/msedge (a browser node). Everything else is REFUSED with a sentence,
+  never guessed: debugging itself, `"request": "attach"`, unknown types, PHP "listen for Xdebug",
+  and variables that need an editor or extension (`${file}`, `${input:}`, `${command:}` except the
+  Python interpreter one, `${config:}`). `preLaunchTask` (+ `dependsOn`, `${defaultBuildTask}`)
+  runs shell/process/npm/dart/flutter/typescript/cargo tasks first; a background (watch) task is
+  refused. Compounds run their first member in the node and open the rest beside it, started.
+  Rules a refactor must keep: (1) **nothing from a repo is ever typed into a shell** — the host
+  writes a POSIX launcher (`buildLauncher`, every token single-quoted, owner-only via
+  `writeFileAtomic`) and only `sh '<launcher>'` is typed; env and `envFile` values live in that
+  file, never in shell history; tested against injection and run for real under `/bin/sh`;
+  (2) the launcher records its pid and exit status, and traps INT/TERM with a HANDLER (`trap ':'`,
+  never `''`, which children would inherit as "ignore"); **Stop is SIGINT to the launcher's process
+  group** (Ctrl+C), SIGTERM if it will not go, and only the launcher + its children when it is not
+  a group leader — never a group that could hold the user's shell; (3) a pid is signalled only
+  while `ps` says it is still ours (the launcher's path, or flutter for hot reload/restart, which
+  are SIGUSR1/SIGUSR2 to `flutter run --pid-file`); (4) Flutter reload on save is a core
+  `fs.watch` of `<dir>/lib` that deliberately OUTLIVES the node's view; (5) the terminal is hidden
+  by default (`runConfig.showTerminal`, toggled by ⋯ with the extra-args field): collapse's
+  `display: none` path via `.term-node:has(.run-bar--compact)` and a node height fitted to the
+  rows; a run that ends without our Stop says where to look. No "bring simulator forward":
+  Simulator.app can only be activated as a whole (same-named simulators are told apart by id in
+  the dropdown). Add menus: **New view ▸ New run configuration**. Local projects only (disabled
+  with `RUN_SSH_HINT` in SSH projects; relay stub answers "managed on the host"); POSIX only
+  (refused on Windows). Server Edition: real. Kanban card modal: not yet. Mobile: N/A.
 - **dino** (`DinoNode.tsx`) — a small self-contained T-Rex-style runner on a canvas (no PTY);
   high score persists via `data.highScore`.
 - **trigger** (`TriggerNode.tsx`) — a canvas-owned schedule (cron / interval / once) that
@@ -2778,6 +2853,32 @@ else, and its context links must keep classifying across restarts).
   `launchCmd`/`args`/`env` in the mirror** — they carry API keys and the file lands on every SSH
   host. `binariesFor` resolves a BLANK launch command with a *builtin* `baseAgent` to the base's
   binaries (what `resolveAgentConfig` actually launches).
+- **Agent-integration consent (#744)** — `core/agent-integrations.ts` (booted by BOTH shells) is the
+  ONE writer of user-owned agent config; consent is `settings.agentIntegrations`
+  (`@shared/agent-integrations`, sanitized on every read). Per agent: **enabled** = hook + both skills
+  in the agent's own skills dir + strip older builds' AGENTS.md/GEMINI.md blocks (they were 17 KB of
+  codex's 32 KiB `project_doc_max_bytes`); **declined** = remove exactly what we wrote (hooks by exact
+  command, skills by exact-content receipt in `<userData>/integration-receipts.json` — a user-edited
+  file is KEPT and listed in Settings, bounded at 20 — legacy blocks, our hook scripts);
+  **undecided** = nothing either way. Server `installHooks: false` is a hard veto. Rules a refactor
+  must not undo:
+  - **Grandfathering is decided at boot from OUR files only** (non-empty `~/.nodeterm/agent-hooks/`
+    or the userData shims), before `settingsStore.registerIpc()` and before any install: an existing
+    install gets every agent + `hostDefault` enabled and a one-time notice; a new install gets NO
+    record and a banner (Enable all / Choose… / Not now — "Not now" declines all, so it asks once).
+  - **No caller reaches an installer by omission.** `installManagedAgentHooks(agents)` takes a
+    REQUIRED set; `RemoteHooks` takes a REQUIRED plan (`NO_REMOTE_INTEGRATION` = fail-closed);
+    account add/link asks `currentIntegrationLifecycle()` and writes nothing when none is registered.
+    `agent-integrations-wiring.test.ts` pins every call site of the global installers.
+  - **SSH consent is per HOST (`sshHostKey`, never identity file / port / args).** A host installs an
+    agent only when the host AND the agent are enabled; an unanswered host is not touched at all
+    (no clean-up, no ssh); removals run on connect and when the plan changes
+    (`SshProjectManager.onIntegrationConsentChanged`). A removal never creates a missing config
+    file (`stripRemoteSettingsFile`).
+  - **`$CLAUDE_CONFIG_DIR` decides the system Claude dir** (`claudeSystemConfigDir`), never a
+    hardcoded `~/.claude`; a decline also cleans the legacy `~/.claude` when they differ.
+  - The fullscreen-TUI write is part of the claude integration and follows its consent.
+  Measurements, the device checklist and the open product question: `docs/agent-integration-consent.md`.
 - **Hook installers** — `src/core/agents/hooks/` holds per-agent hook services + an installer
   registry `MANAGED_HOOK_INSTALLERS`. `managed-script.ts` builds the POSIX hook script that
   POSTs to the server (env-gated: a no-op in the user's normal terminals, active only in
@@ -2843,7 +2944,9 @@ else, and its context links must keep classifying across restarts).
   the validator refuses) settles at one attempt per 15 minutes instead of rewriting every agent's
   hook config every 45 s. A missing spec answers "not alive" rather than "unknown": nothing of ours
   is bound, which is a tunnel that cannot deliver.
-- **An SSH host's agent tools are CHECKED, not assumed** (`RemoteHooks.refreshAgentTools`,
+- **An SSH host's agent tools are CHECKED, not assumed** (since #744 the plan holds only what the
+  host's consent installs — shims + skills, no instruction blocks; an unanswered host is skipped)
+  (`RemoteHooks.refreshAgentTools`,
   `main/remote-ssh/agent-tools-freshness.ts`). The canvas/context shims, both SKILL.md files and our
   blocks in the codex/gemini/copilot/opencode instruction files used to be written only by the
   establish path, blind, and never looked at again, so a host could keep another build's text for
@@ -3336,6 +3439,26 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   `E_UNSUPPORTED`; ChatPanel catches it and says so instead of leaving the initial `[]` on screen
   as an empty conversation. Same `nodeId` rides `claude.readTranscript`, so the find-bar searches
   a remote node's transcript too.
+  **Which session id is read is ONE rule, `transcriptSessionFor`** (`renderer/lib/transcriptSession.ts`,
+  2026-10): the hook-confirmed `agentStatus.sessionId`, else the id the node was LAUNCHED with
+  (`data.agentSessionId` — minted with `--session-id`, or the id "Open recent" resumed). The canvas
+  node, the ⌘M hint, the kanban card, the card modal and its viewer all ask it. Before, Chat (and
+  the meter) were gated on the hook id alone, so a node whose hook events never reached this app —
+  an SSH session pinned for life to a dead hook endpoint, the 107-of-128 case in "A reused
+  ControlMaster…" — opened "Markdown view" and showed no meter while its transcript sat on disk
+  under an id the node itself had on record; others in the same project opened Chat. The fallback
+  is HONEST, because the persisted id can be stale (`/clear` / `/resume` in the CLI moves to
+  another session; nothing rewrites `agentSessionId` from hooks): (1) ChatPanel's
+  `sessionFallback` prints one quiet line saying so, and the meter's popover says "From the session
+  this node was started with"; (2) the read carries **no cwd** (`transcriptReadCwd`), because
+  claude's resolver answers a missing id with the newest transcript in the folder — under a
+  fallback id that would be a stranger's conversation; the remote locator globs by id without a
+  cwd, so SSH nodes are still read on their host; (3) plan/question answer controls are never
+  offered on a fallback thread (an answer is a WRITE bound to the live `held` ticket). The composer
+  still sends (it types into the pane, which is right whatever the transcript). The persisted id is
+  the CREATED agent's, which is exactly the agent both mount sites pick the reader by, and it is
+  re-validated against `SAFE_SESSION_ID` (hand-editable project.json). The find bar's transcript
+  index still uses the hook id only (it has claude's cwd fallback and no `remoteOnly` here).
   **Both channels live in `core/transcript-ipc.ts` (`registerTranscriptIpc`), so the Server
   Edition serves them too** — it used to have no handler at all, which is why ⌘M in the browser
   read as an empty conversation on EVERY session. The remote leg is an injected dep
@@ -3405,7 +3528,13 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   clips, so it can never add a line to the row (a height flip would refit xterm and SIGWINCH
   tmux). It is not on the kanban card modal: that header already carries the ⌘M toggle.
   **The composer sends only in `done` or an unknown state** (`canSendFromChat`,
-  `renderer/lib/chatSendGate.ts`) — never in `waiting`/`blocked`, not just never in `working`:
+  `renderer/lib/chatSendGate.ts`), with ONE exception: `working` for an agent in
+  `INPUT_QUEUE_CAPABLE` (claude — measured: a prompt submitted mid-turn waits in Claude Code's own
+  queue and reaches the model at the next tool boundary), where Enter QUEUES (`chatSendMode`) and
+  the bubble reads "Queued" until the transcript has it. Only a plain prompt queues (`canQueue`):
+  a slash command or `!` line mid-turn is unmeasured and waits. While the agent works the textarea
+  stays editable for every agent (`composerStandsDown`) — only sending is gated. Never in
+  `waiting`/`blocked`:
   PermissionRequest and AskUserQuestion both normalize to `waiting`, the pane then holds a TUI
   select dialog this view does not show, and `sendText`'s Enter would ANSWER it ("Yes" is the
   default highlight). It also refuses any node whose CLI has left the pane — hibernated, paused,
@@ -3416,6 +3545,20 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   store at send time, not only at render. Same trap as the in-place restart's `/exit`. The bar's ↻
   reloads on demand (beside the empty state's Retry), since a session whose hooks never report
   `working` never takes the turn-finish reload.
+  **A chat prompt is TYPED for claude, never pasted** (`core/typed-input.ts`, `TYPED_INPUT_CAPABLE`).
+  Claude Code records a multi-line paste as `<pasted_content>`, which its model is told may not be
+  the user's words; typed text (lines joined by tmux's `M-Enter`, measured on 2.1.281) is recorded
+  as plain user text. Three rules: (1) **core decides it from the agent id** inside
+  `sendChatPrompt` (`typedFor`), never a renderer-sent flag — every other agent and every other
+  `sendText` caller keeps the paste; (2) **every write into a pane is serialized per pane**
+  (`PtyManager.serializePaneWrite`, wrapping `sendText` AND `sendEnvelope`): a typed send takes
+  seconds (one paste per line, then a settle wait before Enter), and an agent message, a reminder
+  or dictation arriving in that window would otherwise land between its lines and be submitted as
+  part of it; (3) **the screen is checked again right before the Enter** (`TypedSurface.canSubmit`):
+  the dialog check `sendChatPrompt` makes is seconds old by then, and an Enter into a dialog that
+  opened meanwhile would ANSWER it — the text stays in the composer and the caller hears
+  `pasted-not-submitted`. The panel ignores a second Enter while a send is in flight (the draft is
+  cleared only once it lands).
   **The agent's OWN dialogs are read off the screen** (`shared/agents/claude-screen.ts`, claude
   only — `SCREEN_DIALOG_READABLE`). The folder-trust prompt, `/model` and one-time setup questions
   fire NO hook, so the state gate above reads `done` while one owns the keyboard, and a paste into
@@ -3853,14 +3996,14 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   escaping sh can be trusted with — `parseControlBody` reads both this and the JSON dialect) to
   the hook server's `/control/<verb>` routes; `Accept: text/plain` makes the server render the
   reply (sh has no JSON parser). Env-gated on `NODETERM_CANVAS_CONTROL` (set by
-  `buildPtyEnv`/`remoteHookEnvArgs` per `canControlCanvas`). Discovery: claude gets a
-  `skills/manage-nodeterm-canvas/SKILL.md` (system `~/.claude` + each managed account dir);
-  codex/gemini/opencode plus Copilot's `copilot-instructions.md` get a marker block
-  (`<!-- nodeterm:manage-canvas:start/end -->`); **grok needs
-  no installer at all** — it scans `~/.claude/skills` by default for Claude compat, so membership alone
-  (which sets `NODETERM_CANVAS_CONTROL`) is the whole wiring. That premise rests on grok's shipped
-  docs and is **unverified** (`grok inspect --json` never run); if it does not hold, grok takes the
-  marker-block route instead — see docs/grok-agent.md.
+  `buildPtyEnv`/`remoteHookEnvArgs` per `canControlCanvas`). Discovery (since #744): EVERY
+  consented agent gets `skills/manage-nodeterm-canvas/SKILL.md` in its OWN skills dir — claude's
+  config dir (+ each local managed/linked account dir), `$CODEX_HOME/skills`, `~/.gemini/skills`,
+  `$GROK_HOME/skills`, `$COPILOT_HOME/skills`, opencode's `<config>/skills`; on an SSH host claude's
+  dir and `~/.agents/skills` (read by codex, gemini, opencode, grok — measured — and copilot,
+  documented). The marker blocks (`<!-- nodeterm:manage-canvas:start/end -->`) in AGENTS.md /
+  GEMINI.md / copilot-instructions.md are no longer written and an older build's copy is STRIPPED;
+  see **Agent-integration consent** under Agent support.
   **Server creator ownership (2026-08 incident hardening):** enabled Server control accepts only
   verified node identity. `HeadlessNodeFactory` records which source node opened each new node in a
   process-local ledger; link/group/rename/color/sticky-update, message delivery, and close validate
@@ -3926,7 +4069,8 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   **Keep the agent-facing text in sync with behaviour, in the SAME PR.** The verb help agents
   actually read is generated by `buildCanvasSkillBody` (the SKILL.md, rewritten into every config
   dir by `installCanvasSkillInto` on launch) and `buildCanvasControlInstructions` (the
-  codex/gemini/copilot/opencode marker block) — both in `canvas-control-core.ts`. When you add or
+  codex/gemini/copilot/opencode marker block — NOT INSTALLED since #744, its parity tests are what
+  keep it; every agent now reads the skill) — both in `canvas-control-core.ts`. When you add or
   rename a verb, change a flag, or change what an outcome MEANS (e.g. PR 7 turned a busy target's
   `targetBusy` refusal into a deliver-on-idle queue), update those two functions in the same change,
   or the docs describe a product that no longer exists and an orchestrating agent acts on the stale
@@ -4203,10 +4347,43 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   frames, which `group` won't do; a cycle (a frame into itself or its own descendant) is refused.
   `arrange`/`align` now run in ONE coordinate space: all top-level, OR all children of one frame
   (`commonParentId` decides; a mixed set is refused, not silently subset-arranged — the old
-  behavior). When the ids are a frame's children, the frame is shrunk to hug the tidied layout
-  (`fitGroupToChildren`) — the fix for "grouping keeps scattered positions so the frame is too
-  wide". `move` also re-fits the source + destination frames. All pure + tested in
-  `state/workspace.test.ts` + `workspace.layout.test.ts`.
+  behavior). When the ids are a frame's children, that frame AND every ancestor frame are re-fitted
+  to hug the tidied layout (`fitAncestorChain` — fitting only the one frame left a nested frame
+  wider than its parent) — the fix for "grouping keeps scattered positions so the frame is too
+  wide". `arrange` fills its slots in the order the ids are LISTED (`arrangeNodes` used to place in
+  array order, which discarded every caller's sort). `move` also re-fits the source + destination
+  frames. All pure + tested in `state/workspace.test.ts` + `workspace.layout.test.ts`.
+  **`arrange --group <frameId> [--layout grid|row|column|lineage] [--cols N]`** names the FRAME
+  instead of listing its children: the frame's direct children are laid out and the frame chain is
+  re-fitted — `arrangeGroupChildren`, the SAME transform the frame's menu rows run (see
+  **Arrange inside a group** under Canvas interaction). The flag gate is the pure
+  `arrangeArgsRefusal` (`@shared/arrange-verb`), called in THREE places: `parseControlRequest`
+  (Server Edition), desktop main's control handler (which never runs `parseControlRequest` — the
+  `--issue` trap; with the gate only in the parser, all three refusals were missing on the desktop
+  and the request ran as a grid), and Canvas's `case 'arrange'` as the belt: `--nodes` and
+  `--group` together are refused rather than resolved silently, an unknown `--layout` on the
+  `--group` form is refused by name, and `--layout lineage` on the `--nodes` form is refused
+  instead of being delivered as a grid (any OTHER unknown word there still falls back to `grid`,
+  as it always has). What only the canvas knows — no such frame, an empty frame, no lineage among
+  the children — is `groupArrangeRefusal`, replied as `arrange: <reason>`; a frame already in
+  place answers `ok` with `changed: false` and writes nothing. The agent-facing text for the form
+  is `arrangeGroupGuidanceLines`, rendered into BOTH generated bodies from the same layout list the
+  gate checks. **Server Edition: refused by name** — `arrange` is not in `SERVER_V1_VERBS` in either
+  form (headless control keeps no measured node sizes), so `--group` gets the same permanent
+  `control-unsupported-on-this-edition` reply and is never dropped on the way to an `ok`
+  (`control-unsupported.test.ts` pins it). Off screen it works like the `--nodes` form: the
+  stored nodes are laid out and written back through `commitCtlNodes`, and the lineage ropes are
+  the OWNING project's (`offCanvas.project.ropes`, re-marked with `markLegacyWaitRopes` exactly as a
+  load would — a project that has not been opened since waits were marked still holds unmarked
+  ones), never the live canvas's. The rope **id** rides along on both paths: it is the only thing
+  that tells a wait from an opener, and stripping it (as the first revision did) makes every wait
+  read as an opener. **`arrange --group top [--layout tidy|lineage]`** (2026-10, issue #1114 — an
+  orchestrator asked for a programmatic Tidy) names the canvas's TOP LEVEL with the same words
+  `move` reads (`top`/`none`/`ungrouped`, `isTopLevelGroupArg`) and runs the user's own **Tidy
+  canvas** (`tidyCanvas`, default) or its bands (`arrangeByLineage`) — the same transforms as the
+  pane menu, nothing re-implemented. `grid`/`row`/`column` are refused there by name: `--nodes`
+  already says them, and a top-level grid that ignores lineage is what Tidy no longer is. Same
+  Server Edition refusal, same off-screen path.
   **Fan-in (`link`, 2026-07):** a spawned fan-out was previously write-only — nodes an agent
   opened were joined to it by a **rope** (`project.ropes`, explicitly *"Display-only — never
   context links"*), so an orchestrator could not read back what its own team produced and the
@@ -4966,10 +5143,10 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   the local locators for remote nodes (they'd resolve a stranger's local transcript). Server
   Edition IS wired (`src/server/context-link.ts` calls `initContextLink(ptyManager, {})`) but
   passes no remote deps → **local-only**, which is the complete answer there: that shell runs ON the
-  host whose transcripts and tmux it reads, and SSH projects are a desktop-only concept. Discovery is per-agent: claude installs a
-  `get-linked-context` skill; codex/gemini get an idempotent marker block
-  (`<!-- nodeterm:get-linked-context:start/end -->`) merged into `~/.codex/AGENTS.md` /
-  `~/.gemini/GEMINI.md`. On connect an idle-gated one-line note is injected into each endpoint
+  host whose transcripts and tmux it reads, and SSH projects are a desktop-only concept. Discovery is the `get-linked-context` skill in each consented
+  context-link-capable agent's own skills dir (since #744; the old marker block
+  `<!-- nodeterm:get-linked-context:start/end -->` in AGENTS.md / GEMINI.md is stripped — see
+  **Agent-integration consent**). On connect an idle-gated one-line note is injected into each endpoint
   (claude → skill pointer; codex/gemini → inline CLI command via `contextLink.info()`).
   (Replaced the earlier MCP-based bridge.)
   **One-way links (issue #852):** a context bridge may carry `reader` (`BridgeLink.reader`, the ONE
@@ -5804,17 +5981,50 @@ detaching + an always-true pressure signal is why the symptom read as "my sessio
 disappearing" rather than as an occasional cull. The `vm_stat` reader is what makes the pool safe
 again; the grace window was never the thing that was wrong.
 
-## Live links (Pro, read-only browser link to one terminal)
+## Live links (Pro browser link to one terminal: watch, chat, or type)
 
-A live link shows ONE node, read-only, in a plain browser until it expires (≤ 24 h) or is stopped;
-creating one is Pro and the backend is the gate. Reference: **`docs/live-links.md`**. Invariants:
+A live link shows ONE node in a plain browser — read-only, or typeable on a Control link by a viewer
+who also has its password — until it expires (≤ 24 h, or never for Unlimited) or is stopped; creating
+one is Pro and the backend is the gate. Reference: **`docs/live-links.md`**. Invariants:
 - `watchLink:*` (owner IPC) is host-only: no relay peer, hosted editors included, may create, list (a
-  view carries the secret URL), stop, kick or chat. The viewer protocol is `watch:*` and must never
-  start with `watchLink:` — relay-host refuses host-only channels before any policy, so it could never
-  arrive (`src/shared/host-control.test.ts`, `src/core/relay/scoped-guest-policy.test.ts`).
+  view carries the secret URL), stop, kick, chat, or change a link's control (typing, password, lock).
+  The viewer protocol is `watch:*` and must never start with `watchLink:` — relay-host refuses
+  host-only channels before any policy, so it could never arrive (`src/shared/host-control.test.ts`,
+  `src/core/relay/scoped-guest-policy.test.ts`).
 - A watcher never goes through `decideAccess` (it would get the VIEW table): `watcher-policy.ts` refuses
-  all but a Commenter's `watch:chat` cast, passes out only `watch:*`, its own pty frames and `pty:size`,
-  and takes no `interceptReq` (`watcher-policy.test.ts`, `chat-cast.guard.test.ts`).
+  every request and every cast but `watch:chat` (Commenter and Control links) and, on a Control link
+  only, the three controller casts `watch:unlock` / `watch:input` / `watch:release`; it passes out only
+  `watch:*`, its own pty frames and `pty:size`, and takes no `interceptReq` (`watcher-policy.test.ts`,
+  `chat-cast.guard.test.ts`). The policy knows only the ROLE: "controlling" is the link host's state
+  per CONNECTION (a right password; a reconnect unlocks again, a session restart keeps it). Input from
+  a viewer that is not controlling is a breach, except within 5 s of losing control (dropped silently);
+  every loss of control goes through `loseControl`, and every chunk is re-checked (control period,
+  the record read live, the same session) before it goes.
+- A controller's input reaches the node's PANE, never a tmux CLIENT: keys as `send-keys -H` lines read
+  by `tmux source-file -` from stdin, after a mode cancel, on the exact `=nt-<id>:`; pastes as
+  `load-buffer -` + `paste-buffer -d -p -r`, so tmux frames them by the pane's real state. A byte
+  written into a client is its keyboard, and the prefix is the security boundary (`C-b s` = every
+  session on the socket, `C-b :` = tmux's command prompt). Keys never ride a paste buffer (tmux 3.7
+  vis-encodes control bytes there), and no payload ever rides argv, local or SSH. The viewer frames
+  every paste itself and sends each emulator answer as its own cast, which the host drops whole
+  (`isTerminalReport`); the contract is in `protocol.ts`. Zellij is refused (`watcherInputRoute` →
+  `none`, `nodeControlSupport` → `unsupported`). Routing: `pty-manager.control-input.test.ts`; meaning
+  on a real tmux: `pane-input.realtmux.test.ts`.
+- The Control password is a scrypt hash only (no plaintext kept or logged anywhere; every scrypt run in
+  one FIFO gate of 2; `timingSafeEqual`). Host throttles: 1 attempt per 2 s per viewer, 3 wrong end the
+  connection, 10 wrong across the link lock it (lock AND count persisted in the record, so a restart
+  resets neither; only Allow control again clears the lock; it and a new password reset the count).
+  Owner changes go by direction: narrowing (typing off, a new password) applies at once and is NEVER
+  undone by a failed or hung write — the brake must not fail open; the owner is told `'unsaved'` (holds
+  until a restart unless a later write lands; Stop ends it for good) — widening (typing on, allow again)
+  only after the write. A chunk handed to `PtyManager.controlInput` carries `isCurrent`, asked right
+  before it spawns, so it never lands after control ended; a batch holds at most 64 chunks.
+- Unlimited = `ttlSeconds: 0` → `expiresAt: null`: no expiry timer, never pruned for time. The backend
+  grants it only with no TTL cap and asks the license's liveness at host-token at most once per 24 h per
+  license (dead → 402 → the host stops minting, the view reads `refused`; keygen unreachable fails
+  open).
+  A build older than this one drops Control and unlimited records on load and its next write removes
+  them (their server rows live on with no host until they expire or Stop all).
 - Watchers are QUIET (no broadcast, not in `clientIds()`) and SELF-PACED (never paused, dropped or
   resynced by the registry); the reaper reads `quietClientIds()` too, or it releases a session only a
   viewer holds (`ui-sink-registry.watcher.test.ts`, `pty-reap.test.ts`).
@@ -5837,6 +6047,11 @@ creating one is Pro and the backend is the gate. Reference: **`docs/live-links.m
   client to spawn): the create dialog says so, and a refused join turns the chip amber `LIVE · 1
   waiting` ("Viewers are waiting — open this terminal in nodeterm…"). The stream is the owner's tmux
   CLIENT's output, so its session chooser or a session switch reaches viewers; the warning names it.
+  A controller's input that does not reach the pane is reported (`watch:control {controlling,
+  dropped}`, cause-neutral: the rate limit or a failed delivery, e.g. an SSH host without tmux).
+- The Live chat drawer has ONE `nodeterm:live-chat` listener (Canvas); no OS notification per chat
+  message (`control-taken` is the only link notice that raises one); a message counts as read only
+  while the window is visible and focused.
 - Stop all is the only control that reaches other machines' links: it is offered to a Pro owner even
   with no link listed here, awaits the server and reports what it reached (`RevokeAllOutcome`) — a
   failed or skipped server call must never look like a stop.
@@ -6606,9 +6821,9 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
 
 - **Context menus** (`components/ContextMenu.tsx`, portal, icons from `components/icons.tsx`):
   pane right-click = add nodes at cursor (terminal / Claude / sticky / open file) + select
-  all + fit + **Tidy canvas** (`arrangeAllNodes` — packs every top-level node, including group
-  frames as rigid units, into a non-overlapping grid via `arrangeNodes`, sorted by current
-  (y, x) so the pack roughly preserves reading order; mirrored in ⌘K as "Tidy canvas" and in the
+  all + fit + **Tidy canvas** (`arrangeAllNodes` → `tidyCanvas` — packs every top-level node,
+  including group frames as rigid units, without overlap, keeping each ORCHESTRATOR legible; see
+  the Tidy canvas bullet below; mirrored in ⌘K as "Tidy canvas" and in the
   keybinding registry as `canvas.tidy` (default ⌘/Ctrl+Shift+A, remappable); both
   hidden below 2 top-level nodes, where it could only be a visual no-op that still writes
   `project.json`) + restart-idle-agents (the bulk in-place agent restart, mirrored in ⌘K; both
@@ -6635,6 +6850,101 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   ids it knows — so Delete, restart-agent, branch/transfer, terminal Search and Close can never
   be hidden, whatever settings.json says. The group-frame menu's colors strip answers to the same
   `colors` id; builders run through `tidySeparators` so a hidden row leaves no dangling rule.
+- **Tidy canvas keeps the orchestrator** (`tidyCanvas` in `state/workspace.ts`, 2026-10 — user
+  feedback: *"I lose the sense who is orchestrator"*). The old Tidy packed every top-level unit
+  into one reading-order grid, so an orchestrator landed wherever its (y, x) fell — routinely LAST,
+  after the stations it opened and the loose notes between them. Now a unit that opened other units
+  is placed first, at the top-left of its own cluster, with the units it opened packed in a ~square
+  grid directly to its RIGHT, and a sub-orchestrator's own team clustered the same way inside that
+  grid (recursive blocks, `flowBlocks` = `arrangeNodes`' row flow over rectangles). Clusters are
+  packed in reading order of their orchestrators; every unit with NO lineage is packed after them,
+  below, by the plain grid. Rules a refactor must keep:
+  **(1) The relation is the OPENER only, and it is `openerByTarget`** (`lib/teamProgress.ts`) —
+  the ONE definition team progress reads too (`data.openedBy` when recorded, else the first
+  non-wait rope into the node; `stationsByOpener` now sits on it), so the ring and the layout
+  cannot disagree about whose station a node is. Waits are NOT followed: a verify panel's
+  reviewers wait on the reviewed node, but the orchestrator opened all of them — following waits
+  would split its team under one of its own stations. And one opener per node makes the clusters
+  a forest, so the layout has one answer.
+  **(2) Ropes are lifted to the top-level unit** (the #1114 shape: a coordinator opens a lead
+  INSIDE a frame, so the frame joins the coordinator's team). A frame whose contents were opened
+  by different units belongs to the one that opened the MOST of them, ties to the earliest rope; a
+  plain node's own opener always wins for it. A rope internal to one frame is dropped.
+  **(3) A cycle never hangs** — lifting makes one easily (a in frame g opens b outside, b opens a2
+  inside g); the cycle member that reads first loses its opener and leads.
+  **(4) No lineage ⇒ exactly the old call**: `arrangeNodes(grid)` over the reading-order ids —
+  pinned against that call verbatim, waits-only canvases included. (Not byte-identical to the
+  pre-#836 *build*: `arrangeNodes` then placed in array order, ignoring the sort this action always
+  documented — see Arrange by lineage below.)
+  **(5) Same array when nothing moves**, so a second Tidy writes no undo entry and no
+  `project.json` (it still fits the view). The layout is idempotent by construction: every block
+  places its members in reading order, so a tidied canvas reads back in the order it was laid out.
+  A dead opener (deleted; the rope pruned, or a stored file's unpruned rope) leads nothing — its
+  stations fall loose. Desktop + Server Edition identical (pure renderer, no new IPC); kanban N/A
+  (a board has no geometry); Mobile N/A (no canvas). Agents reach it as `arrange --group top`.
+- **Arrange by lineage** (`arrangeByLineage` / `lineageLayers` in `state/workspace.ts`; pane menu
+  beside Tidy canvas, ⌘K, and the registry command `canvas.tidyLineage`, which ships UNBOUND —
+  ⌘⇧A is already the first tidy) — the second tidy: one row per LAYER of the lineage ropes
+  (`project.ropes`, i.e. "opened by" and `--after`), growing downward, so a coordinator sits above
+  the team it opened and that team above what IT opened. Four rules, each of which the naive
+  version gets wrong: **(1)** a rope is LIFTED to its top-level ancestor before it counts — an
+  agent opens a team INSIDE a frame, and the frame is the rigid unit that moves; a rope whose two
+  ends lift to the SAME object is internal to that frame and dropped, or the frame would be its own
+  opener. **(2)** a node's layer is its LONGEST path from a root, never its first — with `max`
+  every rope points strictly downward, which is the whole reason the result reads as a flow; a
+  reducer that keeps the LAST opener happens to be right in one edge order and wrong in the other,
+  so the test asserts BOTH. **(3)** nodes no rope touches are NOT layer 0 — they are a final
+  `loose` band, because a node with no lineage is not a root of anything and mixing the two puts
+  every sticky note beside the coordinator. **(4)** a cycle never hangs and never throws (the edge
+  that closes it contributes `0`): a rope cycle is not supposed to exist, but `--after` can be
+  hand-built into one and `project.json` is editable. The refusal is the transform returning the
+  SAME array — no usable rope, or under two top-level nodes — which is also what keeps a no-op out
+  of the undo stack and out of `project.json`; **that verdict is taken from `nodesRef` BEFORE the
+  write, never from a flag set inside the `setNodes` updater**, which runs when the state is
+  processed and is therefore still false on the next line (it would cost every run its `markDirty`
+  + `fitAll`). The pane row is then DISABLED with its reason while the palette OMITS it (no
+  disabled state there). Built ON `arrangeNodes` — one `row` placement per band from a shared left
+  origin — so packing, gap and the mixed-container refusal stay in ONE place. **That only holds
+  because `arrangeNodes` fills its slots in the order of the ids it is handed**: it used to place
+  in ARRAY order, which threw away the slot order `lineageLayers` computes (siblings under their
+  opener) AND the reading-order sort `arrangeAllNodes` documents, with every existing test green
+  because each asserted the layer LIST and never the positions. The interleaved case is now
+  asserted on positions. **Bands read BOTH relations, slots read the opener first** (2026-10):
+  layering follows openers AND waits (a wait is a flow edge too, and longest-path keeps it pointing
+  down — a verify panel reads target → reviewers → judge), but a node's slot in its band follows
+  its OPENER's slot when the opener is in the band above, else its earliest predecessor's, so a
+  node opened by B that waits on A sits under B with the rest of B's team. Kept as its own command
+  rather than folded into Tidy: bands answer "in what order does the work flow", Tidy answers
+  "whose team is this", and on a pipeline the two disagree. Desktop + Server Edition identical
+  (pure renderer, no new IPC); kanban N/A (a board shows cards, and geometry is exactly what a
+  column layout discards); Mobile N/A (no canvas).
+- **Arrange inside a group** (`arrangeGroupChildren` / `groupArrangeRefusal` in
+  `state/workspace.ts`; the group-frame menu's **Tidy group** and **Arrange group by lineage**,
+  ⌘K for the ONE selected frame, and the `arrange --group` control verb — one transform behind all
+  three, pinned by `canvas/arrange-group.source.test.ts`) — the two canvas tidies one level down:
+  organize a frame's own items, then size the frame to hold them. Four rules: **(1)** the members
+  are the frame's DIRECT children, so a nested frame moves as one rigid unit with its own children
+  untouched, exactly as Tidy canvas treats a top-level frame; `lineageLayers` /
+  `arrangeByLineage` take a `containerId` for this, a rope is lifted to the MEMBER that holds its
+  end, and a rope with an end outside the frame is dropped — the opener of a frame's whole team
+  usually sits outside it and says nothing about the order inside. **(2)** the layout starts at
+  the offset a fitted frame keeps its content at (`GROUP_PAD`, plus `GROUP_HEADER`), NOT at the
+  children's bounding box: `fitGroupToChildren` re-anchors a frame to hug its children, so
+  starting from the bounding box moves the frame to wherever its top-left child happened to sit,
+  while starting from the content origin makes the fit re-derive the SAME origin and the frame
+  only grows or shrinks to the right and downward (a frame that was off the grid still moves onto
+  it, by under one cell, when snapping is on). That is also why the action calls no `fitAll` — the
+  thing the user right-clicked must not slide out from under the cursor. **(3)** the fit walks UP
+  the parent chain, innermost first (`fitAncestorChain`): fitting only the frame leaves a parent
+  smaller than the child it holds, and `extent:'parent'` then clamps that child into an inverted
+  range. **(4)** the refusal is the SAME array — a missing or empty frame, a lineage layout with no
+  rope joining two of the children, or a frame whose contents already sit where the layout puts
+  them (compared by geometry, so a second click writes no undo entry and no `project.json`); as
+  with the canvas tidies the verdict is read off `nodesRef` BEFORE the write. The menu rows are
+  DISABLED with the reason `groupArrangeRefusal` gives, the palette OMITS a refused entry, and the
+  CLI replies that reason by name — one sentence, three surfaces. Desktop + Server Edition
+  identical for the menu and palette (pure renderer, no new IPC); the control verb is desktop-only
+  (see Grouping verbs); kanban N/A; Mobile N/A (no canvas).
 - **Add menu** = bottom dock (`Dock.tsx`) `+`, mirrored by the pane menu and command palette.
   `lib/addMenuSpec` is the one source for WHICH kinds are addable, and since 2026-09 also for how
   the two `ContextMenu` surfaces GROUP them: `New terminal` · `New remote…` · the account-capable
@@ -8296,6 +8606,19 @@ unix-socket forward over it. POSIX keeps OpenSSH untouched.
   Phone "Remove" (`pairing-service.revokeDevice`) revokes ALL phone pins and cuts ALL phone relay
   sessions, before the SSH key and the device entry go — all-phones because no box key maps to a
   device; a failure reports `local:false` and keeps the device listed to retry.
+- **Phone pairing is platform-neutral, and revoke still speaks the iOS-era stamp.** New keys are
+  stamped `nodeterm-mobile-<deviceId>` (`pairing-core.deviceCommentFor`); `filterAuthorizedKeys`
+  matches BOTH that and the legacy `nodeterm-ios-<deviceId>` (`deviceCommentsFor`), because every
+  iPhone paired before Android existed carries the old stamp — drop the legacy leg and "Remove"
+  reports a phone removed while its SSH key stays live. The device name is what the phone sends
+  (Android sends one), sanitized to one ≤64-code-point line; with none it is `'Phone'`, EXCEPT the
+  iOS app — which has never sent a name — is recognised by its fixed key comment `nodeterm-ios` and
+  keeps `'iPhone'`. Store links go through `renderer/lib/links.ts` `mobileStoreLinks()`; the Play
+  link is hidden by the single `ANDROID_APP_PUBLISHED` flag until the listing exists, and
+  `mobileStore.guard.test.ts` refuses a direct store URL anywhere else in the renderer. `LicenseSource` includes
+  `'google'` (a Play purchase bridged from the phone, `google:<orderId>`), with its own
+  `licenseCopy` sentence. `settings.mobileLiveActivities` keeps its key; the UI says "Live updates
+  on phone".
 - **A Windows desktop pairs relay-only — no SSH key, and do not "fix" that by writing one.** The
   phone's direct-SSH path is POSIX sh + tmux end to end (nodeterm-ios `HostCommands`, `TmuxBinary`,
   the typed `tmux new-session -A` attach, workspace paths with no `%APPDATA%` candidate). Windows
@@ -9291,11 +9614,13 @@ For every OTHER test dir, two layers, both needed:
   1. **Desktop** (Electron) — the primary app (`src/main` + `src/renderer` via the preload).
   2. **Server Edition** (Linux, browser) — `src/server` + the `src/renderer/bridge` shim (see
      the `src/server/` bullet above and docs/SERVER.md).
-  3. **Mobile companion** — *nodeterm mobile*, a **separate PRIVATE repo** (`nodeterm-ios`)
-     — outside contributors cannot see or PR it, so a mobile implication is raised in the
-     desktop PR and **@eneskirca** is mentioned to carry it over
-     (SwiftUI + SwiftTerm/Citadel, tmux-integrated, talks the `TerminalTransport`/RemoteTransport
-     protocol).
+  3. **Mobile companion** — *nodeterm mobile*, two **separate PRIVATE repos**: `nodeterm-ios`
+     (SwiftUI + SwiftTerm/Citadel) and `eneskirca/nodeterm-android` (Kotlin/Compose, in
+     development) — outside contributors cannot see or PR either, so a mobile implication is
+     raised in the desktop PR and **@eneskirca** is mentioned to carry it over. Both are
+     tmux-integrated, talk the same `TerminalTransport`/RemoteTransport protocol and the same
+     pairing/relay/mirror wire contracts, so a desktop change must not assume the phone is an
+     iPhone (copy, defaults, store links — see **Phone pairing is platform-neutral**).
 
   **The canvas and the kanban board are TWO VIEWS of the same nodes — treat the board as a
   first-class surface, not an afterthought.** Every session/node feature you add to a canvas node

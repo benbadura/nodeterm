@@ -6,6 +6,7 @@ import { LiveLinkChip, showsLiveLinks } from '../LiveLinkChip'
 import type { SessionSource } from '../../session/session'
 import { useWatchLinks } from '../../state/watchLinks'
 import { ContextMeter } from '../ContextMeter'
+import { transcriptSessionFor } from '../../lib/transcriptSession'
 import { isRemoteSessionNode } from '@shared/worktree'
 import { NodeIconView } from '../NodeIcon'
 import { LabelChips } from './LabelChips'
@@ -66,6 +67,8 @@ export const SessionCard = memo(function SessionCard({
   // (see its loopSig comment) and StatusAwareMiniMap demonstrates: subscribe where the value is
   // read, so the re-render is confined to the one thing that changed.
   const status = useAgentStatus((s) => s.byId[session.id])
+  // The card's meter follows the same session rule as the node and the card modal.
+  const cardTranscript = transcriptSessionFor({ live: status?.sessionId, persisted: session.spawn.agentSessionId, cwd: session.spawn.cwd })
   // The board is the canvas's other view of the same node (CONTRIBUTING), so the card carries the
   // node header's account chip from the same helper — created-with account, else what the session
   // was observed running as.
@@ -230,7 +233,7 @@ export const SessionCard = memo(function SessionCard({
             <span className="kanban-card__stickytext">{stickyPreview}</span>
           ) : (
             <>
-              <ContextMeter sessionId={status?.sessionId ?? null} nodeId={session.id} remote={isRemoteSessionNode(session.spawn)} agentId={session.agentId ?? session.spawn.agentId ?? status?.agentId} />
+              <ContextMeter sessionId={cardTranscript.sessionId ?? null} fromLaunchId={cardTranscript.fallback} nodeId={session.id} remote={isRemoteSessionNode(session.spawn)} agentId={session.agentId ?? session.spawn.agentId ?? status?.agentId} />
               <AccountChip chip={accountChip} />
               <LiveLinkChip nodeId={session.id} source={liveLinkSource} className="kanban-card__live" />
               {sessionName && (

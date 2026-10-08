@@ -58,11 +58,16 @@ import { NumberField } from '@renderer/ui/NumberField'
 import { SettingsSection } from '../SettingsSection'
 import { SearchableRow } from '../SearchableRow'
 import { FieldRow } from '../FieldRow'
+import { IntegrationSettings } from '../IntegrationConsent'
 
 const ROWS = {
+  integrations: {
+    title: 'Hooks & skills (integrations)',
+    keywords: ['agent integrations', 'integration', 'remove', 'uninstall', 'consent', 'hook', 'hooks', 'skill', 'skills', 'install', 'opt out', 'decline', 'clean up', 'ssh', 'host', 'agents.md', 'gemini.md']
+  },
   agents: {
-    title: 'Agents',
-    keywords: ['agent', 'claude', 'codex', 'gemini', 'enable', 'disable', 'default']
+    title: 'Show in Add menus',
+    keywords: ['agent', 'claude', 'codex', 'gemini', 'enable', 'disable', 'show', 'hide', 'menu', 'default']
   },
   launchCommands: {
     title: 'Launch commands',
@@ -450,12 +455,17 @@ export function AgentsSection({ isActive }: { isActive: boolean }): React.JSX.El
       id="agents"
       title="Agents"
       description={agentChip
-        ? `Enable or disable agents in the Add menus, and pick the default (${agentChip}).`
-        : 'Enable or disable agents in the Add menus, and pick the default.'}
+        ? `Choose which agents the Add menus show and the default (${agentChip}), and whether nodeterm installs its hooks and skills into each agent.`
+        : 'Choose which agents the Add menus show and the default, and whether nodeterm installs its hooks and skills into each agent.'}
       isActive={isActive}
       searchEntries={ENTRIES}
     >
       <SearchableRow {...ROWS.agents}>
+        <FieldRow
+          label="Show in Add menus"
+          description="Which agents appear in the Add menus, the Dock and ⌘K, and which one “New agent” opens. Hiding one only changes the menus — nothing is installed or removed."
+          control={null}
+        />
         <div className="space-y-2">
           {rows.map((row) => {
             const enabled = isAgentEnabled(settings, row.id)
@@ -475,10 +485,10 @@ export function AgentsSection({ isActive }: { isActive: boolean }): React.JSX.El
                 </Button>
                 <SegmentedPill<'enabled' | 'disabled'>
                   value={enabled ? 'enabled' : 'disabled'}
-                  ariaLabel={`${row.label} availability`}
+                  ariaLabel={`Show ${row.label} in the Add menus`}
                   options={[
-                    { value: 'enabled', label: 'Enabled' },
-                    { value: 'disabled', label: 'Disabled' }
+                    { value: 'enabled', label: 'Shown' },
+                    { value: 'disabled', label: 'Hidden' }
                   ]}
                   onChange={(v) => update(setAgentEnabled(settings, row.id, v === 'enabled'))}
                 />
@@ -486,6 +496,18 @@ export function AgentsSection({ isActive }: { isActive: boolean }): React.JSX.El
             )
           })}
         </div>
+      </SearchableRow>
+      <SearchableRow {...ROWS.integrations}>
+        <FieldRow
+          label="Hooks & skills (integrations)"
+          description={
+            'Files nodeterm installs into each agent CLI’s own config: a status hook (RUNNING / NEEDS YOU badges, notifications) ' +
+            'and two skills (canvas control, reading linked nodes). Remove deletes exactly what nodeterm added. ' +
+            'Without it the agent still runs in a terminal, just without those features. This is separate from the menu list above.'
+          }
+          control={null}
+        />
+        <IntegrationSettings />
       </SearchableRow>
       <SearchableRow {...ROWS.launchCommands}>
         <FieldRow

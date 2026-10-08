@@ -13,6 +13,7 @@ import { createTrustGate, deniedFrame, type TrustGate } from '../relay/relay-tru
 import { encodePtyData } from '../../shared/rpc'
 import { connectWatchClient, TRUST_CONFIRM_JSON, type WatchSocket } from '../../shared/watch-link/client'
 import { deriveWatchLinkKeys, type WatchLinkKeys } from '../../shared/watch-link/keys'
+import { INPUT_MAX } from '../../shared/watch-link/protocol'
 
 function hostWith(opts: { keys?: WatchLinkKeys; autoApprove?: boolean } = {}) {
   const keys = opts.keys ?? deriveWatchLinkKeys(nacl.randomBytes(32))
@@ -146,6 +147,32 @@ describe('connectWatchClient against the real relay socket', () => {
     h.confirm()
     expect(c.sendChat('Ada', 'hi')).toBe(true)
     expect(h.tunnel.at(-1)).toBe(JSON.stringify({ t: 'cast', method: 'watch:chat', args: [{ name: 'Ada', text: 'hi' }] }))
+  })
+
+  it('sends the control casts only while open, exactly as the host reads them', async () => {
+    const h = hostWith()
+    const { socket, sent } = counting(h.peerT)
+    const c = connectWatchClient({ socket, keys: h.keys, events: events().ev })
+    expect(c.unlock('Mert', 'pw')).toBe(false)
+    expect(c.sendInput('ab')).toBe(false)
+    expect(c.release()).toBe(false)
+    await vi.waitFor(() => expect(h.tunnel).toContain(TRUST_CONFIRM_JSON))
+    h.confirm()
+    // Every one of them is a TAG_TUNNEL_TEXT frame: the host's onTunnel hands only those over as 'text'.
+    expect(c.unlock('Mert', 'pw')).toBe(true)
+    expect(h.tunnel.at(-1)).toBe('{"t":"cast","method":"watch:unlock","args":[{"name":"Mert","password":"pw"}]}')
+    expect(c.sendInput('ab')).toBe(true)
+    expect(h.tunnel.at(-1)).toBe('{"t":"cast","method":"watch:input","args":[{"data":"ab"}]}')
+    expect(c.release()).toBe(true)
+    expect(h.tunnel.at(-1)).toBe('{"t":"cast","method":"watch:release","args":[]}')
+    // Over the cap (or empty, or not a string): refused here, and nothing leaves the client.
+    const before = { tunnel: h.tunnel.length, binary: sent.binary }
+    expect(c.sendInput('x'.repeat(INPUT_MAX + 1))).toBe(false)
+    expect(c.sendInput('')).toBe(false)
+    expect(c.sendInput(7 as never)).toBe(false)
+    expect({ tunnel: h.tunnel.length, binary: sent.binary }).toEqual(before)
+    expect(c.sendInput('x'.repeat(INPUT_MAX))).toBe(true)
+    expect(h.tunnel).toHaveLength(before.tunnel + 1)
   })
 
   it('keeps both directions flowing past seq 255', async () => {

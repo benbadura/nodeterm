@@ -34,6 +34,8 @@ import {
   remoteTmuxPtyArgs,
   type RemoteSessionEnv,
   remotePasteDelivery,
+  remoteTypedArgs,
+  remoteTmuxEnterArgs,
   remoteCapturePaneArgs,
   remoteCaptureVisibleArgs,
   remoteTmuxWatcherArgs,
@@ -52,6 +54,13 @@ import {
   type RemoteEndPlan,
   type RemoteNodeOwnerResolver
 } from './remote-end'
+import {
+  planRelayAttach,
+  placementIsRemote,
+  type RelayAttachRefusal,
+  type RelayNodePlacement,
+  type RelayRemoteRef
+} from './relay-attach-plan'
 import { RemoteSessionIndex, type SessionVerdict } from './remote-ssh/remote-session-index'
 import { isSshProgram, nativeExecFileAsync, nativeMux, useNativeSsh } from './remote-ssh/native/native-runtime'
 import { NativeSshPty } from './remote-ssh/native/native-pty'
@@ -68,6 +77,15 @@ import {
   visibleCaptureRoute,
   type VisibleCapture
 } from './watch-link/capture-route'
+import {
+  PANE_INPUT_DEADLINE_MS,
+  controlInputPlan,
+  remoteControlInputPlan,
+  type ControlInputChunk,
+  type WatcherInputRoute
+} from './watch-link/pane-input'
+import type { ControlSupport } from '../shared/watch-link-types'
+import { sanitizePasteText } from './paste-injection'
 import {
   localWatcherAttachArgs,
   localWindowSizeArgs,
@@ -97,8 +115,11 @@ import {
   sessionName,
   isSessionName,
   localPasteDelivery,
+  localTmuxEnterArgs,
+  pasteBufferName,
   runPasteDelivery
 } from './tmux-naming'
+import { localTypedArgs, localTypedEnv, typeThenSubmitWhenSettled } from './typed-input'
 import { encodeSendKeysHex } from './tmux-control'
 import {
   ZELLIJ_NESTING_ENV,
@@ -156,6 +177,7 @@ import {
   hasSharedIdentity,
   readsScreenDialogs,
   setCustomAgentBaseResolver,
+  typesChatInput,
   vanillaEnvStripPattern,
   type AgentId
 } from '../shared/agents/config'
@@ -302,6 +324,43 @@ function runWithStdin(file: string, args: readonly string[], input: string): Pro
     stdin.end(input)
   }
   return p as unknown as Promise<unknown>
+}
+
+/**
+ * The typed chat delivery's LOCAL leg (core/typed-input.ts): `/bin/sh` running the fixed script,
+ * with the tmux path in `env`. Kept apart from `runWithStdin` so the one helper that starts a shell
+ * only ever receives that fixed script — a shared runner handed `/bin/sh` by one caller is a shell
+ * for every caller's arguments (CodeQL reads it that way, and so should a reviewer). Same bounds
+ * as `runWithStdin`: `PROC_TIMEOUT_MS`, rejection on a non-zero exit, a swallowed EPIPE.
+ */
+function runTypedScript(args: readonly string[], input: string, env: NodeJS.ProcessEnv): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = execFile('/bin/sh', [...args], { timeout: PROC_TIMEOUT_MS, env }, (err) =>
+      err === null ? resolve() : reject(err)
+    )
+    child.stdin?.on('error', () => {
+      /* child gone; the exit code is what decides success */
+    })
+    child.stdin?.end(input)
+  })
+}
+
+/** `p`'s answer, or false once `ms` passed (the timer never holds the process). A rejection is false. */
+function settleWithin(p: Promise<boolean>, ms: number): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(false), ms)
+    timer.unref?.()
+    p.then(
+      (v) => {
+        clearTimeout(timer)
+        resolve(v)
+      },
+      () => {
+        clearTimeout(timer)
+        resolve(false)
+      }
+    )
+  })
 }
 
 // Minimal tmux config so the user's ~/.tmux.conf never interferes. The tmux server
@@ -816,6 +875,34 @@ interface Session {
 
 /** Sinks for a detached session whose output is served somewhere other than the renderer
  * (the relay host). The PTY is otherwise identical to a normal session. */
+/** The machine-local records a relay attach is decided from (see `relay-attach-plan.ts`). */
+export interface RelayNodeResolver {
+  /** Every project holding this node id, as THIS machine recorded it. */
+  placements(nodeId: string): readonly RelayNodePlacement[]
+  /** The live ControlMaster (+ its connect-time setup facts) for a connection scope. */
+  refFor(scopeId: string): RelayRemoteRef | undefined
+  /** Is this project an SSH project, per the index (identity, not liveness)? */
+  projectIsRemote(projectId: string): boolean
+}
+
+export type RelayAttachPrep =
+  | {
+      kind: 'refused'
+      reason: RelayAttachRefusal | 'codex-account'
+      /** One sentence the phone can show as-is. */
+      message: string
+    }
+  | {
+      kind: 'ready'
+      remote: boolean
+      /** Does the session exist RIGHT NOW (fail-safe toward "exists")? Ask before `attach`. */
+      sessionExists(): Promise<boolean>
+      /** The current visible screen, '' when there is none. */
+      snapshot(): Promise<string>
+      /** Spawn the relay-served client; rejects when nothing could be started. */
+      attach(sinks: DetachedSinks): Promise<string>
+    }
+
 export interface DetachedSinks {
   onData(data: string): void
   onExit(exitCode: number): void
@@ -1085,6 +1172,8 @@ export class PtyManager {
   private overridesInFlight = new Map<string, Promise<ProjectSpawnOverrides | null>>()
   /** "Which SSH host owns this node?", from the persisted index — see `setRemoteNodeOwner`. */
   private remoteNodeOwner: RemoteNodeOwnerResolver | null = null
+  /** Machine-local records the relay host's attach is decided from — see `setRelayNodeResolver`. */
+  private relayNodes: RelayNodeResolver | null = null
   /** ONE shared snapshot interval for all persisted sessions — a per-session interval spawned
    *  one tmux/ssh capture subprocess per session per tick, forever, even for idle terminals. */
   private snapshotTimer: ReturnType<typeof setInterval> | null = null
@@ -2449,21 +2538,26 @@ export class PtyManager {
     )
   }
 
-  /** Spawn a brand-new session for this client (the non-co-attach path). */
-  private async spawnNew(clientId: ClientId, options: PtyCreateOptions): Promise<PtyCreateResult> {
+  /**
+   * The refusals a NEW spawn owes before anything is spawned, shared by `spawnNew` and the relay
+   * host's attach (`prepareRelayAttach`) so the two can never disagree about when a remote node or
+   * an unscoped managed Codex account may start. `undefined` = may spawn.
+   */
+  private spawnRefusal(options: PtyCreateOptions): 'ssh' | 'codex-account' | undefined {
     // This node runs on a remote host and we cannot reach it: spawn NOTHING. Everything below
     // (and `spawnSession`'s program resolution) falls through to the LOCAL tmux/plain branches
     // when `sshRemote` is absent or `ssh` is missing — a silent local shell wearing a remote
     // node's identity, which is the one outcome a remote node must never have (see
     // `PtyCreateOptions.requireRemote`). Refuse instead; the renderer waits for the master.
     //
-    // Deliberately here in `spawnNew` and not in `create`: a co-attach JOIN to a live session for
+    // Deliberately on the SPAWN path (`spawnNew`, and the relay host's `prepareRelayAttach`) and
+    // not in `create`: a co-attach JOIN to a live session for
     // this node id is still correct (that session already runs wherever it runs), so only the
     // branch that would have created a new local session is refused. `findSsh()` is checked for
     // the same reason `spawnSession` checks it — without the executable the remote branch there
     // is skipped and the local one runs.
     if (options.requireRemote && !(options.sshRemote && options.persistKey && findSsh())) {
-      return { sessionId: '', fresh: false, unavailable: 'ssh' }
+      return 'ssh'
     }
     // A managed remote Codex account needs a known id and a safe resolved home so the
     // remote env builder can supply its private CODEX_HOME. Otherwise a fresh spawn would
@@ -2476,18 +2570,25 @@ export class PtyManager {
             !this.isCodexAccount(options.accountId) ||
             !isSafeRemoteHome(options.sshRemote.remoteHome))
         ) {
-          return { sessionId: '', fresh: false, unavailable: 'codex-account' }
+          return 'codex-account'
         }
         if (!options.persistKey || !findSsh()) {
-          return { sessionId: '', fresh: false, unavailable: 'ssh' }
+          return 'ssh'
         }
       } else {
         const scope = resolveCodexSessionScope(platform().userDataDir, options.accountId)
         if (isCodexScopeRefusal(scope)) {
-          return { sessionId: '', fresh: false, unavailable: 'codex-account' }
+          return 'codex-account'
         }
       }
     }
+    return undefined
+  }
+
+  /** Spawn a brand-new session for this client (the non-co-attach path). */
+  private async spawnNew(clientId: ClientId, options: PtyCreateOptions): Promise<PtyCreateResult> {
+    const refused = this.spawnRefusal(options)
+    if (refused) return { sessionId: '', fresh: false, unavailable: refused }
     // A tmux-backed session is "fresh" (cold start) when no live session exists to reattach to
     // — i.e. first open, or after a machine reboot killed the tmux server. Plain (non-tmux)
     // sessions are always fresh: they have no cross-restart continuity. The renderer uses this
@@ -2603,16 +2704,10 @@ export class PtyManager {
     if (options.agentId && hasSharedIdentity(options.agentId as AgentId) && !options.sshRemote) {
       installCodexLauncher()
     }
-    // Resolved HERE rather than inside `spawnSession` because that function is synchronous and two
-    // of its three callers (`createDetached`/`attachDetached`, the relay host's attach path) are
-    // synchronous public API.
-    //
-    // Those two are NOT merely attaches — `attachDetached` goes through `tmux new-session -A`, which
-    // CREATES when the host's session died (that is exactly what `sessionExists` is asked ahead of,
-    // and what `fresh` reports). What makes them override-less is narrower and true either way: the
-    // relay host passes only `{cols, rows}` (host-service.ts), so those spawns carry no
-    // `ownerProjectId` — and no cwd, agent, account or hook env either. A mirrored client that
-    // lands on a re-created session gets the same bare login shell it got before this feature.
+    // Resolved HERE rather than inside `spawnSession` because that function is synchronous. Its
+    // other callers resolve their own: the relay host's attach (`prepareRelayAttach`) awaits the
+    // same `projectSpawnOverrides` with the node's recorded owner, while `createDetached` /
+    // `attachDetached` pass none (no project owner ⇒ no overrides).
     const projectOverrides = await this.projectSpawnOverrides(options)
     if (options.profileId !== undefined && !platform().isLocalClient?.(clientId)) {
       throw new Error('Terminal profiles can only be selected by the local desktop.')
@@ -2632,9 +2727,8 @@ export class PtyManager {
       }
       profilePlan = await resolveTerminalProfile(profileId, cwd, settings.defaultShell)
     }
-    // Resolved HERE for the same synchronous-spawnSession reason as projectOverrides — and the
-    // relay host's detached callers pass no `sshRemote` at all, so this is the one path that needs
-    // it. Re-derive the login-agent pin for the endpoint (issue #427): same memoized `ssh -G`
+    // Resolved HERE for the same synchronous-spawnSession reason as projectOverrides (the relay
+    // host's remote attach runs the same probe in `spawnRelayRemote`). Re-derive the login-agent pin for the endpoint (issue #427): same memoized `ssh -G`
     // probe the ControlMaster's connect uses, and it OVERWRITES any inbound value — `sshRemote` is
     // renderer-built and its conn can descend from a shareable project file, so only the local
     // probe may decide which agent socket the argv builders pin. The annotated conn is what the
@@ -3290,6 +3384,177 @@ export class PtyManager {
     options: Omit<PtyCreateOptions, 'persistKey'> = { cols: 80, rows: 24 }
   ): string {
     return this.spawnSession({ ...options, persistKey }, null, sinks)
+  }
+
+  /**
+   * Wire the machine-local records the relay host's attach is decided from — see
+   * `relay-attach-plan.ts`. The desktop wires the workspace index + the SSH-project manager; the
+   * Server Edition has no relay host and wires none, which leaves `prepareRelayAttach` on its
+   * pre-fix behaviour (a bare local attach).
+   */
+  setRelayNodeResolver(resolve: RelayNodeResolver | null): void {
+    this.relayNodes = resolve
+  }
+
+  /**
+   * Prepare a relay-served attach to the session for `nodeId` (the phone's `pty.attach`).
+   *
+   * Replaces the bare `attachDetached`, which ran `tmux new-session -A` on the LOCAL socket for
+   * whatever id the phone named — so a node of an SSH project, tapped on the phone before the
+   * desktop had mounted it, came up as a local shell in this machine's `$HOME` (the invariant
+   * `PtyCreateOptions.requireRemote` states, broken from the one path that never set it), and a
+   * local node the phone happened to create first was created with no agent / account / cwd env,
+   * which tmux then ignores on every later attach.
+   *
+   * WHERE and WITH WHAT come only from this machine's records (`planRelayAttach`); the phone's
+   * optional `projectId` may only choose among them, or refuse. A remote node runs over its
+   * project's live ControlMaster (`requireRemote`, so a master or `ssh` that disappears in between
+   * spawns nothing), or is REFUSED with a sentence the phone can show.
+   *
+   * Split in three because the host must answer `fresh` before it sends the snapshot, and the
+   * snapshot before any live output: `sessionExists` → reply → `snapshot` → `attach`.
+   */
+  async prepareRelayAttach(
+    nodeId: string,
+    size: { cols: number; rows: number },
+    hint: { projectId?: string } = {}
+  ): Promise<RelayAttachPrep> {
+    const resolver = this.relayNodes
+    const placements = resolver?.placements(nodeId) ?? []
+    const live = this.liveSessionForPersistKey(nodeId)
+    const liveRemote: RelayRemoteRef | undefined = live?.sshRemote
+      ? {
+          conn: live.sshRemote.conn,
+          controlPath: live.sshRemote.controlPath,
+          hookEndpointPath: live.sshRemote.hookEndpointPath,
+          tmuxConfPath: live.sshRemote.tmuxConfPath,
+          remoteHome: live.sshRemote.remoteHome
+        }
+      : undefined
+    // Asked only when the records disagree (one id in a local AND an SSH project): then whichever
+    // session already exists wins, and a LOCAL one must be really local — a live remote client
+    // held by this process says nothing about the local socket.
+    const mixed =
+      placements.some(placementIsRemote) && placements.some((p) => !placementIsRemote(p))
+    const localSessionExists =
+      mixed && !liveRemote ? await this.sessionExists(nodeId).catch(() => false) : undefined
+    const plan = planRelayAttach({
+      placements,
+      projectHint: hint.projectId,
+      hintIsRemoteProject: hint.projectId ? !!resolver?.projectIsRemote(hint.projectId) : false,
+      refFor: (scope) => resolver?.refFor(scope),
+      liveRemote,
+      sshAvailable: !!findSsh(),
+      localSessionExists
+    })
+    if (plan.kind === 'refuse') return { kind: 'refused', reason: plan.reason, message: plan.message }
+    const options: PtyCreateOptions = {
+      ...plan.options,
+      persistKey: nodeId,
+      cols: size.cols,
+      rows: size.rows
+    }
+    const refused = this.spawnRefusal(options)
+    if (refused) {
+      return {
+        kind: 'refused',
+        reason: refused === 'ssh' ? 'no-ssh' : 'codex-account',
+        message:
+          refused === 'ssh'
+            ? 'This session lives on a remote host this computer cannot reach right now. Nothing was started here.'
+            : "This session's Codex account is not available on this computer. Nothing was started here."
+      }
+    }
+    // A stray LOCAL `nt-<id>` for a node that only ever lived remotely is what the pre-fix relay
+    // attach left behind. It is never attached from here again, and never killed either (it may
+    // hold work someone typed into it): say so where an operator will find it.
+    if (plan.kind === 'remote' && !mixed && this.tmuxPath && !live) {
+      void this.strictTmuxVerdict(nodeId).then((v) => {
+        if (v === 'present')
+          console.warn(
+            `[relay] ${sessionName(nodeId)} exists on the LOCAL tmux socket but node ${nodeId} lives on ${plan.hostKey}; the phone was attached to the remote session and the local one was left untouched`
+          )
+      })
+    }
+    if (plan.kind === 'remote') {
+      const sshRemote = options.sshRemote as NonNullable<PtyCreateOptions['sshRemote']>
+      const name = sessionName(nodeId)
+      // A master whose connect is still setting up may JOIN a session the host positively lists
+      // (`new-session -A` on a live session only attaches), never CREATE one: a session created now
+      // would carry no hook/account env and no tmux.conf for life — the renderer's
+      // `waitForSshRemote` rule, applied here.
+      if (!plan.setupDone) {
+        const verdict = await this.remoteSessionVerdict(sshRemote, name).catch(() => 'unknown' as const)
+        if (verdict !== 'present') {
+          return {
+            kind: 'refused',
+            reason: 'still-connecting',
+            message: `This computer is still connecting to ${plan.hostKey}. Try again in a moment. Nothing was started here.`
+          }
+        }
+      }
+      return {
+        kind: 'ready',
+        remote: true,
+        sessionExists: async () =>
+          (await this.remoteSessionVerdict(sshRemote, name).catch(() => 'unknown' as const)) !== 'absent',
+        snapshot: async () => {
+          const ssh = findSsh()
+          if (!ssh) return ''
+          try {
+            const { stdout } = await runAsync(
+              ssh,
+              remoteCaptureVisibleArgs(sshRemote.conn, sshRemote.controlPath, name),
+              { encoding: 'utf-8', maxBuffer: 8 * 1024 * 1024 }
+            )
+            return parseVisibleCapture(stdout).screen
+          } catch {
+            return ''
+          }
+        },
+        attach: (sinks) => this.spawnRelayRemote(options, sinks)
+      }
+    }
+    return {
+      kind: 'ready',
+      remote: false,
+      sessionExists: () => this.sessionExists(nodeId),
+      snapshot: () => this.captureSnapshot(nodeId),
+      attach: async (sinks) => {
+        await resolveShellPath()
+        const overrides = await this.projectSpawnOverrides(options)
+        return this.spawnSession(options, null, sinks, undefined, overrides)
+      }
+    }
+  }
+
+  /** The remote half of `prepareRelayAttach`'s attach: the same pin / overrides / spawn-gate
+   *  sequence `spawnNew` runs for a remote node, then a co-attach (`sinks` ⇒ no `-D`). */
+  private async spawnRelayRemote(options: PtyCreateOptions, sinks: DetachedSinks): Promise<string> {
+    // Re-asked at spawn time: `spawnSession` falls through to the LOCAL branch without `ssh`.
+    if (this.spawnRefusal(options)) throw new Error('remote host unreachable — nothing was started')
+    const remote = options.sshRemote as NonNullable<PtyCreateOptions['sshRemote']>
+    const pinned: PtyCreateOptions = {
+      ...options,
+      sshRemote: {
+        ...remote,
+        conn: {
+          ...remote.conn,
+          identityAgentSock: await probeAgentSockToPin(remote.conn).catch(() => undefined)
+        }
+      }
+    }
+    const overrides = await this.projectSpawnOverrides(pinned)
+    const slot = await remotePtySpawnGate.acquire(remote.controlPath, { background: false })
+    let sessionId: string
+    try {
+      sessionId = this.spawnSession(pinned, null, sinks, undefined, overrides)
+    } catch (err) {
+      slot()
+      throw err
+    }
+    releaseSpawnSlotOnOutput(this.sessions.get(sessionId), slot)
+    return sessionId
   }
 
   /**
@@ -4958,6 +5223,157 @@ export class PtyManager {
   }
 
   /**
+   * How a live-link controller's input reaches this session's PANE (watch-link/pane-input.ts).
+   *
+   * Never through a tmux CLIENT: a byte written into a client's pty is that client's KEYBOARD, so
+   * the prefix would reach tmux (`C-b s` opens the session chooser) — and a watcher's own client is
+   * read-only besides. A tmux-backed session (local, or on the SSH host) is typed into with
+   * `send-keys -H` on the pane. The Windows session host, a direct Windows pane and the plain-shell
+   * fallback take PtyManager's ordinary write: there is no tmux client in between, so no key table.
+   * Zellij is refused: its key bindings are session-wide (zellij-backend.ts).
+   */
+  watcherInputRoute(sessionId: string): WatcherInputRoute {
+    const s = this.sessions.get(sessionId)
+    if (!s) return 'none'
+    if (s.zellij) return 'none' // session-wide key bindings: refused
+    if (s.sshRemote) return s.tmuxBacked ? 'ssh' : 'none'
+    if (s.sessionHost || s.nativeWindowsPane) return 'write'
+    if (s.tmuxBacked) return this.tmuxPath ? 'tmux' : 'none'
+    // A watcher's own client is read-only and always tmux-backed; were one ever not, writing into it
+    // would drop every byte, so it is refused rather than reported delivered.
+    if (s.watcherClient) return 'none'
+    return 'write' // the plain-shell fallback: the pty IS the shell
+  }
+
+  /**
+   * Deliver one chunk of a controller's input to the session's pane. Resolves whether it was
+   * delivered; never rejects. Serialized per session id: a second chunk starts only after the first
+   * settled, so keys and pastes reach the pane in the order they were typed. The Session is re-read
+   * inside each step (it can be gone by then → false), and the tmux name is resolved from it, never
+   * from the caller. A false is never retried here (a timed-out delivery may well have run).
+   *
+   * BOUNDED on every route, by a deadline PANE_INPUT_DEADLINE_MS after the chunk was HANDED OVER —
+   * the link host's own deadline, which runs from the same moment. The tmux and SSH routes are bounded
+   * already (`runWithStdin`: PROC_TIMEOUT_MS), the session host's request by its own timeout once
+   * connected — but its reconnect can wait on a host that is still starting, and a step that never
+   * settled would hold every later chunk behind it, to land long after the link host told its
+   * controller it was dropped. So a step gets only what is LEFT of its chunk's deadline (a chunk that
+   * waited 15 s behind a slow one has 5 s), answers false when it runs out (a late delivery may still
+   * land, as with any timed-out one), and a chunk with nothing left when its turn comes is dropped
+   * undelivered: whoever handed it over has given up on it.
+   *
+   * `isCurrent` (the link host's: its sender still controls, in the period it typed in) is asked right
+   * before the step runs — after any wait behind a slow step, immediately before the spawn or the
+   * write, nothing awaited in between: false (or a throw) and the chunk is never delivered (false).
+   * A chunk handed over while its sender controlled must not land after a stop or a demotion.
+   */
+  controlInput(sessionId: string, chunk: ControlInputChunk, isCurrent?: () => boolean): Promise<boolean> {
+    const handedAt = Date.now()
+    const prev = this.controlInputChains.get(sessionId) ?? Promise.resolve(true)
+    const step = prev
+      .then(() => {
+        const left = PANE_INPUT_DEADLINE_MS - (Date.now() - handedAt)
+        return left <= 0 ? false : settleWithin(this.deliverControlInput(sessionId, chunk, isCurrent), left)
+      })
+      .catch(() => false)
+    this.controlInputChains.set(sessionId, step)
+    void step.then(() => {
+      if (this.controlInputChains.get(sessionId) === step) this.controlInputChains.delete(sessionId)
+    })
+    return step
+  }
+
+  /** The tail of each session's `controlInput` chain; deleted when the tail settles. */
+  private readonly controlInputChains = new Map<string, Promise<boolean>>()
+
+  private async deliverControlInput(
+    sessionId: string,
+    chunk: ControlInputChunk,
+    isCurrent?: () => boolean
+  ): Promise<boolean> {
+    // The chunk arrives from a viewer over the network: its shape is checked, not assumed.
+    const c = chunk as { kind?: unknown; data?: unknown; text?: unknown } | null
+    const keys = c?.kind === 'keys' && typeof c.data === 'string'
+    const paste = c?.kind === 'paste' && typeof c.text === 'string'
+    if (!keys && !paste) return false
+    const s = this.sessions.get(sessionId)
+    const route = this.watcherInputRoute(sessionId)
+    if (!s || route === 'none') return false
+    // An empty key chunk is refused on every route (the tmux builder would have no bytes to type);
+    // a paste that sanitizes to nothing has nothing to do.
+    if (keys && (c.data as string).length === 0) return false
+    if (paste && sanitizePasteText(c.text as string).length === 0) return true
+    // Right before the spawn or the write (synchronous from here to it, on every route): a sender that
+    // stopped controlling while this chunk waited never gets it delivered. A throw reads as not current.
+    if (isCurrent) {
+      let current = false
+      try {
+        current = isCurrent() === true
+      } catch {
+        current = false
+      }
+      if (!current) return false
+    }
+    try {
+      switch (route) {
+        case 'tmux': {
+          const tmuxPath = this.tmuxPath
+          if (!tmuxPath || !s.persistKey) return false
+          const plan = controlInputPlan(TMUX_SOCKET, sessionName(s.persistKey), chunk)
+          if (!plan) return true
+          return await runPasteDelivery(plan, (args, input) => runWithStdin(tmuxPath, args, input))
+        }
+        case 'ssh': {
+          const ssh = findSsh()
+          if (!ssh || !s.sshRemote || !s.persistKey) return false
+          const { conn, controlPath } = s.sshRemote
+          const plan = remoteControlInputPlan(conn, controlPath, sessionName(s.persistKey), chunk)
+          if (!plan) return true
+          return await runPasteDelivery(plan, (args, input) => runWithStdin(ssh, args, input))
+        }
+        case 'write': {
+          if (chunk.kind === 'keys') {
+            this.write(null, sessionId, chunk.data)
+            return true
+          }
+          // A paste: framed only when the pane's app asked for bracketed paste, never with an Enter.
+          // The session host's and a direct Windows pane's no-Enter text path (core/settled-text.ts)
+          // writes at once — the screen-settle wait runs only before an Enter — and frames by the
+          // emulator's own `?2004h` state, which is `paste-buffer -p`'s contract.
+          if (s.nativeWindowsPane) return (await s.nativeWindowsPane.sendText(chunk.text, false)) === true
+          const name = s.persistKey ?? s.indexKey
+          if (s.sessionHost && name) return (await sessionHostSendKeys(sessionName(name), chunk.text, false)) === true
+          // A plain shell: no emulator here knows what the app asked for, so unframed (markers at an
+          // app that never asked would arrive as literal `[200~`).
+          this.write(null, sessionId, sanitizePasteText(chunk.text))
+          return true
+        }
+      }
+    } catch {
+      // A builder refusing a name it did not generate, or a pty that threw on write (it exited).
+      return false
+    }
+  }
+
+  /**
+   * Can a live link offer Control on this node? `unsupported` for a Zellij node (session-wide key
+   * bindings), or a node with no session on a machine whose new sessions are Zellij; `ok` when a
+   * session for it is live or released (its pane can be reached), or when a new node would be
+   * tmux-backed here; `unknown` otherwise (nothing to tell from yet).
+   */
+  nodeControlSupport(persistKey: string): ControlSupport {
+    const live = this.liveSessionForPersistKey(persistKey)
+    if (this.zellijKeys.has(persistKey) || live?.zellij) return 'unsupported'
+    if (live || this.released.has(persistKey)) return 'ok'
+    // No session here: a new one would be created in the SELECTED backend, and a Zellij one refuses
+    // control. (A node whose tmux session is warm but not held by this process reads the same way
+    // until it is mounted; the live branch above answers it then.)
+    if (this.zellijSelected()) return 'unsupported'
+    if (this.tmuxPath && this.getSettings().tmuxEnabled) return 'ok'
+    return 'unknown'
+  }
+
+  /**
    * Join a node's RUNNING session as a live link's viewer. It never starts one (`joinOnly`: a session
    * that cannot be confirmed is refused `unavailable: 'join-only'`), and it never votes on its size:
    *  - joining a Session held in this process casts no size vote (`sizeVote: false`) — the pty stays
@@ -5348,10 +5764,56 @@ export class PtyManager {
    * composition is exported, both callers use it, and the only thing left in this method is which
    * transport runs it.
    */
-  async sendText(persistKey: string, text: string, opts?: { enter?: boolean }): Promise<TextDeliveryResult> {
+  async sendText(
+    persistKey: string,
+    text: string,
+    opts?: { enter?: boolean; typedFor?: AgentId }
+  ): Promise<TextDeliveryResult> {
+    return this.serializePaneWrite(persistKey, () => this.sendTextNow(persistKey, text, opts))
+  }
+
+  /** Per-pane write chain: see `serializePaneWrite`. */
+  private paneWrites = new Map<string, Promise<unknown>>()
+
+  /**
+   * Run one write into a pane only after every earlier write into the SAME pane has finished.
+   * A typed chat prompt (core/typed-input.ts) takes seconds — one tmux paste per line, then a
+   * settle wait before its Enter — and a paste arriving in that window (an agent message, a
+   * reminder, dictation) would land between its lines and be submitted as part of it. So every
+   * `sendText` and `sendEnvelope` queues here instead of interleaving. Each write is itself bounded
+   * (process timeouts, a fixed number of settle polls), so a slow one delays the next, never wedges
+   * it; a failed one does not poison the chain.
+   */
+  private serializePaneWrite<T>(persistKey: string, run: () => Promise<T>): Promise<T> {
+    const key = sessionName(persistKey)
+    const prev = this.paneWrites.get(key) ?? Promise.resolve()
+    const next = prev.then(run, run)
+    const settled = next.then(
+      () => undefined,
+      () => undefined
+    )
+    this.paneWrites.set(key, settled)
+    void settled.then(() => {
+      if (this.paneWrites.get(key) === settled) this.paneWrites.delete(key)
+    })
+    return next
+  }
+
+  private async sendTextNow(
+    persistKey: string,
+    text: string,
+    opts?: { enter?: boolean; typedFor?: AgentId }
+  ): Promise<TextDeliveryResult> {
     const enter = opts?.enter ?? true
     const target = sessionName(persistKey)
     const live = this.liveSessionForPersistKey(persistKey)
+    // `typedFor` (the ⌘M chat view, set only by `sendChatPrompt`): deliver as keystrokes, not a
+    // paste — see core/typed-input.ts. Only a SUBMITTED prompt on a tmux backend; everything else
+    // keeps the paste path below.
+    if (opts?.typedFor !== undefined && enter) {
+      const typed = await this.sendTyped(persistKey, text, opts.typedFor)
+      if (typed !== null) return typed
+    }
     // A direct (non-persistent) Windows PTY has no session-host entry and no tmux: it is typed
     // into through the pane itself. Routing it to the session host below failed every time.
     if (live?.nativeWindowsPane) return live.nativeWindowsPane.sendText(text, enter)
@@ -5390,13 +5852,73 @@ export class PtyManager {
   }
 
   /**
+   * The typed half of `sendText` — `null` when this session's backend has no typed path (a direct
+   * Windows PTY, the Windows session host, Zellij, no tmux), so the caller falls back to the paste.
+   * Runs inside `serializePaneWrite`, so nothing else writes into the pane while it types.
+   *
+   * Typing takes seconds, so `sendChatPrompt`'s dialog check (made before the first keystroke) can
+   * be stale by the time the Enter goes: for an agent whose screen we can read, the screen is
+   * checked again right before the Enter, and a dialog that opened meanwhile gets no Enter — the
+   * text stays in the composer and the caller hears `pasted-not-submitted`.
+   */
+  private async sendTyped(persistKey: string, text: string, agentId: AgentId): Promise<TextDeliveryResult | null> {
+    const target = sessionName(persistKey)
+    const live = this.liveSessionForPersistKey(persistKey)
+    if (live?.nativeWindowsPane || this.isZellij(persistKey, live)) return null
+    const sshRemote = live?.sshRemote
+    let type: (stdin: string) => Promise<unknown>
+    let submit: () => Promise<unknown>
+    if (sshRemote) {
+      const ssh = findSsh()
+      if (!ssh) return false
+      type = (stdin) =>
+        runWithStdin(ssh, remoteTypedArgs(sshRemote.conn, sshRemote.controlPath, target, pasteBufferName()), stdin)
+      submit = () => runAsync(ssh, remoteTmuxEnterArgs(sshRemote.conn, sshRemote.controlPath, target))
+    } else if (live?.sessionHost || !this.tmuxPath) {
+      return null
+    } else {
+      const tmuxPath = this.tmuxPath
+      type = (stdin) =>
+        runTypedScript(localTypedArgs(TMUX_SOCKET, target, pasteBufferName()), stdin, localTypedEnv(tmuxPath))
+      submit = () => runAsync(tmuxPath, localTmuxEnterArgs(TMUX_SOCKET, target))
+    }
+    const ok = async (run: () => Promise<unknown>): Promise<boolean> => {
+      try {
+        await run()
+        return true
+      } catch {
+        return false
+      }
+    }
+    try {
+      return await typeThenSubmitWhenSettled(text, {
+        capture: async () => {
+          const screen = await this.captureSession(persistKey)
+          return screen === '' ? null : screen
+        },
+        type: (stdin) => ok(() => type(stdin)),
+        // An empty capture is not evidence of a dialog (the `sendChatPrompt` rule).
+        canSubmit: async () => {
+          if (!readsScreenDialogs(agentId)) return true
+          const screen = await this.captureSession(persistKey)
+          return screen === '' || screenGate(screen) === null
+        },
+        submit: () => ok(submit)
+      })
+    } catch {
+      return 'pasted-not-submitted'
+    }
+  }
+
+  /**
    * A prompt from the ⌘M chat view. For an agent whose screen we can read (`readsScreenDialogs`),
    * refused before anything is written when the agent's own UI owns the keyboard: such dialogs
    * (the folder-trust prompt, `/model`, one-time setup questions) fire no hook, so the chat view's
    * state gate cannot see them, and a paste into one swallowed the text while its Enter answered
    * the dialog. An empty capture (no session, a failed read) is not evidence of a dialog: the
-   * prompt is sent exactly as before. There is no second look before the Enter — `sendText`
-   * submits in the same step. Everything else is `sendText`, unchanged.
+   * prompt is sent exactly as before. A PASTED prompt submits in the same step; a TYPED one
+   * (`typesChatInput`, core/typed-input.ts) checks the screen again right before its Enter.
+   * Everything else is `sendText`, unchanged.
    */
   async sendChatPrompt(persistKey: string, text: string, agentId: string): Promise<ChatPromptResult> {
     if (readsScreenDialogs(agentId)) {
@@ -5404,7 +5926,10 @@ export class PtyManager {
       const refused = screen === '' ? null : screenGate(screen)
       if (refused !== null) return refused
     }
-    return this.sendText(persistKey, text)
+    // Typed, not pasted, for an agent whose composer is MEASURED to take M-Enter as a newline:
+    // Claude Code records a multi-line paste as <pasted_content>, which its model is told may not
+    // be the user's own words. Decided here from the agent id — never by a renderer-sent flag.
+    return typesChatInput(agentId) ? this.sendText(persistKey, text, { typedFor: agentId }) : this.sendText(persistKey, text)
   }
 
   /**
@@ -5745,6 +6270,10 @@ export class PtyManager {
    * (`buildEnvelope` can never return '', so this is a guard against a future caller, not a path.)
    */
   async sendEnvelope(persistKey: string, envelope: string, expected?: PaneOwner): Promise<boolean> {
+    return this.serializePaneWrite(persistKey, () => this.sendEnvelopeNow(persistKey, envelope, expected))
+  }
+
+  private async sendEnvelopeNow(persistKey: string, envelope: string, expected?: PaneOwner): Promise<boolean> {
     if (envelope.length === 0) return false
     const live = this.liveSessionForPersistKey(persistKey)
     if (this.isZellij(persistKey, live)) return false

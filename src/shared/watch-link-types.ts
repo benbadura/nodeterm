@@ -6,9 +6,12 @@ import type { WatchChatMessage, WatchLinkRole } from './watch-link/protocol'
 import { BIDI_CONTROL_CHARS } from './presence'
 export type { WatchChatMessage, WatchLinkRole }
 
-/** The expiry choices, in seconds: 15 min, 1 h (the default), 8 h, 24 h. No other value is accepted. */
-export const WATCH_LINK_TTLS = [900, 3600, 28800, 86400] as const
+/** The expiry choices, in seconds: 15 min, 1 h (the default), 8 h, 24 h, and Unlimited (`0`): no end
+ *  time, the link lives until it is stopped (`expiresAt: null`). No other value is accepted. */
+export const WATCH_LINK_TTLS = [900, 3600, 28800, 86400, 0] as const
 export type WatchLinkTtl = (typeof WATCH_LINK_TTLS)[number]
+/** The wire value of Unlimited. */
+export const UNLIMITED_TTL = 0
 export const DEFAULT_WATCH_LINK_TTL: WatchLinkTtl = 3600
 /** Active links per machine (spec D6). */
 export const MAX_LINKS_PER_MACHINE = 5
@@ -23,6 +26,9 @@ export interface CreateWatchLinkRequest {
   ttlSeconds: WatchLinkTtl
   label: string
   title: string
+  /** A Control link's password, required for that role (`controlPasswordProblem` must pass) and
+   *  ignored for the others. Core keeps only its hash; the plaintext is never stored or logged. */
+  password?: string
 }
 
 /**
@@ -42,7 +48,13 @@ export interface CreateWatchLinkRequest {
  *  - `unsupported` — this surface cannot create links: the Server Edition until it has a license
  *    layer ("Live links need a Pro license on this server — not available in the Server Edition
  *    yet", never an Upgrade button — R43), a relay tab ("Live links are created on the machine that
- *    runs this terminal"), a client that is not the machine's owner, or an app that is quitting.
+ *    runs this terminal"), a client that is not the machine's owner, or an app that is quitting. Also
+ *    a Control link whose password this machine could not hash (scrypt failed; nothing was created
+ *    anywhere): the desktop copy names no cause, and every other kind names one that is not it.
+ *  - `ttl-unsupported` — the API refused an Unlimited link (an older server): pick an end time.
+ *  - `control-unsupported` — a Control link on a terminal that cannot take typed input safely (a
+ *    Zellij session, whose key bindings would reach every session).
+ *  - `bad-password` — a Control link without an acceptable password.
  */
 export type CreateWatchLinkError =
   | 'not-entitled'
@@ -57,6 +69,9 @@ export type CreateWatchLinkError =
   | 'bad-request'
   | 'persist-failed'
   | 'unsupported'
+  | 'ttl-unsupported'
+  | 'control-unsupported'
+  | 'bad-password'
 export type CreateWatchLinkResult = { ok: true; link: WatchLinkView } | { ok: false; error: CreateWatchLinkError }
 
 export interface WatchLinkViewerView {
@@ -68,6 +83,19 @@ export interface WatchLinkViewerView {
    *  own (Windows' session host, no local tmux, Zellij) the terminal must be OPEN in this app. The
    *  owner is told ("Viewers are waiting — open this terminal in nodeterm to let them watch"). */
   waiting: boolean
+  /** Unlocked a Control link with its password: may type until it disconnects, is kicked, or the
+   *  owner turns typing off. Always false on the other roles. */
+  controlling: boolean
+  /** Typed in the last few seconds (the chip's "1 typing"). */
+  typing: boolean
+}
+
+/** A Control link's owner-side state. */
+export interface WatchLinkControlView {
+  /** Typing is on: a viewer with the password may unlock. */
+  enabled: boolean
+  /** Too many wrong passwords across the link: nobody may unlock until the owner allows it again. */
+  locked: boolean
 }
 
 export interface WatchLinkView {
@@ -77,7 +105,8 @@ export interface WatchLinkView {
   label: string
   title: string
   createdAt: number
-  expiresAt: number
+  /** Epoch ms; null for an Unlimited link (no end time). */
+  expiresAt: number | null
   /** The full link, secret included (in the fragment). Owner clients only; never logged. */
   url: string
   /** `live` = listening or full; `reconnecting` = the relay leg is down or not yet up (chip "offline");
@@ -85,6 +114,8 @@ export interface WatchLinkView {
    *  may not relay) — the chip "refused". */
   status: 'live' | 'reconnecting' | 'refused'
   viewers: WatchLinkViewerView[]
+  /** Present exactly for a Control link. */
+  control: WatchLinkControlView | null
 }
 
 export type WatchLinkNotice =
@@ -98,6 +129,15 @@ export type WatchLinkNotice =
    *  sealed earlier stay saved — sent after that create). Copy: "only the link just created is not
    *  saved" unless the renderer knows it is the first cause. */
   | { kind: 'not-persistent' }
+  /** A viewer unlocked a Control link. `name` is the name it gave itself: a claim, shown as one. */
+  | { kind: 'control-taken'; linkId: string; nodeId: string; title: string; name: string }
+  /** Too many wrong passwords: control is locked on that link until the owner allows it again. */
+  | { kind: 'control-locked'; linkId: string; nodeId: string; title: string }
+
+/** Whether a node's terminal can take a Control link's input: `ok` (tmux, the Windows session host, a
+ *  plain shell), `unsupported` (Zellij — its key bindings are session-wide), or `unknown` (nothing
+ *  can tell right now; the dialog keeps Control offered and the create decides). */
+export type ControlSupport = 'ok' | 'unsupported' | 'unknown'
 
 /**
  * What "Stop all" reached. THIS machine's links always stop at once, before the answer; the answer
@@ -112,6 +152,18 @@ export type WatchLinkNotice =
  */
 export type RevokeAllOutcome = 'stopped' | 'no-entitlement' | 'failed' | 'unsupported'
 
+/**
+ * What an owner's change to a Control link did:
+ *  - `true` — applied and saved;
+ *  - `false` — refused, nothing changed (not a live Control link, a password the rule refuses, a hash
+ *    that failed, or a WIDENING change — typing on, allow again — whose write failed);
+ *  - `'unsaved'` — a NARROWING change (typing off, a new password) that is in force now but could not
+ *    be saved: it is never undone on a failed write (the owner's brake must not fail open), so it holds
+ *    until nodeterm quits and would be undone by a restart unless a later write lands first. Stopping
+ *    the link ends it for good.
+ */
+export type ControlChangeResult = boolean | 'unsaved'
+
 /** `window.nodeTerminal.watchLink`. Desktop: real (preload). Server Edition: real bridge, and create
  *  answers `unsupported` until that edition has a license layer. Relay tab: an inert stub. */
 export interface WatchLinkApi {
@@ -124,6 +176,16 @@ export interface WatchLinkApi {
   /** A Commenter link's owner reply; null when the link is not a Commenter link or the text is empty. */
   sendChat(linkId: string, text: string): Promise<WatchChatMessage | null>
   chatHistory(linkId: string): Promise<WatchChatMessage[]>
+  /** A Control link: turn typing on or off (`ControlChangeResult`: off is a narrowing change, on a
+   *  widening one). */
+  setControl(linkId: string, enabled: boolean): Promise<ControlChangeResult>
+  /** A Control link: replace its password (every current controller drops back to watching, and the
+   *  link-wide wrong count starts over). A narrowing change: `ControlChangeResult`. */
+  setPassword(linkId: string, password: string): Promise<ControlChangeResult>
+  /** A Control link locked by wrong passwords: allow unlocking again (and reset the count). */
+  allowControl(linkId: string): Promise<boolean>
+  /** Whether this node's terminal can take a Control link's input (the dialog asks once on open). */
+  controlSupport(nodeId: string): Promise<ControlSupport>
   /** The full list on every change, never a delta. */
   onState(cb: (links: WatchLinkView[]) => void): () => void
   onChat(cb: (linkId: string, msg: WatchChatMessage) => void): () => void

@@ -28,7 +28,7 @@ const ROWS = {
   },
   mobilePush: {
     title: 'Send push notifications to your paired phone',
-    keywords: ['push', 'phone', 'mobile', 'apns', 'ios', 'notification', 'approval', 'question', 'done', 'completed', 'needs you', 'live activity', 'live activities', 'dynamic island', 'lock screen', 'presence', 'idle', 'hold', 'defer', 'at this computer']
+    keywords: ['push', 'phone', 'mobile', 'apns', 'fcm', 'ios', 'android', 'notification', 'approval', 'question', 'done', 'completed', 'needs you', 'live update', 'live updates', 'live activity', 'live activities', 'ongoing notification', 'dynamic island', 'lock screen', 'presence', 'idle', 'hold', 'defer', 'at this computer']
   }
 }
 const ENTRIES = Object.values(ROWS)
@@ -294,19 +294,19 @@ export function NotificationsSection({ isActive }: { isActive: boolean }): React
             }
           />
           <FieldRow
-            label="Live Activities"
-            description="Keep a Lock Screen / Dynamic Island activity updated as a session works, needs you, or finishes."
+            label="Live updates on phone"
+            description="Keep a live status on your phone's lock screen updated as a session works, needs you, or finishes."
             control={
               <Switch
                 checked={mobileLiveActivities}
-                ariaLabel="Live Activities on your phone"
+                ariaLabel="Live updates on your phone"
                 onChange={(on) => update({ mobileLiveActivities: on })}
               />
             }
           />
           <FieldRow
             label="Hold phone alerts while you're at this computer"
-            description="Defer approval, question, and completed alerts while you're active here, then send them the moment you go idle or lock the screen. Live Activities are never held."
+            description="Defer approval, question, and completed alerts while you're active here, then send them the moment you go idle or lock the screen. Live updates are never held."
             control={
               <Switch
                 checked={mobilePushPresenceAware}

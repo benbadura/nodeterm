@@ -5,6 +5,7 @@
 // serialized into a project, a canvas op or the board — link state is not canvas content, and a
 // guard test (lib/live-link.guard.test.ts) keeps it out of every shared type. A reload rebuilds it
 // from `list()`; chat history comes back from `chatHistory()` (core keeps it in memory only).
+import { useEffect, useState } from 'react'
 import { create } from 'zustand'
 import type { NodeTerminalApi } from '@shared/types'
 import type { WatchChatMessage, WatchLinkNotice, WatchLinkView } from '@shared/watch-link-types'
@@ -50,10 +51,10 @@ function sameJson(a: unknown, b: unknown): boolean {
   return keys.every((k) => Object.prototype.hasOwnProperty.call(rb, k) && sameJson(ra[k], rb[k]))
 }
 
-/** Links whose thread is on screen right now (a popover's chat is mounted), counted per mount. A
- *  message that lands while its thread is shown is read the moment it arrives: it never counts as
- *  unread, so the chip's dot does not flash for one render (N2). Not store state: nothing renders
- *  from it. */
+/** Links whose thread someone can see right now (`useLinkThread`: a popover's or the Live chat
+ *  drawer's thread, in a visible, focused window), counted per mount. A message that lands while its
+ *  thread is seen is read the moment it arrives: it never counts as unread, so the chip's count does
+ *  not flash for one render (N2). Not store state: nothing renders from it. */
 const viewing = new Map<string, number>()
 
 /** Mark a link's thread as on screen; the returned function takes the mark back. */
@@ -147,6 +148,56 @@ export const useWatchLinks = create<WatchLinksState>((set) => ({
 
   markRead: (linkId) => set((s) => (s.unread[linkId] ? { unread: { ...s.unread, [linkId]: 0 } } : s))
 }))
+
+/** Someone can see this window: it is visible and has the focus. */
+function documentSeen(): boolean {
+  return typeof document !== 'undefined' && document.visibilityState === 'visible' && document.hasFocus()
+}
+
+/** `documentSeen`, re-evaluated when the window gains or loses focus or is hidden or shown. */
+function useDocumentSeen(): boolean {
+  const [seen, setSeen] = useState(documentSeen)
+  useEffect(() => {
+    const update = (): void => setSeen(documentSeen())
+    // `blur` is the window losing focus: answer false outright — `hasFocus()` during the event is not
+    // something to lean on.
+    const blur = (): void => setSeen(false)
+    update()
+    window.addEventListener('focus', update)
+    window.addEventListener('blur', blur)
+    document.addEventListener('visibilitychange', update)
+    return () => {
+      window.removeEventListener('focus', update)
+      window.removeEventListener('blur', blur)
+      document.removeEventListener('visibilitychange', update)
+    }
+  }, [])
+  return seen
+}
+
+/**
+ * The thread rule for a link's chat on screen — the chip's popover and the Live chat drawer, ONE
+ * definition. A message counts as read only while someone can SEE it: the thread is mounted AND the
+ * window is visible and focused (a pinned drawer stays mounted behind another app, and the chip's
+ * count is how the owner learns something arrived). While seen, what lands is read as it arrives
+ * (`viewLinkThread`, N2) and what arrived before is read (`markRead`, H21) — on open, and again each
+ * time the window comes back. Core's history is asked once (a reload, or messages pushed before this
+ * renderer subscribed — the store merges the two).
+ */
+export function useLinkThread(linkId: string, api: Pick<NodeTerminalApi['watchLink'], 'chatHistory'>): void {
+  const seen = useDocumentSeen()
+  useEffect(() => {
+    if (!seen) return
+    useWatchLinks.getState().markRead(linkId)
+    return viewLinkThread(linkId)
+  }, [linkId, seen])
+  useEffect(() => {
+    void api.chatHistory(linkId).then(
+      (m) => useWatchLinks.getState().setChat(linkId, m),
+      () => {}
+    )
+  }, [api, linkId])
+}
 
 /**
  * A PRIMITIVE signature of everything one node's chip shows (tone, label, title, unread count) —

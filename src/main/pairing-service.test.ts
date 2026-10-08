@@ -70,7 +70,10 @@ function assertTempHome(): void {
 assertTempHome()
 
 // Stamped exactly the way pairing minted them, so `filterAuthorizedKeys` really matches.
-const KEY_A = rewriteKeyComment('ssh-ed25519 AAAAblobAAAA phone-a@ios', 'dev-a')
+// dev-a is an iPhone paired BEFORE the rename (legacy `nodeterm-ios-` stamp, written literally);
+// dev-b was paired after it (stamped exactly the way pairing mints keys now). A revoke must find
+// both — the first is what every existing user's authorized_keys looks like.
+const KEY_A = 'ssh-ed25519 AAAAblobAAAA nodeterm-ios-dev-a'
 const KEY_B = rewriteKeyComment('ssh-ed25519 AAAAblobBBBB phone-b@ios', 'dev-b')
 // Not ours: no revoke may ever touch it (a fix that "passes" by truncating the file must fail).
 const KEY_OTHER = 'ssh-rsa AAAAlaptopblob jdub@laptop'
@@ -146,7 +149,7 @@ function gateReads(watched: string[]): void {
 }
 
 /** A key line the phone could really have sent: OpenSSH wire format the validator decodes. */
-function freshEd25519Line(): string {
+function freshEd25519Line(comment = 'phone@ios'): string {
   const name = Buffer.from('ssh-ed25519', 'ascii')
   const len = (n: number): Buffer => {
     const b = Buffer.alloc(4)
@@ -154,7 +157,7 @@ function freshEd25519Line(): string {
     return b
   }
   const blob = Buffer.concat([len(name.length), name, len(32), randomBytes(32)])
-  return `ssh-ed25519 ${blob.toString('base64')} phone@ios`
+  return `ssh-ed25519 ${blob.toString('base64')} ${comment}`
 }
 
 /** POST /pair the way the phone does (plaintext branch — no host key, so no `epk` envelope). */
@@ -214,7 +217,7 @@ describe('revokeDevice', () => {
 
     const keys = authKeys()
     expect(keys).not.toContain('nodeterm-ios-dev-a')
-    expect(keys).not.toContain('nodeterm-ios-dev-b')
+    expect(keys).not.toContain('nodeterm-mobile-dev-b')
     expect(keys).toContain(KEY_OTHER) // the user's own key was never in scope
     expect(deviceIds()).toEqual([])
     expect(agentJson().hostId).toBe('host-keep-me') // fields we don't own survive the rewrite
@@ -236,7 +239,7 @@ describe('revokeDevice', () => {
     await service.revokeDevice('dev-b')
 
     const keys = authKeys()
-    expect(keys).not.toContain('nodeterm-ios-dev-b')
+    expect(keys).not.toContain('nodeterm-mobile-dev-b')
     expect(keys).toContain('nodeterm-ios-dev-a') // the failed revoke really did fail
     expect(deviceIds()).toEqual(['dev-a'])
   })
@@ -300,7 +303,7 @@ describe('pairing POST vs revoke', () => {
       const { deviceId } = JSON.parse(respText) as { deviceId: string }
       const keys = authKeys()
       expect(keys).not.toContain('nodeterm-ios-dev-a') // the revoke stuck
-      expect(keys).toContain(`nodeterm-ios-${deviceId}`) // …and so did the pairing
+      expect(keys).toContain(`nodeterm-mobile-${deviceId}`) // …and so did the pairing
       expect(keys).toContain(KEY_OTHER)
       expect(deviceIds()).toEqual(['dev-b', deviceId])
     } finally {
@@ -350,7 +353,7 @@ describe('pairing remembers the phone’s relay device id', () => {
       // The local id still stamps the key line and still identifies the entry — the new field is
       // an addition, not a rename.
       expect(deviceId).not.toBe('phone-abc')
-      expect(authKeys()).toContain(`nodeterm-ios-${deviceId}`)
+      expect(authKeys()).toContain(`nodeterm-mobile-${deviceId}`)
     } finally {
       service.stop()
     }
@@ -410,5 +413,54 @@ describe('pairing remembers the phone’s relay device id', () => {
     } finally {
       service.stop()
     }
+  })
+})
+
+describe('pairing names the phone platform-neutrally', () => {
+  const nameOf = (id: string): string | undefined =>
+    ((agentJson().devices as DeviceEntry[] | undefined) ?? []).find((d) => d.id === id)?.name
+
+  async function pairWith(body: Record<string, unknown>): Promise<string> {
+    const service = createPairingService()
+    try {
+      const started = await service.start(() => {})
+      const { token, pairPort } = JSON.parse(started.payload) as { token: string; pairPort: number }
+      const respText = await post(pairPort, { token, ...body })
+      return (JSON.parse(respText) as { deviceId: string }).deviceId
+    } finally {
+      service.stop()
+    }
+  }
+
+  it('an iOS app pairing (no deviceName, nodeterm-ios key) is still listed as iPhone', async () => {
+    const deviceId = await pairWith({ publicKey: freshEd25519Line('nodeterm-ios') })
+    expect(nameOf(deviceId)).toBe('iPhone')
+    // ...and its key is stamped with the NEW comment, not the phone's own one.
+    expect(authKeys()).toContain(`nodeterm-mobile-${deviceId}`)
+    expect(authKeys()).not.toContain(`nodeterm-ios-${deviceId}`)
+  })
+
+  it('an Android pairing keeps the name it sent', async () => {
+    const deviceId = await pairWith({
+      publicKey: freshEd25519Line('nodeterm-android'),
+      deviceName: 'Android'
+    })
+    expect(nameOf(deviceId)).toBe('Android')
+  })
+
+  it('a nameless pairing from an unknown client is "Phone", never "iPhone"', async () => {
+    const deviceId = await pairWith({ publicKey: freshEd25519Line('someone@else') })
+    expect(nameOf(deviceId)).toBe('Phone')
+  })
+
+  it('a hostile multi-line name lands as one capped line', async () => {
+    const deviceId = await pairWith({
+      publicKey: freshEd25519Line('nodeterm-android'),
+      deviceName: `Evil\nName\r\n${'y'.repeat(500)}`
+    })
+    const stored = nameOf(deviceId) ?? ''
+    expect(stored).not.toMatch(/[\r\n]/)
+    expect(Array.from(stored).length).toBeLessThanOrEqual(64)
+    expect(stored.startsWith('Evil Name y')).toBe(true)
   })
 })

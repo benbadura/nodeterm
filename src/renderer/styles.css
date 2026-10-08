@@ -2447,6 +2447,7 @@ body,
 .term-node__close,
 .term-node__move-worktree,
 .term-node__hide-fanout,
+.term-node__share,
 .term-node__tidy-fanout {
   display: inline-flex;
   align-items: center;
@@ -2476,6 +2477,7 @@ body,
 .term-node__maximize:hover,
 .term-node__move-worktree:hover,
 .term-node__hide-fanout:hover,
+.term-node__share:hover:not(:disabled),
 .term-node__tidy-fanout:hover {
   background: rgba(var(--tint-rgb), 0.1);
   color: var(--text);
@@ -2487,7 +2489,8 @@ body,
   color: var(--danger);
 }
 
-.term-node__ai:disabled {
+.term-node__ai:disabled,
+.term-node__share:disabled {
   opacity: 0.6;
   cursor: default;
 }
@@ -3248,6 +3251,16 @@ body,
 .term-chat__hint {
   opacity: 0.6;
 }
+/* The view is reading the node's persisted launch id, not a hook-confirmed one (ChatPanel
+   `sessionFallback`): one quiet line, never an alarm — it is usually the right conversation. */
+.term-chat__fallback-note {
+  flex: 0 0 auto;
+  padding: 4px 12px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+  border-bottom: 1px solid rgba(var(--tint-rgb), 0.06);
+}
 .term-chat__msgs {
   flex: 1 1 auto;
   overflow-y: auto;
@@ -3325,6 +3338,18 @@ body,
   border-radius: 14px;
   background: rgba(var(--tint-rgb), 0.09);
   color: var(--text-strong);
+}
+/* Sent while the agent was working: it sits in the CLI's own queue until the transcript shows it
+   (ChatPanel's queuedRef). A dashed outline on the same bubble, dimmed, with a "Queued" caption. */
+.term-chat__msg--queued {
+  background: none;
+  border: 1px dashed rgba(var(--tint-rgb), 0.35);
+  color: var(--muted);
+}
+.term-chat__queued-label {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--muted);
 }
 .term-chat__msg--assistant {
   align-self: stretch;
@@ -3914,8 +3939,176 @@ body,
 }
 
 .term-node.collapsed .term-node__body,
-.term-node.collapsed .node-tags {
+.term-node.collapsed .node-tags,
+.term-node.collapsed .run-bar {
   display: none;
+}
+
+/* ── Run node toolbar (nodes/RunBar.tsx) ─────────────────────────────────────────────
+   A flex-none strip between the header and the terminal body; the body (flex: 1) shrinks under
+   it and the xterm refits through its ResizeObserver. No fill of its own, so it reads as part of
+   the node in every appearance (and paints nothing translucent under Liquid Glass). */
+.run-bar {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--text);
+}
+/* Terminal hidden (the default): the node is just the control rows. Same `display: none` path a
+   collapsed node takes, so xterm and the tmux client stay alive underneath. */
+.term-node:has(.run-bar--compact) .term-node__body {
+  display: none;
+}
+.run-bar--compact {
+  border-bottom: none;
+}
+.run-bar__row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.run-bar__select {
+  max-width: 190px;
+  min-width: 0;
+  height: 22px;
+  padding: 0 4px;
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  text-overflow: ellipsis;
+}
+.run-bar__select--folder {
+  font-weight: 600;
+}
+.run-bar__select--warn {
+  border-color: var(--warn);
+}
+.run-bar__pinned {
+  padding: 0 6px;
+  height: 22px;
+  line-height: 20px;
+  border: 1px dashed var(--border);
+  border-radius: 5px;
+  color: var(--muted);
+}
+.run-bar__sep {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+  margin: 0 2px;
+}
+.run-bar__spacer {
+  flex: 1;
+}
+.run-bar__btn,
+.run-bar__icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  font: inherit;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.run-bar__icon {
+  padding: 0 6px;
+}
+.run-bar__btn svg {
+  width: 12px;
+  height: 12px;
+}
+.run-bar__btn:hover:not(:disabled),
+.run-bar__icon:hover {
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+.run-bar__btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.run-bar__btn--run {
+  color: #fff;
+  background: var(--accent);
+  border-color: transparent;
+}
+.run-bar__btn--run:hover:not(:disabled) {
+  background: var(--accent);
+  filter: brightness(1.12);
+}
+.run-bar__btn--stop {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 50%, transparent);
+}
+.run-bar__stop-glyph {
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  background: currentColor;
+}
+.run-bar__btn--accent {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.run-bar__icon--on {
+  color: var(--accent);
+}
+.run-bar__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.run-bar__status {
+  min-width: 52px;
+  text-align: right;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.run-bar__status--running {
+  color: var(--success);
+}
+.run-bar__status--busy {
+  color: var(--accent);
+}
+.run-bar__status--failed {
+  color: var(--danger);
+}
+.run-bar__select--config {
+  max-width: 240px;
+}
+.run-bar__args {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+.run-bar__note {
+  font-size: 11px;
+}
+.run-bar__note--error {
+  color: var(--danger);
+}
+.run-bar__note--info {
+  color: var(--muted);
 }
 
 
@@ -7283,6 +7476,92 @@ body,
 .react-flow__node-group .group-node__actions,
 .react-flow__node-group .react-flow__resize-control {
   pointer-events: auto;
+}
+
+/* ---- Resize grab zones -------------------------------------------------------------------------
+   React Flow's resize lines are 1px and its corner handles 5px, so the resize cursor appeared only
+   on a hairline. Each control gets an invisible ::before hit region (the cursor and the press both
+   belong to the control); the visible line and handle are unchanged. HIG pointing-devices.md ›
+   "Add padding around interactive elements to create comfortable hit regions" — 12pt for an element
+   with a visible edge — and accessibility.md: desktop targets 20x20pt minimum, which the corners get.
+   - Edges: 12 screen px, biased OUTWARD (8 outside the border, 4 inside — and never more than 6
+     flow px inside), so the band takes as little as possible from header buttons and text.
+   - Corners: 20x20 screen px (14 outside, 6 inside, inner capped at 6 flow px), drawn after the lines so a corner wins where
+     they overlap, and covering the whole band intersection, so sliding along the border never
+     drops to the default cursor (HIG: contiguous hit regions).
+   - Sized in SCREEN px through `--nt-zoom` (lib/canvasZoomVar.ts); below zoom 0.3 the zone shrinks
+     with the node instead of swallowing a tiny one.
+   Exists only while the resizer renders, i.e. while the node is selected. */
+:root {
+  --nt-zoom: 1;
+}
+.react-flow__resize-control {
+  --rz-k: max(var(--nt-zoom), 0.3);
+  --rz-out: calc(8px / var(--rz-k));
+  /* The INNER part is also capped in flow px (6): zoomed out, 4 screen px is a big slice of a
+     small node's header — its drag area and its close/maximize buttons. */
+  --rz-in: min(calc(4px / var(--rz-k)), 6px);
+  /* Corner handles are already counter-scaled by React Flow (`scale: max(1/zoom, 1)`), so below
+     zoom 1 their flow px ARE screen px; only above it does the size need dividing. */
+  --rc-k: max(var(--nt-zoom), 1);
+  --rc-out: calc(14px / var(--rc-k));
+  /* Inner part: 6 screen px, at most 6 flow px (below zoom 1 the handle's own scale is 1/zoom). */
+  --rc-in: calc(6px * min(var(--nt-zoom), 1) / var(--rc-k));
+}
+/* The node's resize controls are a SIBLING of its root (so a glass root's backdrop-filter cannot
+   clip them), which puts the later-painted root over their inner half. Lift them above the root
+   and the terminal's hover guard (z 2); the kanban half-pill stays above them. */
+.react-flow__node > .react-flow__resize-control {
+  z-index: 3;
+}
+.react-flow__resize-control::before {
+  content: '';
+  position: absolute;
+}
+.react-flow__resize-control.line.left::before {
+  top: 0;
+  bottom: 0;
+  left: calc(-1 * var(--rz-out));
+  right: calc(-1 * var(--rz-in));
+}
+.react-flow__resize-control.line.right::before {
+  top: 0;
+  bottom: 0;
+  right: calc(-1 * var(--rz-out));
+  left: calc(-1 * var(--rz-in));
+}
+.react-flow__resize-control.line.top::before {
+  left: 0;
+  right: 0;
+  top: calc(-1 * var(--rz-out));
+  bottom: calc(-1 * var(--rz-in));
+}
+.react-flow__resize-control.line.bottom::before {
+  left: 0;
+  right: 0;
+  bottom: calc(-1 * var(--rz-out));
+  top: calc(-1 * var(--rz-in));
+}
+/* A handle's padding box is 5px, centred on the corner: offsets are from that centre. */
+.react-flow__resize-control.handle::before {
+  width: calc(var(--rc-out) + var(--rc-in));
+  height: calc(var(--rc-out) + var(--rc-in));
+}
+.react-flow__resize-control.handle.left::before {
+  left: calc(2.5px - var(--rc-out));
+}
+.react-flow__resize-control.handle.right::before {
+  left: calc(2.5px - var(--rc-in));
+}
+.react-flow__resize-control.handle.top::before {
+  top: calc(2.5px - var(--rc-out));
+}
+.react-flow__resize-control.handle.bottom::before {
+  top: calc(2.5px - var(--rc-in));
+}
+/* The paint-only copies (`.nt-resize-ghost`) carry no grab zone. */
+.react-flow__resize-control.nt-resize-ghost::before {
+  content: none;
 }
 
 /* Bound to a git worktree: a checkout, not a loose grouping. Solid, thicker border (the tint is
@@ -11655,8 +11934,7 @@ button.pull-checks__name {
 .live-chip:hover {
   background: color-mix(in srgb, var(--live-tone) 20%, transparent);
 }
-.live-chip__dot,
-.live-chip__unread {
+.live-chip__dot {
   flex: 0 0 auto;
   width: 6px;
   height: 6px;
@@ -11676,8 +11954,23 @@ button.pull-checks__name {
   --live-tone: var(--muted);
   color: var(--muted);
 }
+/* Unread chat: a COUNT (summed over the node's links), ink on an unread wash — the status-chip
+   recipe, so it reads on the default look and under Liquid Glass alike. Fits the 16px sidebar chip. */
 .live-chip__unread {
-  background: var(--state-unread);
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  border: 1px solid color-mix(in srgb, var(--state-unread) 70%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--state-unread) 28%, transparent);
+  color: var(--text);
+  font-size: 9px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 11px;
+  text-align: center;
 }
 .kanban-card__live,
 .kanban-modal__live {
@@ -11719,7 +12012,7 @@ button.pull-checks__name {
 .live-pop:focus {
   outline: none;
 }
-.live-pop p {
+:is(.live-pop, .live-chat__body) p {
   margin: 0;
 }
 .live-pop__link + .live-pop__link {
@@ -11746,13 +12039,13 @@ button.pull-checks__name {
   margin-top: 2px;
   overflow-wrap: anywhere;
 }
-.live-pop p.live-pop__status {
+:is(.live-pop, .live-chat__body) p.live-pop__status {
   margin-top: 6px;
   padding: 6px 8px;
   border-radius: 6px;
   background: color-mix(in srgb, var(--state-warning) 12%, transparent);
 }
-.live-pop p.live-pop__status--refused {
+:is(.live-pop, .live-chat__body) p.live-pop__status--refused {
   background: rgba(var(--tint-rgb), 0.06);
 }
 .live-pop__actions {
@@ -11760,12 +12053,12 @@ button.pull-checks__name {
   gap: 6px;
   margin: 8px 0;
 }
-.live-pop .confirm__btn.live-pop__btn {
+:is(.live-pop, .live-chat__body) .confirm__btn.live-pop__btn {
   padding: 3px 10px;
   border-radius: 6px;
   font-size: 12px;
 }
-.live-pop p.live-pop__error {
+:is(.live-pop, .live-chat__body) p.live-pop__error {
   margin: 4px 0;
   color: var(--danger);
 }
@@ -11781,10 +12074,10 @@ button.pull-checks__name {
   gap: 6px;
   padding: 2px 0;
 }
-.live-pop .live-pop__kick {
+:is(.live-pop, .live-chat__body) .live-pop__kick {
   margin-left: auto;
 }
-.live-pop p.live-pop__note {
+:is(.live-pop, .live-chat__body) p.live-pop__note {
   margin-top: 4px;
   font-size: 11px;
 }
@@ -11834,54 +12127,383 @@ button.pull-checks__name {
   padding: 4px 8px;
   font-size: 12px;
 }
-/* The create dialog (LiveLinkDialog): the `.confirm` shell, a little wider for the URL. */
-.confirm.live-dialog {
-  width: 460px;
+/* A Control link's owner controls in the popover (ControlSection): the Typing switch row, the
+   locked line with Allow control again, and the Change password field (a new one shown once). */
+.live-pop__control {
+  margin: 8px 0;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
 }
-.live-dialog .live-dialog__title {
-  flex: 0 0 auto;
-  margin-bottom: 10px;
-  font-weight: 600;
-  overflow-wrap: anywhere;
+.live-pop__locked {
+  margin-bottom: 8px;
 }
-.live-dialog__group {
+.live-pop__locked .live-pop__btn {
+  margin-top: 6px;
+}
+.live-pop__toggle {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px 14px;
-  margin: 0 0 10px;
-  padding: 0;
-  border: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.live-pop__password {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 8px;
+}
+.live-pop__password .confirm__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 4px 8px;
   font-size: 12px;
 }
-.live-dialog__group legend {
-  width: 100%;
-  margin-bottom: 4px;
-  padding: 0;
-  color: var(--muted);
+/* A Control link's password, wherever it is typed or shown (create dialog, popover, drawer):
+   monospace, so a 0 and an o, or a 1 and an l, never read alike. One rule for every field. */
+.live-dialog__password .confirm__input,
+.live-pop__password .confirm__input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+:is(.live-pop, .live-chat__body) p.live-pop__invalid {
+  margin: 4px 0 0;
+  color: var(--danger);
   font-size: 11px;
 }
-.live-dialog__group label {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+/* A viewer typing right now (a Control link): the working role, never animated (Idle energy). */
+.live-pop__typing {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--state-working);
+}
+/* The Live chat drawer (LiveChatDrawer): the Explorer drawer's shell and pin, with the popover's
+   owner controls inside it (the `:is(.live-pop, .live-chat__body)` rules above are shared). Raised
+   over the kanban card modal (scrim 55) while one is open — the card's LIVE chip opens it — whatever
+   the pin; pinned beside a pinned Explorer, docked one Explorer width (320px) and a gap to its left.
+   The `.drawer` shell is already a Liquid Glass text surface with its blur, and nothing inside paints
+   a surface token. Tokens only: the viewer-name hues come from the web page's table
+   (lib/liveChatLook) as `--live-name`, darkened toward the ink on the light theme, where the
+   page's near-black-tuned yellows and cyans would not read. */
+.drawer-overlay.drawer-overlay--raised {
+  z-index: 57;
+}
+.drawer-overlay--beside .drawer--pinned {
+  right: calc(var(--float-gap) + 320px + 8px);
+}
+.live-chat:focus {
+  outline: none;
+}
+.live-chat__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 14px 12px;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.live-chat__link {
+  flex: none;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.live-chat__body .confirm__input.live-chat__select {
+  margin: 0 0 8px;
+  padding: 5px 8px;
+  font-size: 12.5px;
+}
+.live-chat__linkhead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.live-chat__goto {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-text);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
   cursor: pointer;
 }
-.live-dialog__label {
-  display: block;
+.live-chat__goto:hover {
+  text-decoration: underline;
+}
+.live-chat__people {
+  flex: none;
+  max-height: 40%;
+  overflow-y: auto;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+/* A Viewer link has no chat: People takes the drawer. */
+.live-chat__people.live-chat__people--only {
+  flex: 1 1 auto;
+  max-height: none;
+  border-bottom: 0;
+}
+.live-chat__heading {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.live-chat__viewers {
+  margin: 4px 0;
+  padding: 0;
+  list-style: none;
+}
+.live-chat__viewers li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+.live-chat__chat {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding-top: 8px;
+}
+/* The list scrolls; the "N new messages" pill floats over its foot. */
+.live-chat__listwrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.live-chat__body p.live-chat__empty {
+  margin: 0 0 6px;
+}
+.live-chat__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+/* One dense line per message, like the viewer page: time, badge, name, text. */
+.live-chat__msg {
+  padding: 2px 0;
+  overflow-wrap: anywhere;
+}
+.live-chat__time {
+  margin-right: 6px;
   color: var(--muted);
   font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
-.live-dialog__label .confirm__input {
-  margin: 4px 0 10px;
-}
-/* The exposure warning: always visible, never a checkbox. A hue wash with ink text (the status-chip
-   recipe), so it reads the same on the default look and under Liquid Glass. */
-.live-dialog__warning {
-  margin: 0 0 10px;
-  padding: 8px 10px;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--state-warning) 12%, transparent);
+/* The owner's own line, marked by the HOST's word: ink on a success wash, the status-chip recipe. */
+.live-chat__badge {
+  display: inline-block;
+  margin-right: 5px;
+  padding: 0 5px;
+  border: 1px solid color-mix(in srgb, var(--state-success) 45%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--state-success) 16%, transparent);
   color: var(--text);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  vertical-align: 1px;
+}
+.live-chat__name {
+  color: var(--live-name, var(--text));
+  font-weight: 700;
+}
+.live-chat__msg--sharer .live-chat__name {
+  --live-name: var(--success);
+}
+:root[data-theme='light'] .live-chat__name {
+  color: color-mix(in srgb, var(--live-name, var(--text)) 55%, var(--text-strong));
+}
+.live-chat__colon {
+  color: var(--muted);
+}
+.live-chat__text {
+  color: var(--text);
+  white-space: pre-wrap;
+}
+.live-chat__body .confirm__btn.live-chat__more {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 3px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.live-chat__reply {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+.live-chat__body .confirm__input.live-chat__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 5px 8px;
+  font-size: 12.5px;
+}
+/* The create dialog (LiveLinkDialog), Figma's share-dialog shape on the `.confirm` shell: a head with
+   the node's title and ✕, then one grouped list of rows that each read as a sentence ("Anyone with
+   the link · can watch ▾"), the warnings, and the actions. */
+.confirm.live-dialog {
+  width: 440px;
+  padding: 14px 16px 16px;
+}
+.live-dialog__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+.live-dialog__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The head's ✕ and the password row's "new password": quiet icon buttons. */
+.live-dialog__close,
+.live-dialog__icon-btn {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.live-dialog__close svg,
+.live-dialog__icon-btn svg {
+  width: 14px;
+  height: 14px;
+}
+.live-dialog__close:hover:not(:disabled),
+.live-dialog__icon-btn:hover:not(:disabled) {
+  background: rgba(var(--tint-rgb), 0.08);
+  color: var(--text);
+}
+.live-dialog__close:disabled,
+.live-dialog__icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+/* The grouped list: a hairline box, hairlines between rows. */
+.live-dialog__rows {
+  display: flex;
+  flex-direction: column;
+  margin: 0 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.live-dialog__rows > * + .live-dialog__row {
+  border-top: 1px solid var(--border);
+}
+.live-dialog__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 4px 6px 4px 12px;
+  color: var(--text);
+  font-size: 13px;
+}
+.live-dialog__icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  color: var(--muted);
+}
+.live-dialog__icon svg {
+  width: 15px;
+  height: 15px;
+}
+.live-dialog__row-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.live-dialog__row .confirm__input {
+  min-width: 0;
+  margin: 0;
+  padding: 5px 8px;
+  font-size: 12.5px;
+}
+/* The password takes the row's width; its label only what it needs. */
+.live-dialog__row.live-dialog__password .live-dialog__row-label {
+  flex: none;
+}
+.live-dialog__row.live-dialog__password .confirm__input {
+  flex: 1 1 auto;
+}
+/* The name: an inline value like the menus' (right-aligned, no box) that shows its field on hover
+   and focus, so the row reads "Viewers see you as Enes" and still says it can be edited. */
+.live-dialog__label .confirm__input {
+  flex: 0 0 160px;
+  padding: 5px 10px;
+  border-color: transparent;
+  background: transparent;
+  text-align: right;
+}
+.live-dialog__label .confirm__input:hover:not(:disabled) {
+  border-color: var(--border);
+}
+.live-dialog__label .confirm__input:focus {
+  border-color: var(--accent);
+  background: rgba(var(--tint-rgb), 0.06);
+  text-align: left;
+}
+/* The password's validation line, inside the list under its row, aligned with the row's text. */
+.live-dialog__invalid {
+  margin: 0;
+  padding: 0 12px 8px 38px;
+  color: var(--danger);
+  font-size: 11.5px;
+}
+/* The typing warning (Control only): what typing can do is the one sentence on this dialog that must
+   stop the eye, so it keeps a wash. Ink text on it, so it reads the same under Liquid Glass. */
+.live-dialog__warning {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--state-error) 12%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+  /* It can name a long user@host, which has no break points. */
+  overflow-wrap: anywhere;
+}
+/* What watching exposes: always shown, for every role, as one quiet sentence. */
+.live-dialog__exposure {
+  margin: 0 0 12px;
+  color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -11891,20 +12513,163 @@ button.pull-checks__name {
   font-size: 12px;
   overflow-wrap: anywhere;
 }
+.live-dialog__note {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+/* The done step: "● Anyone with this link can watch until 15:42", the dot in the LIVE chip's tone. */
+.live-dialog__status {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 12px;
+  color: var(--text);
+  font-size: 12.5px;
+}
+.live-dialog__dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--state-error);
+  transform: translateY(-1px);
+}
 .live-dialog__url {
   display: flex;
   gap: 6px;
   align-items: center;
+  margin: 0 0 8px;
 }
 .live-dialog__url .confirm__input {
   flex: 1 1 auto;
   min-width: 0;
   margin: 0;
 }
-.live-dialog__note {
-  margin: 8px 0 12px;
+/* Copy link and Copy password line up, and "Copied!" does not shift the field. */
+.live-dialog__copy {
+  flex: none;
+  min-width: 124px;
+}
+.live-dialog__actions {
+  justify-content: space-between;
+}
+/* Stop sharing: a red text button on the left, away from Done. */
+.confirm__btn.live-dialog__stop {
+  /* The text lines up with the content edge above it; the hover wash still has room. */
+  margin-left: -10px;
+  padding-inline: 10px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--danger);
+}
+.confirm__btn.live-dialog__stop:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--state-error) 12%, transparent);
+}
+
+/* MenuSelect (components/MenuSelect.tsx): a row's value with a chevron, and its small menu. The menu
+   is absolutely positioned INSIDE the row and opaque: inside a dialog that is a backdrop root under
+   Liquid Glass, a translucent or blurred menu would show the dialog's own content through it. */
+.menu-select {
+  position: relative;
+  flex: none;
+}
+.menu-select__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 6px 5px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.menu-select__trigger svg {
+  width: 14px;
+  height: 14px;
   color: var(--muted);
-  font-size: 12px;
+}
+.menu-select__trigger:hover:not(:disabled),
+.menu-select__trigger[aria-expanded='true'] {
+  background: rgba(var(--tint-rgb), 0.08);
+}
+.menu-select__trigger:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.menu-select__menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 280px;
+  max-width: 320px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgb(var(--menu-rgb));
+  box-shadow: 0 12px 36px rgba(0, 0, 0, calc(0.55 * var(--shadow-k)));
+}
+.menu-select__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 10px 6px 4px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.menu-select__item:focus {
+  outline: none;
+}
+.menu-select__item.active {
+  background: var(--panel-header);
+}
+.menu-select__item.disabled {
+  cursor: not-allowed;
+}
+.menu-select__item.disabled .menu-select__label {
+  color: var(--muted);
+}
+.menu-select__check {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 18px;
+  color: var(--accent);
+}
+.menu-select__check svg {
+  width: 13px;
+  height: 13px;
+}
+.menu-select__text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.menu-select__label {
+  font-size: 13px;
+  line-height: 18px;
+}
+.menu-select__hint {
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.35;
 }
 /* "Share with team" (ShareTeamDialog): the `.confirm` shell, wider for the lists, with the body as
    the scrolling region so Share / Close stay on screen however long the lists are. */
@@ -12248,6 +13013,8 @@ button.pull-checks__name {
   text-overflow: ellipsis;
   cursor: pointer;
   backdrop-filter: blur(4px);
+  /* Over the node's resize controls (z 3). */
+  z-index: 4;
 }
 .kanban-node-pill:hover {
   filter: brightness(1.3);
@@ -16520,6 +17287,39 @@ body.focus-mode .dock:hover {
 }
 :root[data-nt-glass='on'] .react-flow__node:not(.react-flow__node-group) .react-flow__resize-control.line {
   border-color: var(--glass-edge) !important;
+}
+/* The live resize controls moved OUTSIDE the node root (direct children of the node wrapper) only
+   take the pointer; they paint nothing in any look. A control outside the root cannot reproduce
+   where the old one painted (under glass: against the root's padding box, cut by its rounded
+   clip; in every look: partly under the node's own body), so each node also renders a second,
+   paint-only <NodeResizer> in the old place inside the root, its controls classed
+   `.nt-resize-ghost` and taking no pointer — so no second resizer can ever start a drag.
+   Specific enough, and !important, to beat React Flow's inline colour and the glass overrides. */
+:root .flow-wrap .react-flow .react-flow__node:not(.react-flow__node-group) > .react-flow__resize-control:is(.handle, .line) {
+  background-color: transparent !important;
+  border-color: transparent !important;
+}
+.react-flow__resize-control.nt-resize-ghost {
+  pointer-events: none;
+}
+/* Link dots moved OUTSIDE a terminal's root (so a glass root's backdrop-filter, its own stacking
+   context, no longer buries them under the resize controls) keep the look they had while that
+   root clipped them: laid out against its PADDING box, so centred 1px inside the border, and
+   showing only their inner half. Scoped to exactly when the root's backdrop-filter is live — it
+   is dropped while the camera moves with "Keep blur while moving" off (.canvas-moving) and under
+   Reduce Transparency, and there nothing was clipped. A clip-path also clips hit testing, so the
+   outer half goes to the resize band exactly as before; the tooltip (above, growing inward) stays
+   inside the clip, so on a node narrower than it the tooltip is no longer cut at the node's far
+   edge as it was (not reproduced: the clip box cannot reach the node's width). */
+@media (prefers-reduced-transparency: no-preference) {
+  :root[data-nt-glass='on'] .flow-wrap:not(.canvas-moving) .react-flow__node > .bridge-handle--in {
+    left: 1px;
+    clip-path: inset(-48px -480px -48px 50%);
+  }
+  :root[data-nt-glass='on'] .flow-wrap:not(.canvas-moving) .react-flow__node > .bridge-handle--out {
+    right: 1px;
+    clip-path: inset(-48px 50% -48px -480px);
+  }
 }
 /* State stays visible without the accent colour: selection is a neutral ink outline; unread and
    attention keep their own glows (app state, not a per-node colour), and their border reads

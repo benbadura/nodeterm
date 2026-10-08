@@ -1,14 +1,15 @@
 // The browser half of a live link: the CLIENT role of src/core/relay/relay-socket.ts (handshake,
 // sealed frames, keepalive) plus the trust gate's client obligation (send our own trust:confirm,
-// open only once the host's arrives). Nothing here writes to the terminal: after the handshake it
-// sends only its own trust:confirm, keepalives, and the viewer's chat casts (`sendChat`). Whether a
-// chat cast is accepted is the link host's decision, and an obligation on it: the link host (Task 11)
-// accepts one only on a Commenter link. Nothing on this side enforces that.
+// open only once the host's arrives). After the handshake it sends only its own trust:confirm,
+// keepalives, and the viewer's casts: chat (`sendChat`) and, on a Control link, unlock / input /
+// release. Whether a cast is accepted is the link host's decision, and an obligation on it: chat only
+// on a Commenter or Control link, input only from a viewer that unlocked with the link's password.
+// Nothing on this side enforces that; `sendInput`'s size cap only keeps an oversized cast off the wire.
 import nacl from 'tweetnacl'
 import { b64ToBytes, bytesToB64, concatBytes, utf8 } from './bytes'
 import { hkdfSha256 } from './hkdf'
 import type { WatchLinkKeys } from './keys'
-import { WATCH_CHAT_CAST } from './protocol'
+import { INPUT_MAX, WATCH_CHAT_CAST, WATCH_INPUT_CAST, WATCH_RELEASE_CAST, WATCH_UNLOCK_CAST } from './protocol'
 import {
   NONCE_BYTES, RELAY_SESSION_INFO, ROLE_CLIENT, ROLE_HOST, TAG_RPC, TAG_TUNNEL_BIN, TAG_TUNNEL_TEXT,
   decodePtyFrame, openBox, parseTunnelJson, readHeader, sealBox, withHeader
@@ -44,6 +45,13 @@ export interface WatchClientEvents {
  */
 export interface WatchClient {
   sendChat(name: string, text: string): boolean
+  /** Ask to type, with the link's password. The answer is a `watch:control` event, not a return value. */
+  unlock(name: string, password: string): boolean
+  /** Typed bytes, sent as given. Refused here (false, nothing sent) when empty, not a string, or longer
+   *  than `INPUT_MAX` UTF-16 units. */
+  sendInput(data: string): boolean
+  /** Stop typing: back to watching. */
+  release(): boolean
   close(): void
   isOpen(): boolean
 }
@@ -202,11 +210,19 @@ export function connectWatchClient(opts: {
   })
   socket.send(JSON.stringify({ type: 'e2ee_hello', publicKeyB64: bytesToB64(keys.viewer.publicKey), nonceB64: bytesToB64(ourNonce) }))
 
+  function cast(method: string, args: unknown[]): boolean {
+    if (!opened || state !== 'ready') return false
+    return sendSealed(TAG_TUNNEL_TEXT, utf8(JSON.stringify({ t: 'cast', method, args })))
+  }
+
   return {
-    sendChat(name, text) {
-      if (!opened || state !== 'ready') return false
-      return sendSealed(TAG_TUNNEL_TEXT, utf8(JSON.stringify({ t: 'cast', method: WATCH_CHAT_CAST, args: [{ name, text }] })))
+    sendChat: (name, text) => cast(WATCH_CHAT_CAST, [{ name, text }]),
+    unlock: (name, password) => cast(WATCH_UNLOCK_CAST, [{ name, password }]),
+    sendInput(data) {
+      if (typeof data !== 'string' || data.length === 0 || data.length > INPUT_MAX) return false
+      return cast(WATCH_INPUT_CAST, [{ data }])
     },
+    release: () => cast(WATCH_RELEASE_CAST, []),
     close() {
       shutdown()
       socket.close()

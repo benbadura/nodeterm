@@ -143,6 +143,15 @@ describe('applyTail — unconfirmed optimistic sends (live reads)', () => {
     expect(texts(applyTail(t2, ID, page([say(0, 'q'), say(300, rec2, 'user')], 0), { carryUnconfirmed: true }))).toEqual(['q', rec2])
   })
 
+  it('a typed send recorded with its tabs as spaces still confirms it', () => {
+    const t = base([say(0, 'q'), say(undefined, 'col1\tcol2\nnext line', 'user')], 0)
+
+    const out = applyTail(t, ID, page([say(0, 'q'), say(300, 'col1 col2\nnext line', 'user')], 0), { carryUnconfirmed: true })
+
+    expect(texts(out)).toEqual(['q', 'col1 col2\nnext line'])
+    expect(out.messages.every((m) => m.key !== undefined)).toBe(true)
+  })
+
   it('matches one-for-one, and never against a user line the thread already had', () => {
     // An OLD "yes" (key 100, already rendered) must not confirm the NEW unconfirmed "yes".
     const t = base([say(100, 'yes', 'user'), say(undefined, 'yes', 'user'), say(undefined, 'yes', 'user')], 100)

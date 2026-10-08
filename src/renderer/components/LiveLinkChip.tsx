@@ -92,7 +92,13 @@ export const LiveLinkChip = memo(function LiveLinkChip({
         {/* The broadcast dot is the LIVE state's (spec: `● LIVE`); offline and refused carry none. */}
         {view.tone === 'live' && <span className="live-chip__dot" aria-hidden="true" />}
         {view.label}
-        {unread > 0 && <span className="live-chip__unread" aria-hidden="true" />}
+        {/* A COUNT, summed over the node's links (a dot said "something", never how much). The
+            button's aria-label carries it in words. */}
+        {unread > 0 && (
+          <span className="live-chip__unread" aria-hidden="true">
+            {unread > 99 ? '99+' : unread}
+          </span>
+        )}
       </button>
       {anchor && <LiveLinkPopover nodeId={nodeId} anchor={anchor} onClose={close} />}
     </>

@@ -12,7 +12,7 @@ import { useWatchLinks } from '../../../state/watchLinks'
 import {
   formatRemaining,
   NOT_IN_OPEN_PROJECT,
-  ROLE_LABEL,
+  ROLE_NAME,
   SERVER_EDITION_UNSUPPORTED,
   showsStopAll,
   statusLine,
@@ -67,7 +67,7 @@ function LinkRow({ link, now, projects }: { link: WatchLinkView; now: number; pr
           <span className="text-muted"> · {liveLinkProjectLabel(projects, link.nodeId)}</span>
         </div>
         <div className="text-xs text-muted">
-          {ROLE_LABEL[link.role]} · {link.viewers.length} watching · {formatRemaining(link.expiresAt, now)}
+          {ROLE_NAME[link.role]} · {link.viewers.length} watching · {formatRemaining(link.expiresAt, now)}
         </div>
         {status && <div className="text-xs text-muted">{status}</div>}
         {error && (

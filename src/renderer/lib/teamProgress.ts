@@ -115,6 +115,39 @@ function sameStations(a: readonly TeamStation[], b: readonly TeamStation[]): boo
 }
 
 /**
+ * Rule 1 as a map: every node a rope says was OPENED, to the node that opened it, in rope order.
+ * Wait ropes never name an opener; the first opener rope into a node claims it; a node that records
+ * its opener (`recordedOf`) is claimed only by that opener's rope. A claim stands whether or not
+ * its source is still on the canvas — a stored (unpruned) file can still hold the rope of an opener
+ * that was deleted, and the caller decides what a dead source means.
+ *
+ * ONE definition, read by team progress (`stationsByOpener`) and by the canvas layout
+ * (`tidyCanvas` / `lineageLayers` in state/workspace), so "who opened this node" cannot answer one
+ * way on the ring and another way when the canvas is tidied.
+ */
+export function openerByTarget(
+  ropes: unknown,
+  recordedOf: (target: string) => string | undefined
+): Map<string, string> {
+  const out = new Map<string, string>()
+  if (!Array.isArray(ropes)) return out
+  for (const raw of ropes) {
+    const rope = readOpenerRope(raw)
+    if (!rope || out.has(rope.target)) continue
+    const recorded = recordedOf(rope.target)
+    if (recorded && recorded !== rope.source) continue
+    out.set(rope.target, rope.source)
+  }
+  return out
+}
+
+/** The opener a node records, read off live node data (`data.openedBy`), checked like the
+ *  serialized field: an id we would address, and not the node itself. */
+export function recordedOpenerOf(node: { id: string; data?: { openedBy?: unknown } } | undefined): string | undefined {
+  return node ? recordedOpener({ id: node.id, kind: undefined, openedBy: node.data?.openedBy }) : undefined
+}
+
+/**
  * Stations grouped by the node that opened them (rule 1 above), in rope order. Pass the previous
  * result to keep each group's array identity — and the map's own identity — when nothing changed:
  * the canvas recomputes this on node changes, and a fresh array per render would defeat the card's
@@ -130,28 +163,18 @@ export function stationsByOpener(
     if (n && typeof n.id === 'string' && n.kind === 'terminal') sessions.set(n.id, n)
   }
   const grouped = new Map<string, TeamStation[]>()
-  if (Array.isArray(ropes) && sessions.size > 0) {
-    const opened = new Set<string>()
-    for (const raw of ropes) {
-      const rope = readOpenerRope(raw)
-      if (!rope || opened.has(rope.target)) continue
-      // A recorded opener names the one rope that may claim this node (rule 1); any other rope
-      // into it is passed over, not allowed to claim it first.
-      const recorded = recordedOpener(sessions.get(rope.target))
-      if (recorded && recorded !== rope.source) continue
-      // The first opener rope into a target claims it, whether or not its source is still here —
-      // a stored (unpruned) file can still hold the rope of an opener that was deleted.
-      opened.add(rope.target)
-      const node = sessions.get(rope.target)
-      if (!node || !sessions.has(rope.source)) continue
-      const list = grouped.get(rope.source) ?? []
+  if (sessions.size > 0) {
+    for (const [target, source] of openerByTarget(ropes, (id) => recordedOpener(sessions.get(id)))) {
+      const node = sessions.get(target)
+      if (!node || !sessions.has(source)) continue
+      const list = grouped.get(source) ?? []
       list.push({
-        id: rope.target,
+        id: target,
         title: typeof node.title === 'string' ? node.title : '',
         ...(typeof node.agentId === 'string' && node.agentId ? { agentId: node.agentId } : {}),
         queued: !!node.queued
       })
-      grouped.set(rope.source, list)
+      grouped.set(source, list)
     }
   }
   const out = new Map<string, readonly TeamStation[]>()

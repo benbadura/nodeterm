@@ -80,6 +80,11 @@ export function licenseSentence(detail: LicenseDetail | null): string {
     // subscription, and a user who wants to know when it renews has only one place to look.
     return `Pro on ${thisMachine()} comes from the App Store subscription on your paired phone, so there is no license key or device count to show here. That subscription is managed by Apple, not by nodeterm: to see when it renews or to cancel it, open the App Store on that phone and go to Subscriptions in your account.`
   }
+  if (detail.source === 'google') {
+    // The Play twin of the App Store branch above, for the same reasons: the zeros are "not
+    // applicable", and the term is managed by Google — we cannot renew, extend or cancel it.
+    return `Pro on ${thisMachine()} comes from the Google Play subscription on your paired phone, so there is no license key or device count to show here. That subscription is managed by Google, not by nodeterm: to see when it renews or to cancel it, open the Play Store on that phone and go to Payments & subscriptions → Subscriptions.`
+  }
   if (detail.source === 'free') {
     // A defensive value. Say only what is certain — where it came from is not.
     return 'Pro on this device is not backed by a license key.'

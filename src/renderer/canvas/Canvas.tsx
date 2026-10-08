@@ -9,6 +9,7 @@ import { VisibleMiniMap } from './VisibleMiniMap'
 import { MinimapDock } from './MinimapDock'
 import { keepGlassBlurWhileMoving } from '../lib/glassContrast'
 import { LINK_ENDPOINT_NOT_FOUND } from '@shared/canvas-link'
+import { arrangeArgsRefusal, isTopLevelGroupArg, TOP_ARRANGE_LAYOUTS } from '@shared/arrange-verb'
 import { createControlOpenBatch } from '../lib/controlOpenBatch'
 import { commitOwnedLaunchAttempt, registerLaunchCommit } from '../terminal/launch-attempt'
 import { hasLaunchWriter, launchCommand } from '../terminal/launch-command'
@@ -18,6 +19,7 @@ import { useMirrorIdentitySeed } from './useMirrorIdentitySeed'
 import { useShallow } from 'zustand/react/shallow'
 import { playSfx, primeSfx } from '@renderer/lib/sfx'
 import { fanoutStillWorking } from '@renderer/lib/completionAlert'
+import { publishCanvasZoom } from '@renderer/lib/canvasZoomVar'
 import {
   addEdge,
   applyEdgeChanges,
@@ -31,6 +33,7 @@ import {
   useEdgesState,
   useNodesState,
   useReactFlow,
+  useStoreApi,
   type Connection,
   type EdgeChange,
   type Viewport
@@ -103,6 +106,7 @@ import { DinoNode } from '../nodes/DinoNode'
 import { TriggerNode } from '../nodes/TriggerNode'
 import BrowserNode from '../nodes/BrowserNode'
 import { FilesNode } from '../nodes/FilesNode'
+import type { RunNodeConfig } from '@shared/run-config'
 import { normalizeAddress } from '../nodes/browserUrl'
 import VideoNode from '../nodes/VideoNode'
 import WebNode from '../nodes/WebNode'
@@ -116,6 +120,7 @@ import { Tooltip } from '../components/Tooltip'
 import {
   IconBranch,
   IconBroadcast,
+  IconChat,
   IconCanvasView,
   IconClose,
   IconCollapse,
@@ -126,6 +131,7 @@ import {
   IconFit,
   IconGear,
   IconGrid,
+  IconLineage,
   IconGroup,
   IconJump,
   IconKanban,
@@ -134,6 +140,7 @@ import {
   IconMinus,
   IconNote,
   IconPhone,
+  IconPlay,
   IconPlus,
   IconPower,
   IconProject,
@@ -158,6 +165,7 @@ import {
   SettingsPage,
   SourceControlPanel,
   ExplorerPanel,
+  LiveChatDrawer,
   ShortcutsPanel,
   OnboardingFlow,
   DictationOverlay,
@@ -246,11 +254,12 @@ import { UpgradeDialog } from '../components/UpgradeDialog'
 import { LiveLinkDialog } from '../components/LiveLinkDialog'
 import { requireProOr } from '../state/upgradeGate'
 import { startWatchLinkSync, useWatchLinks } from '../state/watchLinks'
-import { noticeText } from '../lib/liveLink'
+import { liveLinkNoticeEffect } from '../lib/liveLink'
 import {
   liveLinkCommands,
   liveLinkMenuItemsFor,
   liveLinkPrepare,
+  liveLinkRemoteFacts,
   openLiveLink,
   stopAllConfirm,
   stopAllLiveLinks,
@@ -410,9 +419,11 @@ import {
   clearEnvEligibility,
   restartEligibility,
   restartSessionId,
+  runBoundedBulkRestart,
   settleRestart,
   summarizeBulkRestart,
   type BulkRestartPlan,
+  type BulkRestartTask,
   type RestartOutcome
 } from '../terminal/agent-restart'
 import {
@@ -435,6 +446,15 @@ const sshDisconnect = (scopeId: string): Promise<unknown> =>
 import { opensInEditor } from '../lib/openTarget'
 import { displacedFilesPatch } from '../lib/filesNode'
 import { newEntryPath, parentDir } from '../lib/explorerCreate'
+import {
+  liveChatShown,
+  nextLiveChat,
+  readLiveChatLink,
+  readLiveChatPinned,
+  writeLiveChatLink,
+  writeLiveChatPinned,
+  type LiveChatState
+} from '../lib/liveChatPin'
 import {
   explorerIsOpen,
   nextExplorerPin,
@@ -660,6 +680,7 @@ import {
   recentlyClosedProjects,
   stateToReopenSnapshot
 } from '../lib/closedHistory'
+import { projectSwitchHint } from '../lib/projectSwitchHint'
 import { uuid } from '../lib/uuid'
 import { CANVAS_LAYOUTS_CAP, findLayoutByName, type CanvasLayout } from '@shared/canvas-layout'
 import { applyLayout, captureLayout } from '../lib/canvasLayout'
@@ -687,6 +708,11 @@ import { useContextWindow } from '../state/contextWindow'
 import { useSessionNaming } from '../state/sessionNaming'
 import { useSshServers } from '../state/sshServers'
 import { useSshConn } from '../state/sshConn'
+import {
+  HostIntegrationBanner,
+  IntegrationGrandfatherNotice,
+  IntegrationPromptBanner
+} from '../components/settings/IntegrationConsent'
 import { scopeFromKey, usageScopeKey } from '../lib/usageScope'
 import { useSystemAccount } from '../state/systemAccount'
 import { useEntitlement } from '../state/entitlement'
@@ -808,9 +834,20 @@ import {
   applyMutationToFlow,
   agentLaunchOverride,
   claudeLaunchCommand,
-  COLLAPSED_HEIGHT,
+  toggleCollapsed,
+  canToggleCollapse,
+  endMaximizeOnUserGeometry,
+  movedGestureEnds,
   alignNodes,
+  arrangeByLineage,
+  arrangeGroupChildren,
+  tidyCanvas,
   arrangeNodes,
+  fitAncestorChain,
+  groupArrangeRefusal,
+  GROUP_ARRANGE_LAYOUTS,
+  type GroupArrangeLayout,
+  lineageLayers,
   commonParentId,
   fitGroupToChildren,
   createAccountLoginNode,
@@ -823,6 +860,7 @@ import {
   createDinoNode,
   createTriggerNode,
   createFilesNode,
+  createRunNode,
   createDiffNode,
   createEditorNode,
   createGroupNode,
@@ -1930,6 +1968,10 @@ export function Canvas() {
     getNodesBounds
   } = useReactFlow()
 
+  // `--nt-zoom` on React Flow's root: the resize grab zones size themselves in screen px with it.
+  const rfStore = useStoreApi()
+  useEffect(() => publishCanvasZoom(rfStore), [rfStore])
+
   // Single "fit everything" path for every fit-view entry point (dock button, the built-in
   // Controls button, the ⌘K palette and the context menu) so they behave identically and there's
   // one place to tune. Solved per click against the CURRENT chrome layout and the CURRENT content
@@ -2039,6 +2081,12 @@ export function Canvas() {
   /** The active project runs on a remote host → every worktree affordance is off (see
    *  WORKTREE_SSH_HINT). Reactive, so the menus rebuild when the user switches projects. */
   const isSshProject = !!activeSshServer
+  /** The active SSH project's host, once it is CONNECTED — the host the consent banner asks about
+   *  (nothing is installed there until it is answered). */
+  const activeSshHostKey = useSshConn((c) => {
+    const id = useProjects.getState().activeProjectId
+    return activeSshServer && id && c.byProject[id] ? sshHostKey(activeSshServer) : null
+  })
   /**
    * ONE confirm dialog at a time — mirrored into a ref so the []-dep agent-control effect sees the
    * CURRENT dialogs (it closes over a stale `confirm`).
@@ -3636,19 +3684,63 @@ export function Canvas() {
   }, [api, persist])
 
   // ── Live links (Task 17) ────────────────────────────────────────────────────────────────────
-  // A read-only, expiring browser view of ONE terminal. The store (state/watchLinks) mirrors this
-  // machine's core registry — `window.nodeTerminal`, never a relay session's api: links are made on
-  // the machine that runs the terminal. Started ONCE per Canvas mount; without it the store stays
-  // empty and no LIVE chip ever appears. `not-persistent` stays on screen (it is shown after every
-  // create while links cannot be saved); the rest fade like any info strip.
+  // A browser view of ONE terminal. The store (state/watchLinks) mirrors this machine's core
+  // registry — `window.nodeTerminal`, never a relay session's api: links are made on the machine
+  // that runs the terminal. Started ONCE per Canvas mount; without it the store stays empty and no
+  // LIVE chip ever appears. What a notice does is lib/liveLink's `liveLinkNoticeEffect` (tested
+  // there): the info strip — `not-persistent` and `control-locked` stay on screen — and, for
+  // `control-taken` (a security event), an OS notification under the notification consent alone — not
+  // the agent-done preference — once per link per 5 s.
+  const liveNotifyAtRef = useRef(new Map<string, number>())
   useEffect(
     () =>
       startWatchLinkSync(window.nodeTerminal, (n) => {
-        const text = noticeText(n)
-        if (text) setNotice({ kind: 'info', text, sticky: n.kind === 'not-persistent' })
+        const fx = liveLinkNoticeEffect(n, useSettings.getState().settings, Date.now(), liveNotifyAtRef.current)
+        if (fx.strip) setNotice({ kind: 'info', ...fx.strip })
+        if (fx.os) void window.nodeTerminal.notify(fx.os)
       }),
     []
   )
+  // The Live chat drawer (lib/liveChatPin — the Explorer's pin pattern, its own keys): which link it
+  // follows and whether it is docked are this machine's view state, in localStorage only. Opened by
+  // the popover's "Open chat" (`nodeterm:live-chat`, `{ linkId }` — this is its ONE listener, pinned
+  // in lib/nodeterm-events.test.ts) and by the palette's "Live chat".
+  const [liveChat, setLiveChat] = useState<LiveChatState>(() => ({
+    pinned: readLiveChatPinned(),
+    dismissed: false,
+    open: false,
+    linkId: readLiveChatLink()
+  }))
+  // A primitive count, not the list: a push about one link's viewers must not re-render the canvas.
+  // A pinned drawer is rendered only while a link is live (`liveChatShown`); the pin is kept.
+  const liveLinkCount = useWatchLinks((s) => s.links.length)
+  const liveChatRef = useRef(liveChat)
+  liveChatRef.current = liveChat
+  useEffect(() => {
+    const on = (e: Event): void => {
+      const linkId = (e as CustomEvent<{ linkId?: unknown }>).detail?.linkId
+      if (typeof linkId !== 'string' || !linkId) return
+      // Open chat on a chip IS a pick: the drawer comes back to this link next time.
+      writeLiveChatLink(linkId)
+      setLiveChat((s) => nextLiveChat(s, { kind: 'open', linkId }))
+    }
+    window.addEventListener('nodeterm:live-chat', on)
+    return () => window.removeEventListener('nodeterm:live-chat', on)
+  }, [])
+  const pickLiveChatLink = useCallback((linkId: string) => {
+    writeLiveChatLink(linkId)
+    setLiveChat((s) => nextLiveChat(s, { kind: 'open', linkId }))
+  }, [])
+  const closeLiveChat = useCallback(() => setLiveChat((s) => nextLiveChat(s, { kind: 'close' })), [])
+  const toggleLiveChatPin = useCallback(() => {
+    setLiveChat((s) => {
+      const next = nextLiveChat(s, { kind: 'pin' })
+      writeLiveChatPinned(next.pinned)
+      return next
+    })
+  }, [])
+  /** True while a kanban card modal is open (either board): the drawer then sits above its scrim. */
+  const [cardModalOpen, setCardModalOpen] = useState(false)
   const [liveLinkDialog, setLiveLinkDialog] = useState<LiveLinkTarget | null>(null)
   const closeLiveLinkDialog = useCallback(() => setLiveLinkDialog(null), [])
   /** The facts the ONE availability rule reads, for the node's OWN project (H4): a node of a relay
@@ -3738,6 +3830,21 @@ export function Canvas() {
   /** R63: the create dialog's "only while open" note reads the LOCAL core's session protection — the
    *  core that hosts the link (never a relay tab's peer). Stable, so the dialog reads it once. */
   const readLocalPersistence = useCallback(() => localSession.api.pty.tmuxStatus(), [])
+  /** Where the dialog's node runs — R63 (`remoteNode`) and the machine the Control warning names
+   *  (`sshTarget`) — from the NODE's own SSH binding first, then its project's (lib/liveLinkEntry).
+   *  The node is read from the live canvas for the active project, else the stored copy. */
+  const liveLinkRemoteFor = useCallback((target: LiveLinkTarget) => {
+    const store = useProjects.getState()
+    const project = store.getProject(target.projectId)
+    return liveLinkRemoteFacts({
+      nodeId: target.nodeId,
+      projectId: target.projectId,
+      activeProjectId: store.activeProjectId,
+      live: nodesRef.current,
+      stored: project?.nodes,
+      projectSsh: project?.ssh?.server
+    })
+  }, [])
 
   /** R48: "Stop all" revokes every link of the LICENSE — other machines' included — and cannot be
    *  undone, so the palette asks first, with the same sentence and danger button as Settings. R62:
@@ -4551,6 +4658,8 @@ export function Canvas() {
     setNodes((ns) => (ns.some((n) => n.selected) ? ns.map((n) => ({ ...n, selected: false })) : ns))
   }, [ephSelId, setNodes])
 
+  // Ids mid-resize (a `resizing: true` change seen, its end not yet): see movedGestureEnds.
+  const resizingIdsRef = useRef(new Set<string>())
   const handleNodesChange: typeof onNodesChange = useCallback(
     (changes) => {
       // Ephemeral nodes (subagent / loop) live outside the managed state. Persist their drag
@@ -4610,9 +4719,12 @@ export function Canvas() {
         ? snapResizeChanges(managed, nodesRef.current, snapSettings.gridSize || GRID)
         : managed
       onNodesChange(snapped)
+      // A user drag/resize of a maximized node ends maximize mode where it now stands.
+      const ended = movedGestureEnds(managed, resizingIdsRef.current)
+      if (ended.size) setNodes((ns) => endMaximizeOnUserGeometry(ns, ended))
       if (snapped.some((c) => c.type !== 'select')) markDirty()
     },
-    [onNodesChange, markDirty, ephParentPosition]
+    [onNodesChange, setNodes, markDirty, ephParentPosition]
   )
 
   // Resolve a node's agent id, with a tags fallback for not-yet-migrated legacy nodes and a
@@ -6004,6 +6116,53 @@ export function Canvas() {
     },
     [setNodes, markDirty, activeProjectId, emptyNodePos, cwdForNewNodeIn, parentInto]
   )
+
+  /**
+   * A run node (see @shared/run-config and nodes/RunBar): a `.vscode/launch.json` configuration run
+   * in a terminal. Rooted in the frame's worktree or the project folder; the node's own folder
+   * picker can point it at any other checkout, so one project (say, the backend) can hold runs of
+   * several frontend checkouts. A cwd-less canvas asks for the folder up front. Local projects
+   * only — an SSH project's terminals run on the host, while the launcher, processes and
+   * simulators are this machine's.
+   */
+  const addRun = useCallback(
+    async (center?: { x: number; y: number }, groupId?: string) => {
+      const project = useProjects.getState().getProject(activeProjectId)
+      if (project?.ssh) {
+        setCopyError('Run configurations run on this machine — not in SSH projects yet.')
+        return
+      }
+      const dir = cwdForNewNodeIn(groupId) ?? project?.cwd ?? (await window.nodeTerminal.dialog.selectFolder())
+      if (!dir) return
+      setNodes((ns) => {
+        const node = createRunNode(ns.length, { projectDir: dir, reloadOnSave: true }, center ?? emptyNodePos())
+        return [...ns, groupId ? parentInto(node, groupId) : node]
+      })
+      markDirty()
+    },
+    [setNodes, markDirty, activeProjectId, emptyNodePos, cwdForNewNodeIn, parentInto]
+  )
+
+  // A compound's other members (RunBar's Run on a compound): one run node each, placed to the
+  // right of the node that ran it, in its frame, starting immediately — VS Code starts a compound's
+  // configurations together.
+  useEffect(() => {
+    const onOpenRun = (e: Event): void => {
+      const d = (e as CustomEvent<{ sourceNodeId?: string; configs?: RunNodeConfig[] }>).detail
+      const src = nodesRef.current.find((n) => n.id === d?.sourceNodeId)
+      if (!src || !Array.isArray(d?.configs) || d.configs.length === 0) return
+      const w = src.measured?.width ?? (src.width as number) ?? 640
+      const added = d.configs.slice(0, 8).map((cfg, i) => {
+        const node = createRunNode(nodesRef.current.length + i, cfg, undefined, { autoStart: true })
+        node.position = { x: src.position.x + (w + 40) * (i + 1), y: src.position.y }
+        return src.parentId ? { ...node, parentId: src.parentId, extent: 'parent' as const } : node
+      })
+      setNodes((ns) => [...ns, ...added])
+      markDirty()
+    }
+    window.addEventListener('nodeterm:open-run-config', onOpenRun)
+    return () => window.removeEventListener('nodeterm:open-run-config', onOpenRun)
+  }, [setNodes, markDirty])
 
   const addSticky = useCallback(
     (center?: { x: number; y: number }, groupId?: string) => {
@@ -8608,19 +8767,33 @@ export function Canvas() {
       onConfirm: () => {
         setConfirm(null)
         void (async () => {
-          const outcomes: RestartOutcome[] = []
-          // Sequential on purpose (spec): each restart types into its own pane and then verifies
-          // the echo of the resume line, and the whole canvas shares one PTY transport. The user
-          // gets ONE notice at the end rather than a progress UI — the run is a handful of nodes
-          // and each is visibly restarting in its own pane meanwhile.
-          for (const id of plan.runnable) {
-            const fn = agentRestartFn(id)
-            // Unmounted since the plan was made: 'not-eligible' is folded into the no-session
-            // skips by summarizeBulkRestart, so it is still counted. `settleRestart` turns a
-            // REJECTED restart into a counted failure — an escaping rejection here would abandon
-            // every node after it and swallow the summary the user confirmed this run for.
-            outcomes.push(fn ? await settleRestart(fn) : 'not-eligible')
-          }
+          const total = plan.runnable.length
+          setNotice({ kind: 'info', text: `Restarting 0/${total}…`, sticky: true })
+
+          const activeProject = useProjects.getState().getProject(useProjects.getState().activeProjectId)
+          const projectHostKey = activeProject?.ssh ? sshHostKey(activeProject.ssh.server) : undefined
+
+          const tasks: BulkRestartTask[] = plan.runnable.map((id) => {
+            const n = nodesRef.current.find((node) => node.id === id)
+            const nodeHostKey = n?.data.ssh ? sshHostKey(n.data.ssh as SshServer) : projectHostKey
+            return {
+              id,
+              hostKey: nodeHostKey,
+              run: async () => {
+                const fn = agentRestartFn(id)
+                return fn ? await settleRestart(fn) : 'not-eligible'
+              }
+            }
+          })
+
+          const outcomes = await runBoundedBulkRestart(tasks, {
+            onProgress: (completed, totalCount) => {
+              if (completed < totalCount) {
+                setNotice({ kind: 'info', text: `Restarting ${completed}/${totalCount}…`, sticky: true })
+              }
+            }
+          })
+
           // A line reporting failures must not fade itself out from under the user; a clean run
           // may. Same rule as the per-node notices above.
           setNotice({
@@ -8870,29 +9043,79 @@ export function Canvas() {
 
   // Pane-level "Tidy canvas": packs every top-level node (terminal, agent, sticky, editor, diff,
   // group frame — a frame moves as one unit, its children ride along untouched) into a
-  // non-overlapping grid via the same `arrangeNodes` selection/canvas-control already use.
-  // `arrangeNodes` no-ops on a mixed-container id set (workspace.ts commonParentId), which is why
-  // only top-level ids (`!n.parentId`) are collected here — a populated group frame would
-  // otherwise silently block the whole action. Sorted by current (y, x) first so the packed grid
-  // roughly preserves the canvas's existing reading order instead of falling back to array/
-  // persistence order (which puts every group frame first).
+  // non-overlapping layout, keeping each orchestrator at the top-left of the team it opened
+  // (`tidyCanvas`, state/workspace.ts — opener ropes only, lifted to the top-level unit; a canvas
+  // with no lineage gets exactly the reading-order grid this action always produced).
   const hasArrangeableNodes = useCallback((): boolean => {
     return nodesRef.current.filter((n) => !n.parentId).length >= 2
   }, [])
+  // The lineage ropes as the layouts read them: `controlEdges` is the live copy of what the
+  // project persists as `ropes` ("opened by" and `--after`), already re-marked at load by
+  // `markLegacyWaitRopes`. The rope id rides along — it is what tells a wait from an opener.
+  const lineageEdges = useCallback(
+    () => controlEdgesRef.current.map((e) => ({ id: e.id, source: e.source, target: e.target })),
+    []
+  )
   const arrangeAllNodes = useCallback(() => {
     if (isGlobalKanbanOpen() || isKanbanOpen(useProjects.getState().activeProjectId)) return
-    const targets = nodesRef.current
-      .filter((n) => !n.parentId)
-      .sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x)
-    // Fewer than 2 nodes: nothing to tidy — and running arrangeNodes anyway would still emit a
-    // fresh node array (a no-op position rewrite), triggering an undo entry + markDirty + a
-    // project.json write for a canvas that visibly didn't change.
-    if (targets.length < 2) return
-    const ids = targets.map((n) => n.id)
-    setNodes((ns) => arrangeNodes(ns, ids, { layout: 'grid' }))
+    const edges = lineageEdges()
+    // The SAME array means nothing moves (under 2 units, or already tidy): no undo entry, no
+    // project.json write. Decided against nodesRef BEFORE the write — see arrangeByLineageAction.
+    if (tidyCanvas(nodesRef.current as CanvasNode[], edges) !== nodesRef.current) {
+      setNodes((ns) => tidyCanvas(ns as CanvasNode[], edges))
+      markDirty()
+    }
+    fitAll()
+  }, [setNodes, markDirty, fitAll, lineageEdges])
+
+  // Whether the lineage tidy has anything to say. Asked when the menu OPENS so the row can be
+  // disabled with its reason instead of silently doing nothing on click: on a canvas nobody
+  // spawned anything into, every node is loose and the result would just be a worse Tidy canvas.
+  const hasLineageLayers = useCallback(
+    () => lineageLayers(nodesRef.current, lineageEdges()).layers.length > 0,
+    [lineageEdges]
+  )
+  // Lineage bands: one row per layer, growing downward, with the nodes no rope touches last.
+  // Mirrors arrangeAllNodes exactly — same kanban guard, same markDirty + fitAll — except that
+  // the refusal is `arrangeByLineage` returning the SAME array, which is also what keeps a
+  // no-op out of the undo stack and out of project.json.
+  const arrangeByLineageAction = useCallback(() => {
+    if (isGlobalKanbanOpen() || isKanbanOpen(useProjects.getState().activeProjectId)) return
+    const edges = lineageEdges()
+    // Decided against nodesRef BEFORE the write, never from inside the updater: a React updater
+    // runs when the state is processed, so a flag set in there is still false on the next line
+    // and markDirty/fitAll would never fire. The transform is pure, so asking it twice is free.
+    if (arrangeByLineage(nodesRef.current, edges) === nodesRef.current) return
+    setNodes((ns) => arrangeByLineage(ns, edges))
     markDirty()
     fitAll()
-  }, [setNodes, markDirty, fitAll])
+  }, [setNodes, markDirty, fitAll, lineageEdges])
+
+  // Why a group frame's contents cannot be organized, as the sentence its menu row shows — or
+  // null. The pure half is `groupArrangeRefusal`, which the `arrange --group` verb reads too, so
+  // the row's disabled reason and the CLI's refusal are one definition.
+  const groupArrangeHint = useCallback(
+    (groupId: string, layout: GroupArrangeLayout): string | null => {
+      const why = groupArrangeRefusal(nodesRef.current as CanvasNode[], groupId, layout, lineageEdges())
+      return why ? `${why[0].toUpperCase()}${why.slice(1)}.` : null
+    },
+    [lineageEdges]
+  )
+  // Organize ONE frame's own items and size the frame (and every ancestor frame) to hold them.
+  // Same refusal discipline as the two canvas tidies: decided against nodesRef BEFORE the write,
+  // and `arrangeGroupChildren` returning the SAME array is what keeps a no-op out of the undo
+  // stack and out of project.json. No `fitAll`: the frame's top-left stays where it was, so the
+  // thing the user just right-clicked must not slide out from under the cursor.
+  const arrangeGroupAction = useCallback(
+    (groupId: string, layout: GroupArrangeLayout) => {
+      if (isGlobalKanbanOpen() || isKanbanOpen(useProjects.getState().activeProjectId)) return
+      const opts = { layout, edges: lineageEdges(), grid: snapGridNow() }
+      if (arrangeGroupChildren(nodesRef.current as CanvasNode[], groupId, opts) === nodesRef.current) return
+      setNodes((ns) => arrangeGroupChildren(ns as CanvasNode[], groupId, opts))
+      markDirty()
+    },
+    [setNodes, markDirty, lineageEdges]
+  )
 
   /** Report a refusal the user cannot act on any other way. One dismiss button, no default. */
   const alertLayout = useCallback(
@@ -9099,22 +9322,7 @@ export function Canvas() {
 
   const toggleCollapseNodes = useCallback(
     (ids: string[]) => {
-      const set = new Set(ids)
-      setNodes((ns) =>
-        ns.map((n) => {
-          if (!set.has(n.id)) return n
-          const next = !n.data.collapsed
-          const expandedHeight =
-            (n.data.expandedHeight as number) ?? n.measured?.height ?? (n.height as number) ?? 300
-          const height = next ? COLLAPSED_HEIGHT : expandedHeight
-          return {
-            ...n,
-            height,
-            style: { ...n.style, height },
-            data: { ...n.data, collapsed: next, expandedHeight }
-          }
-        })
-      )
+      setNodes((ns) => toggleCollapsed(ns, ids))
       markDirty()
     },
     [setNodes, markDirty]
@@ -9900,6 +10108,7 @@ export function Canvas() {
       'canvas.goForward': () => { goForward(); return true },
       'canvas.fitAll': () => { fitAll(); return true },
       'canvas.tidy': () => { arrangeAllNodes(); return true },
+      'canvas.tidyLineage': () => { arrangeByLineageAction(); return true },
       // The kanban board's keys — the mounted board decides (and declines when the focused control
       // owns the key, or when no per-project board is up: Omni registers none). lib/boardKeys.
       'board.openCard': () => runBoardKey('open'),
@@ -10319,7 +10528,11 @@ export function Canvas() {
             }
           ] as MenuItem[])
         : []),
-      ...(isHidden('collapse', hidden)
+      ...(isHidden('collapse', hidden) ||
+      !ids.some((nid) => {
+        const n = nodesRef.current.find((nd) => nd.id === nid)
+        return !!n && canToggleCollapse(n)
+      })
         ? []
         : ([
             {
@@ -10836,6 +11049,8 @@ export function Canvas() {
         addSelectionToGroup(nodesRef.current as CanvasNode[], selectedIds, groupId) !==
           nodesRef.current
       const groupHidden = isHidden('group', useSettings.getState().settings.hiddenNodeMenuItems)
+      const tidyRefusal = groupArrangeHint(groupId, 'grid')
+      const lineageRefusal = groupArrangeHint(groupId, 'lineage')
       // The group frame has its own colors strip; it answers to the same "Colors" toggle as the
       // node menu, so hiding it in Settings hides it everywhere a right-click can reach it.
       return tidySeparators([
@@ -10873,6 +11088,24 @@ export function Canvas() {
         // `cwdForNewNodeIn` is what makes a frame per branch also mean a file tree per branch.
         { label: 'New file manager', icon: <IconExplorer />, onClick: () => addFiles(at, groupId) },
         { type: 'separator' },
+        // The two canvas tidies, one level down: organize THIS frame's own items and size the
+        // frame (and its ancestors) to hold them. Disabled WITH the reason rather than hidden —
+        // the pane menu's rule: a row that is off for an invisible reason teaches nothing.
+        {
+          label: 'Tidy group',
+          icon: <IconGrid />,
+          disabled: !!tidyRefusal,
+          hint: tidyRefusal ?? 'Pack the items in a grid and resize the group to fit.',
+          onClick: () => arrangeGroupAction(groupId, 'grid')
+        },
+        {
+          label: 'Arrange group by lineage',
+          icon: <IconLineage />,
+          disabled: !!lineageRefusal,
+          hint: lineageRefusal ?? 'One row per level: who opened whom, top to bottom.',
+          onClick: () => arrangeGroupAction(groupId, 'lineage')
+        },
+        { type: 'separator' },
         ...(isHidden('colors', useSettings.getState().settings.hiddenNodeMenuItems)
           ? []
           : ([{ type: 'colors', onPick: (c) => setNodesColor([groupId], c) }] as MenuItem[])),
@@ -10909,7 +11142,9 @@ export function Canvas() {
       agentCreationEntries,
       addSticky,
       addToExistingGroup,
-      groupSelection
+      groupSelection,
+      groupArrangeHint,
+      arrangeGroupAction
     ]
   )
 
@@ -10971,6 +11206,7 @@ export function Canvas() {
       web: (at) => void addWebView(at),
       sticky: (at) => addSticky(at),
       files: (at) => addFiles(at),
+      run: (at) => void addRun(at),
       dino: (at) => addDino(at),
       trigger: (at) => addTrigger(at),
       openFile: (at) => void openFileDialog(at),
@@ -10983,6 +11219,7 @@ export function Canvas() {
       openRemotePicker,
       addBrowser,
       addFiles,
+      addRun,
       addWebView,
       addSticky,
       addDino,
@@ -11027,6 +11264,21 @@ export function Canvas() {
           ...(hasArrangeableNodes()
             ? [{ label: 'Tidy canvas', icon: <IconGrid />, onClick: arrangeAllNodes } as MenuItem]
             : []),
+          // Same visibility gate as Tidy canvas, then disabled WITH the reason when this canvas
+          // has no lineage to lay out — a row that is off for an invisible reason teaches nothing.
+          ...(hasArrangeableNodes()
+            ? [
+                {
+                  label: 'Arrange by lineage',
+                  icon: <IconLineage />,
+                  disabled: !hasLineageLayers(),
+                  hint: hasLineageLayers()
+                    ? 'One row per level: who opened whom, top to bottom.'
+                    : 'Nothing on this canvas was opened by another node yet.',
+                  onClick: arrangeByLineageAction
+                } as MenuItem
+              ]
+            : []),
           // Project-wide: restart every idle agent CLI in place (new model pickup). Hidden on a
           // canvas with no restartable agent node — there it could only ever report "0 restarted".
           ...(hasRestartableAgents()
@@ -11050,7 +11302,9 @@ export function Canvas() {
       selectAll,
       fitAll,
       arrangeAllNodes,
+      arrangeByLineageAction,
       hasArrangeableNodes,
+      hasLineageLayers,
       hasRestartableAgents,
       restartIdleAgents
     ]
@@ -12235,6 +12489,8 @@ export function Canvas() {
   // whole board on every Canvas render.
   const setKanbanModalNode = useCallback((id: string | null) => {
     kanbanModalNodeRef.current = id
+    // The Live chat drawer opened from the card's LIVE chip must sit above the modal (`raised`).
+    setCardModalOpen(id !== null)
     // The one place the "is anyone looking at this session" predicate learns about the modal —
     // every asker (the sweep's plan, the node's fire-time re-ask, the nudge) reads it through
     // `isNodeWatched`, so the modal clause cannot go missing from one of them.
@@ -14551,8 +14807,78 @@ export function Canvas() {
           }
           case 'arrange':
           case 'align': {
-            const ids = (args.nodes ?? '').split(',').map((s) => s.trim()).filter(Boolean)
             const live = ctlNodes()
+            // The flag shape was refused in main (`arrangeArgsRefusal`); this is the belt. With it,
+            // `--layout` on the `--group` form is absent or a known word by the time it is read
+            // below — an unknown one is refused by name, never delivered as a grid.
+            const shapeRefusal = verb === 'arrange' ? arrangeArgsRefusal(args) : null
+            if (shapeRefusal) {
+              reply({ ok: false, error: shapeRefusal })
+              return
+            }
+            // `arrange --group <frameId>`: name the FRAME instead of listing its children. The
+            // whole rule set is `arrangeGroupChildren` — the same transform the frame's menu rows
+            // and the palette run — so this branch only parses, refuses by name and replies.
+            if (verb === 'arrange' && args.group) {
+              const gid = args.group.trim()
+              // Off canvas the lineage ropes are the OWNING project's, not the live canvas's — and a
+              // stored file may predate the wait mark, so it is re-marked exactly as a load would.
+              // The rope id rides along: it is what tells a wait from an opener.
+              const edges = (offCanvas ? markLegacyWaitRopes(offCanvas.project.ropes ?? []) : controlEdgesRef.current).map(
+                (e) => ({ id: e.id, source: e.source, target: e.target })
+              )
+              // `arrange --group top`: the user's Tidy canvas (or its lineage bands), on the canvas
+              // that owns the caller — the same pure transforms the pane menu runs.
+              if (isTopLevelGroupArg(gid)) {
+                const topLayout = TOP_ARRANGE_LAYOUTS.find((l) => l === args.layout) ?? 'tidy'
+                const next = topLayout === 'lineage' ? arrangeByLineage(live, edges) : tidyCanvas(live, edges)
+                const count = live.filter((nd) => !nd.parentId).length
+                if (next !== live) commitCtlNodes(next)
+                reply({
+                  ok: true,
+                  message:
+                    next !== live
+                      ? `arranged ${count} top-level item(s) as ${topLayout}`
+                      : count < 2
+                        ? 'fewer than two top-level items — nothing to arrange'
+                        : topLayout === 'lineage' && lineageLayers(live, edges).layers.length === 0
+                          ? 'no opened-by or --after connection joins two top-level items — nothing moved'
+                          : `the canvas is already arranged as ${topLayout} — nothing moved`,
+                  result: { count, group: 'top', layout: topLayout, changed: next !== live }
+                })
+                return
+              }
+              const groupLayout = GROUP_ARRANGE_LAYOUTS.find((l) => l === args.layout) ?? 'grid'
+              const refusal = groupArrangeRefusal(live, gid, groupLayout, edges)
+              if (refusal) {
+                reply({ ok: false, error: `arrange: ${refusal}` })
+                return
+              }
+              const cols = args.cols ? parseInt(args.cols, 10) || undefined : undefined
+              const next = arrangeGroupChildren(live, gid, { layout: groupLayout, cols, edges, grid: snapGridNow() })
+              const count = live.filter((nd) => nd.parentId === gid).length
+              // The SAME array means every item already sat where the layout puts it: an answer,
+              // not a failure — and nothing to write.
+              if (next !== live) commitCtlNodes(next)
+              const frame = next.find((nd) => nd.id === gid)
+              reply({
+                ok: true,
+                message:
+                  next === live
+                    ? `group ${gid} is already arranged as ${groupLayout} — nothing moved`
+                    : `arranged ${count} item(s) in group ${gid} as ${groupLayout} and resized the frame to fit`,
+                result: {
+                  count,
+                  group: gid,
+                  layout: groupLayout,
+                  changed: next !== live,
+                  width: frame?.width,
+                  height: frame?.height
+                }
+              })
+              return
+            }
+            const ids = (args.nodes ?? '').split(',').map((s) => s.trim()).filter(Boolean)
             const edge = (['left', 'right', 'top', 'bottom', 'hcenter', 'vcenter'] as const).find((e2) => e2 === args.edge)
             if (verb === 'align' && !edge) {
               reply({ ok: false, error: 'align requires --edge left|right|top|bottom|hcenter|vcenter' })
@@ -14577,9 +14903,11 @@ export function Canvas() {
             let next = verb === 'arrange'
               ? arrangeNodes(live, ids, { layout, cols })
               : alignNodes(live, ids, edge!)
-            // Tidying a frame's children usually leaves the frame oversized (it was sized to their
-            // old scattered spots) — shrink it to hug the new layout. Top-level sets have no frame.
-            if (container) next = fitGroupToChildren(next, container, snapGridNow())
+            // Tidying a frame's children usually leaves the frame the wrong size (it was sized to
+            // their old scattered spots) — hug the new layout, and re-fit every ANCESTOR frame too:
+            // a nested frame that grew past its parent would be clamped by `extent:'parent'` into
+            // an inverted range. Top-level sets have no frame.
+            if (container) next = fitAncestorChain(next, container, snapGridNow())
             commitCtlNodes(next)
             const how = verb === 'arrange' ? `as ${layout}` : `to ${edge}`
             reply({ ok: true, message: `${verb === 'arrange' ? 'arranged' : 'aligned'} ${ids.length} node(s) ${how}`, result: { count: ids.length, container } })
@@ -17376,6 +17704,23 @@ export function Canvas() {
     travelToNodeRef.current = travelToNode
   })
 
+  /** The Live chat drawer sits above a kanban card modal (z 57 over 55) — opened from the card's LIVE
+   *  chip — but never above Settings, which stays on top. `kanbanOpen` too: the per-project board
+   *  reports a closed modal on change, not on unmount, so a board closed with its card open would
+   *  leave the flag behind. */
+  const liveChatRaised = cardModalOpen && kanbanOpen && !settingsOpen
+
+  /** The Live chat drawer's "Go to terminal": a modal drawer gives way to the canvas first (its scrim
+   *  would cover the node); a docked one stays. The project switch, a closed project's reopen and the
+   *  board's "open the card" are `travelToNode`'s. */
+  const goToLiveChatNode = useCallback(
+    (nodeId: string) => {
+      if (!liveChatRef.current.pinned) setLiveChat((s) => nextLiveChat(s, { kind: 'close' }))
+      travelToNode(nodeId)
+    },
+    [travelToNode]
+  )
+
   // Prepare-for-update (Windows session host, issue #829). Opened from the update card or ⌘K via
   // `nodeterm:prepare-update`. `prepareUpdateAvailable` gates the ⌘K entry: the main process answers
   // `unsupported` off Windows, when the session host is not the backend, and in the Server Edition.
@@ -17962,6 +18307,9 @@ export function Canvas() {
             }
           ]
         : []),
+      ...(isSshProject
+        ? []
+        : [{ id: 'new-run', label: 'New run configuration', icon: <IconPlay />, run: () => void addRun() }]),
       { id: 'new-dino', label: 'New dino game', icon: <IconDino />, run: () => addDino() },
       { id: 'open-file', label: 'Open file…', icon: <IconEditor />, run: () => void openFileDialog() },
       // "New file…" needs a project folder to create into — hidden when the project has no cwd.
@@ -18081,6 +18429,51 @@ export function Canvas() {
             } as Command
           ]
         : []),
+      // Omitted rather than disabled when there is no lineage: the palette has no disabled
+      // state, so an entry that does nothing would surface as a search hit that goes nowhere.
+      ...(hasArrangeableNodes() && hasLineageLayers()
+        ? [
+            {
+              id: 'arrange-lineage',
+              label: 'Arrange by lineage',
+              hint: 'layers levels who opened whom tree hierarchy organize',
+              icon: <IconLineage />,
+              run: arrangeByLineageAction
+            } as Command
+          ]
+        : []),
+      // The group tidies need a frame to act on, and the palette has no right-click target: they
+      // are offered for the ONE selected group frame, and each is omitted (never disabled — see
+      // above) when `groupArrangeRefusal` says it has nothing to do there.
+      ...(() => {
+        const selectedGroups = nodesRef.current.filter((n) => n.selected && n.type === 'group')
+        if (selectedGroups.length !== 1) return []
+        const groupId = selectedGroups[0].id
+        return [
+          ...(groupArrangeHint(groupId, 'grid')
+            ? []
+            : [
+                {
+                  id: 'arrange-group',
+                  label: 'Tidy selected group',
+                  hint: 'arrange grid layout organize frame resize fit clean up',
+                  icon: <IconGrid />,
+                  run: () => arrangeGroupAction(groupId, 'grid')
+                } as Command
+              ]),
+          ...(groupArrangeHint(groupId, 'lineage')
+            ? []
+            : [
+                {
+                  id: 'arrange-group-lineage',
+                  label: 'Arrange selected group by lineage',
+                  hint: 'layers levels who opened whom tree hierarchy organize frame resize',
+                  icon: <IconLineage />,
+                  run: () => arrangeGroupAction(groupId, 'lineage')
+                } as Command
+              ])
+        ]
+      })(),
       { id: 'zoom-100', label: 'Zoom to 100%', icon: <IconFit />, run: zoomTo100 },
       ...(prepareUpdateAvailable
         ? [
@@ -18123,11 +18516,13 @@ export function Canvas() {
         entitled: useEntitlement.getState().isPremium,
         serverEdition: isBrowserRuntime(),
         icon: <IconBroadcast />,
+        chatIcon: <IconChat />,
         manage: () => {
           setSettingsSection('live-links')
           setSettingsNonce((n) => n + 1)
           setSettingsOpen(true)
         },
+        openChat: () => setLiveChat((s) => nextLiveChat(s, { kind: 'open' })),
         confirmStopAll: confirmStopAllLiveLinks
       }),
       // Hidden when the canvas has no restartable agent node — the row would have nothing to act
@@ -18148,19 +18543,23 @@ export function Canvas() {
     store.projects
       // Skip unavailable projects: activating one lets edits commit to the store but they're
       // dropped on save (the ref emits header-only), so switching there silently loses work.
-      // The TabBar already guards its own click; this covers the palette (⌘K) path.
-      .filter((p) => p.id !== store.activeProjectId && !p.unavailable)
-      .forEach((p) =>
+      // The TabBar already guards its own click; this covers the palette (⌘K) path. A closed team
+      // tab is skipped too (its reopen is refused), and the hint tells a team tab apart from the
+      // SSH project it was shared from, which carries the same name.
+      .filter((p) => p.id !== store.activeProjectId)
+      .forEach((p) => {
+        const hint = projectSwitchHint(p)
+        if (hint === null) return
         cmds.push({
           id: `proj-${p.id}`,
           label: `Switch to ${p.name}`,
-          hint: 'project',
+          hint,
           icon: <IconSwitch />,
           // A closed project is REOPENED (tab restored), never activated behind a hidden tab — and
           // the reopen is the guarded one, which asks first for a project handed to a hosted team.
           run: () => (p.closed ? void reopenProject(p.id) : switchProject(p.id))
         })
-      )
+      })
     const cs = useAgentStatus.getState()
     // Labels replaced free-text tags — search matches label NAMES now (unified system).
     const searchKanban = useProjects.getState().getProject(useProjects.getState().activeProjectId)?.kanban
@@ -18218,6 +18617,7 @@ export function Canvas() {
     addTerminal,
     addAgentNode,
     addSticky,
+    addRun,
     addDino,
     addWebView,
     addBrowser,
@@ -18308,6 +18708,21 @@ export function Canvas() {
 
       <div className="top-banners">
         <AnnouncementBanner />
+        {/* Agent-integration consent (issue #744): the first-run question, the grandfathered
+            install's one-time notice, and the active SSH host's own question. */}
+        <IntegrationPromptBanner
+          onChoose={() => {
+            setSettingsSection('agents')
+            setSettingsOpen(true)
+          }}
+        />
+        <IntegrationGrandfatherNotice
+          onOpenSettings={() => {
+            setSettingsSection('agents')
+            setSettingsOpen(true)
+          }}
+        />
+        <HostIntegrationBanner hostKey={activeSshHostKey} />
         {/* Discovery belongs to the local core; never run its installer on an SSH/relay host. */}
         <TmuxBanner
           onInstall={!isSshProject && session.id === localSession.id ? runInTerminal : undefined}
@@ -19045,6 +19460,19 @@ export function Canvas() {
         />
       )}
 
+      {liveChatShown(liveChat, liveLinkCount) && (
+        <LiveChatDrawer
+          linkId={liveChat.linkId}
+          pinned={liveChat.pinned}
+          raised={liveChatRaised}
+          beside={liveChat.pinned && explorerOpen && explorer.pinned && !liveChatRaised}
+          onPickLink={pickLiveChatLink}
+          onClose={closeLiveChat}
+          onTogglePin={toggleLiveChatPin}
+          onGoToNode={goToLiveChatNode}
+        />
+      )}
+
       <SessionsSidebar
         open={sessionsOpen}
         pinned={sessionsPinned}
@@ -19310,9 +19738,10 @@ export function Canvas() {
                 ? 'relay'
                 : 'desktop'
           }
-          // R63: an SSH project's node runs in the HOST's tmux, which gives a viewer a client of its
-          // own — the "only while open" note is about this machine's local terminals.
-          remoteNode={!!useProjects.getState().getProject(liveLinkDialog.projectId)?.ssh}
+          // R63: a node in a HOST's tmux gets a viewer client of its own (the "only while open" note
+          // is about this machine's local terminals); the Control warning names where a
+          // controller's commands run. Both from where the NODE runs, not only its project.
+          {...liveLinkRemoteFor(liveLinkDialog)}
           readPersistence={readLocalPersistence}
           prepare={liveLinkPrepareFor(liveLinkDialog)}
           // No license layer in the Server Edition (R43): never an Upgrade button there.
@@ -19516,6 +19945,7 @@ export function Canvas() {
         onAddDino={addDino}
         onAddTrigger={addTrigger}
         onAddFiles={() => addFiles()}
+        onAddRun={() => void addRun()}
         onAddAgent={(aid, accountId) => addAgentNode(aid, undefined, undefined, accountId)}
         onOpenFile={() => void openFileDialog()}
         onAddRemote={() => openRemotePicker({ x: window.innerWidth / 2, y: window.innerHeight / 2 })}

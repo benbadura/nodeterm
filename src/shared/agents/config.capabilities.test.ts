@@ -26,7 +26,11 @@ import {
   agentLaunchProgram,
   resumeCommand,
   hasHooksOverSsh,
+  CHAT_CAPABLE,
+  TYPED_INPUT_CAPABLE,
+  typesChatInput,
   readsScreenDialogs,
+  queuesInputWhileWorking,
   LOCAL_ONLY_HOOK_AGENTS,
   reportsSessionEnd
 } from './config'
@@ -457,9 +461,27 @@ describe('title read vs rename write', () => {
   })
 })
 
+describe('typed chat input (TYPED_INPUT_CAPABLE)', () => {
+  it('types only for claude — M-Enter is a measured newline there and unmeasured anywhere else', () => {
+    expect(typesChatInput('claude')).toBe(true)
+    for (const id of CHAT_CAPABLE.filter((a) => a !== 'claude')) expect(typesChatInput(id)).toBe(false)
+  })
+
+  it('is a subset of CHAT_CAPABLE: only the chat view types', () => {
+    for (const id of TYPED_INPUT_CAPABLE) expect((CHAT_CAPABLE as readonly string[]).includes(id)).toBe(true)
+  })
+})
+
 describe('readsScreenDialogs — whose own dialogs the chat view can see on screen', () => {
   it('is claude only: its reader would read every other CLI\'s screen as a permanent dialog', () => {
     expect(readsScreenDialogs('claude')).toBe(true)
     for (const id of BUILTIN_AGENT_IDS.filter((a) => a !== 'claude')) expect(readsScreenDialogs(id)).toBe(false)
+  })
+})
+
+describe('queuesInputWhileWorking — who may be sent to mid-turn from the chat view', () => {
+  it('is claude only: every other CLI\'s mid-turn input is unmeasured and may answer what is on screen', () => {
+    expect(queuesInputWhileWorking('claude')).toBe(true)
+    for (const id of BUILTIN_AGENT_IDS.filter((a) => a !== 'claude')) expect(queuesInputWhileWorking(id)).toBe(false)
   })
 })

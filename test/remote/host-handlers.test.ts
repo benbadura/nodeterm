@@ -16,7 +16,19 @@ function fakePty() {
   let counter = 0
   let snapshot = ''
   let sessionLive = true
-  const mgr: HostPtyManager = {
+  // The relay attach is decided in core (`prepareRelayAttach`); this fake composes it from its own
+  // probe/snapshot/attach so the sequence the host runs them in stays observable in `calls`.
+  const mgr: HostPtyManager & {
+    attachDetached(persistKey: string, sinks: DetachedSinks, options?: Omit<PtyCreateOptions, 'persistKey'>): string
+    captureSnapshot(persistKey: string): Promise<string>
+  } = {
+    prepareRelayAttach: async (nodeId, size) => ({
+      kind: 'ready',
+      remote: false,
+      sessionExists: () => mgr.sessionExists(nodeId),
+      snapshot: () => mgr.captureSnapshot(nodeId),
+      attach: async (sinks) => mgr.attachDetached(nodeId, sinks, size)
+    }),
     createDetached(options, sinks) {
       lastOptions = options
       lastSinks = sinks

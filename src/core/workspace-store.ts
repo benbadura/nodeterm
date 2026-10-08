@@ -1,3 +1,4 @@
+import type { SshConnection } from '../shared/ssh'
 import { promises as fs } from 'fs'
 import { createHash, randomUUID } from 'node:crypto'
 import path from 'path'
@@ -2070,6 +2071,26 @@ export class WorkspaceStore {
       if (node) return { node, root: !e.project && !e.cache && e.cwd ? e.cwd : undefined }
     }
     return undefined
+  }
+
+  /**
+   * Every project that holds this node id, with the node as THAT project recorded it and the
+   * project's SSH server when it is an SSH project — the relay host's attach decides where a
+   * phone-opened session runs from this (core `relay-attach-plan.ts`), never from the phone's words.
+   * All of them, never the first: node ids travel in git-shared project files, so the same canvas
+   * opened in a local folder and over SSH holds the same ids. Local-ref cwds come back resolved.
+   */
+  relayNodePlacements(
+    nodeId: string
+  ): Array<{ projectId: string; projectServer?: SshConnection; node: CanvasNodeState }> {
+    const out: Array<{ projectId: string; projectServer?: SshConnection; node: CanvasNodeState }> = []
+    for (const c of this.persistedCanvases()) {
+      const node = c.nodes.find((n) => n.id === nodeId)
+      if (!node) continue
+      const server = this.index?.entries.find((e) => e.id === c.id)?.ssh?.server
+      out.push({ projectId: c.id, ...(server ? { projectServer: server } : {}), node })
+    }
+    return out
   }
 
   /**

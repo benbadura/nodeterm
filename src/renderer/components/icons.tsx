@@ -117,6 +117,16 @@ export const IconGrid = () => (
   </svg>
 )
 
+/** Layer bands with a shared opener above them: the lineage tidy. */
+export const IconLineage = () => (
+  <svg {...S}>
+    <rect x="9.5" y="3" width="5" height="4" rx="1" />
+    <rect x="3" y="17" width="5" height="4" rx="1" />
+    <rect x="16" y="17" width="5" height="4" rx="1" />
+    <path d="M12 7v4M5.5 17v-2.5h13V17" />
+  </svg>
+)
+
 export const IconCollapse = () => (
   <svg {...S}>
     <path d="M8 4v4H4M16 4v4h4M8 20v-4H4M16 20v-4h4" />
@@ -340,6 +350,22 @@ export const IconCircleCheck = () => (
 
 /* Stroked padlocks: the canvas lock moved out of the React Flow controls (whose filled 12px
    glyph set is why these used to be filled) into the dock, where every icon is an outline. */
+/** A clock face — when something ends (the live-link dialog's "Expires" row). */
+export const IconClock = () => (
+  <svg {...S}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 7v5l3 2" />
+  </svg>
+)
+
+/** One person — who someone is shown as (the live-link dialog's name row). */
+export const IconUser = () => (
+  <svg {...S}>
+    <circle cx="12" cy="8" r="4" />
+    <path d="M4.5 20a7.5 7.5 0 0 1 15 0" />
+  </svg>
+)
+
 export const IconLock = () => (
   <svg {...S}>
     <rect x="4.5" y="10.5" width="15" height="10.5" rx="2.5" />

@@ -129,6 +129,10 @@ const userText = (m: ChatMessage): string =>
     .join('')
     .trim()
 
+// Whitespace runs collapsed: a TYPED send (core/typed-input.ts) turns each tab into a space, so its
+// transcript copy is not byte-identical to what was sent.
+const looseText = (s: string): string => s.replace(/\s+/g, ' ')
+
 /** The thread's TRAILING unkeyed user messages — the optimistic sends a live read may still carry. */
 function trailingSends(t: ChatThread): ChatMessage[] {
   const trailing: ChatMessage[] = []
@@ -168,7 +172,8 @@ function commandPart(m: ChatMessage): { name: string; arg: string } | null {
  * unkeyed; grok's thread is unkeyed throughout, but its whole-file read contains every prompt it
  * rendered, so each one is matched and dropped). Each one is dropped when the new read contains a user message with
  * the same trimmed text (or with that text as the reader renders a send the CLI recorded as ONE
- * `<pasted_content>` span: `fencePasted(text).trim()`), ONE-FOR-ONE, and only among messages NEWER
+ * `<pasted_content>` span: `fencePasted(text).trim()`, or — last — with every whitespace run
+ * collapsed, for a typed send whose tabs became spaces), ONE-FOR-ONE, and only among messages NEWER
  * than anything the thread had keyed — an older identical "yes" already on screen must not confirm
  * a new "yes". A sent slash
  * command / `!` line is confirmed the same way by a command tool part (`sentCommand`): same name,
@@ -197,6 +202,7 @@ function unconfirmedSends(t: ChatThread, res: ChatTranscriptResult): ChatMessage
     // The CLI may record a send delivered as a bracketed paste as ONE `<pasted_content>` span, which
     // the reader renders fenced — the same send, in the form the reader gives it.
     if (i < 0 && sentText) i = available.indexOf(fencePasted(sentText).trim())
+    if (i < 0 && sentText) i = available.findIndex((a) => looseText(a) === looseText(sentText))
     if (i >= 0) {
       available.splice(i, 1)
       return false
