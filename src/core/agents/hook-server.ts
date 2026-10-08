@@ -284,6 +284,7 @@ export interface HookEventMeta {
  * of every hatch and is the test that fails if either half of this comment stops being true.
  */
 export const requiresVerified: ReadonlySet<string> = new Set([
+  'readiness',
   'send',
   'reply',
   'notify',
@@ -361,6 +362,7 @@ export function verifiedRefusalFor(verb: string): string {
   if (verb === 'open-project') return OPEN_PROJECT_CONTROL_REFUSAL
   if (verb === 'run') return RUN_CONTROL_REFUSAL
   if (verb === 'report-outcome') return REPORT_OUTCOME_CONTROL_REFUSAL
+  if (verb === 'readiness') return 'Readiness report refused.'
   if (verb === 'issues' || verb === 'prs') return GITHUB_READ_CONTROL_REFUSAL
   return MESSAGING_CONTROL_REFUSAL
 }

@@ -21,10 +21,12 @@ import { cardAssignees } from '@shared/kanban-labels'
 import { TeamProgressChip } from '../TeamProgressChip'
 import type { TeamStation } from '../../lib/teamProgress'
 import { cardShowsOverdue, sessionNameRepeatsTitle } from '../../lib/cardRedundancy'
+import { ReadinessChip } from '../ReadinessChip'
 
 const PRIO_COLOR = Object.fromEntries(PRIORITIES.map((p) => [p.id, p.color])) as Record<KanbanPriority, string>
 
 interface SessionCardProps {
+  projectId?: string
   session: KanbanSession
   meta?: KanbanCardMeta
   /** Resolved board labels on this card (LabelChips) — resolved by the board, passed in. */
@@ -58,7 +60,7 @@ interface SessionCardProps {
 
 export const SessionCard = memo(function SessionCard({
   session, meta, labels = [], onOpen, onDragStart, onDragEnd, onDropAt, onContext, pulls,
-  pullFreshness = 'fresh', onOpenIssue, team, onTravel, columnCategory, liveLinkSource
+  pullFreshness = 'fresh', onOpenIssue, team, onTravel, columnCategory, liveLinkSource, projectId
 }: SessionCardProps) {
   // THIS card's agent status, subscribed per card rather than threaded down from the board.
   // KanbanView used to hold `useAgentStatus((s) => s.byId)` and pass the map through the column:
@@ -151,6 +153,7 @@ export const SessionCard = memo(function SessionCard({
         <span className="kanban-card__nodedot" style={{ background: session.color }} />
         <NodeIconView icon={session.icon} size={14} className="kanban-card__icon" />
         <span className="kanban-card__title">{session.title}</span>
+        {session.kind === 'terminal' && <ReadinessChip api={liveLinkSource === 'local' ? window.nodeTerminal?.readiness : undefined} projectId={projectId} nodeId={session.id} onOpen={onOpen} enabled={!isRemoteSessionNode(session.spawn)} />}
         {session.kind === 'terminal' && onOpenIssue && (
           <IssueRefChip issueRef={session.issueRef} onOpen={onOpenIssue} />
         )}

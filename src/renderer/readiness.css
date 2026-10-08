@@ -1,0 +1,56 @@
+.readiness-chip-wrap { display: inline-flex; flex: 0 0 auto; }
+.readiness-chip { font: inherit; font-size: 10px; padding: 2px 6px; border: 1px solid var(--border); border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.readiness-chip:hover { background: var(--panel-header); color: var(--text); }
+.readiness-chip--warning { color: var(--warn); }
+.readiness-chip--error { color: var(--danger); }
+.readiness-chip--current { color: var(--success); }
+.readiness-tabs { display: flex; gap: 4px; padding: 6px 16px; border-bottom: 1px solid var(--border); }
+.readiness-tabs button { border: none; border-radius: 5px; padding: 5px 12px; background: transparent; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }
+.readiness-tabs button[aria-selected="true"] { color: var(--text); background: var(--panel-header); }
+.kanban-modal__main--readiness { position: relative; }
+.kanban-modal__main--readiness > :not(.readiness-panel) { visibility: hidden; pointer-events: none; }
+.readiness-panel { padding: 22px; background: var(--bg); color: var(--text); font-size: 13px; line-height: 1.5; overflow-y: auto; overflow-wrap: anywhere; }
+.kanban-modal__main--readiness > .readiness-panel { position: absolute; inset: 0; z-index: 5; }
+.readiness-panel h2 { margin: 0; font-size: 18px; font-weight: 600; }
+.readiness-panel h3 { font-size: 13px; margin: 0 0 8px; font-weight: 600; }
+.readiness-panel p { margin: 6px 0 12px; }
+.readiness-panel__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.readiness-muted { color: var(--muted); font-size: 12px; }
+.readiness-panel button { font: inherit; font-size: 12px; border: 1px solid var(--border); border-radius: 5px; padding: 5px 10px; background: var(--panel); color: var(--text); cursor: pointer; }
+.readiness-panel button:hover { background: var(--panel-header); }
+.readiness-panel button:disabled { opacity: .5; cursor: default; }
+.readiness-panel button:focus-visible, .readiness-tabs button:focus-visible, .readiness-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.readiness-panel a { color: var(--accent-text); }
+.readiness-panel code { font-size: 12px; font-family: var(--font-mono, monospace); }
+.readiness-panel label { display: flex; flex-direction: column; gap: 5px; margin: 10px 0; font-size: 12px; }
+.readiness-panel input, .readiness-panel textarea, .readiness-panel select { box-sizing: border-box; width: 100%; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 5px; padding: 7px 9px; }
+.readiness-panel textarea { min-height: 62px; resize: vertical; }
+.readiness-panel select { width: auto; max-width: 100%; align-self: flex-start; }
+.readiness-panel summary { cursor: pointer; padding: 7px 0; }
+.readiness-panel ul { padding-left: 18px; margin: 6px 0 12px; }
+.readiness-panel li { margin: 7px 0; }
+.readiness-panel li p { margin: 4px 0; color: var(--muted); }
+.readiness-freshness { padding: 10px 12px; background: var(--panel); border-left: 3px solid var(--muted); border-radius: 3px; }
+.readiness-freshness--current { border-color: var(--success); }
+.readiness-freshness--stale { border-color: var(--warn); }
+.readiness-freshness--unknown { border-color: var(--warn); }
+.readiness-error { color: var(--danger); }
+.readiness-criteria-editor { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.readiness-edit-row { display: flex; gap: 8px; align-items: flex-start; }
+.readiness-edit-row label { flex: 1; }
+.readiness-edit-row button { margin-top: 31px; }
+.readiness-new-report { margin: 16px 0; }
+.readiness-empty { padding: 24px 0; color: var(--muted); }
+.readiness-report__stamp { font-size: 12px; margin: 16px 0 8px; }
+.readiness-report__stamp > span { display: block; color: var(--muted); }
+.readiness-report section { border-top: 1px solid var(--border); padding: 16px 0 8px; }
+.readiness-result { display: inline-block; font-size: 11px; font-weight: 600; color: var(--muted); }
+.readiness-result--passed, .readiness-result--met { color: var(--success); }
+.readiness-result--failed, .readiness-result--unmet { color: var(--danger); }
+.readiness-evidence { padding: 8px 0; }
+.readiness-section { margin: 16px 0; padding: 8px 12px 12px; border: 1px solid var(--border); border-radius: 6px; min-width: 0; }
+.readiness-section legend { font-size: 12px; font-weight: 600; padding: 0 5px; }
+.readiness-actions { display: flex; gap: 8px; margin: 16px 0; }
+.readiness-history { border-top: 1px solid var(--border); padding-top: 10px; }
+.readiness-history > details { padding-left: 12px; }
+.readiness-finding { padding: 5px 0 10px; border-top: 1px solid var(--border); }

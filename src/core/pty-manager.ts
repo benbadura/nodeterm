@@ -1035,6 +1035,10 @@ function screenGate(screen: string): ChatPromptBlocked | null {
  * where it left off. Without tmux, it falls back to a plain shell (no persistence).
  */
 export class PtyManager {
+  private beforeLocalSpawn?: (nodeId: string, cwd: string) => Promise<void>
+  setBeforeLocalSpawn(callback: (nodeId: string, cwd: string) => Promise<void>): void {
+    this.beforeLocalSpawn = callback
+  }
   private sessions = new Map<string, Session>()
   /** persistKey (node id) → live sessionId. The index that makes `pty:create` idempotent:
    *  a second client asking for the same node subscribes to the running session. */
@@ -2589,6 +2593,9 @@ export class PtyManager {
   private async spawnNew(clientId: ClientId, options: PtyCreateOptions): Promise<PtyCreateResult> {
     const refused = this.spawnRefusal(options)
     if (refused) return { sessionId: '', fresh: false, unavailable: refused }
+    if (options.persistKey && options.cwd && !options.sshRemote && !options.joinOnly) {
+      await this.beforeLocalSpawn?.(options.persistKey, options.cwd).catch(() => {})
+    }
     // A tmux-backed session is "fresh" (cold start) when no live session exists to reattach to
     // — i.e. first open, or after a machine reboot killed the tmux server. Plain (non-tmux)
     // sessions are always fresh: they have no cross-restart continuity. The renderer uses this

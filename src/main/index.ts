@@ -70,6 +70,7 @@ import {
   type BrowserSurfaceKind
 } from './browser-guest-registry'
 import { appendBoardLogVia, registerBoardLogHandlers, type BoardLogRoute } from '../core/board-log-handlers'
+import { TaskReadinessService, registerReadiness } from '../core/task-readiness'
 import {
   createDeliveryQueue,
   restoreDeliveryQueue,
@@ -1997,6 +1998,19 @@ app.whenReady().then(async () => {
     }
   }
   const boardLog = registerBoardLogHandlers(corePlatform, boardLogRouter)
+  const readiness = new TaskReadinessService((projectId, nodeId) => {
+    const info = workspaceStore.projectTargetInfo(projectId)
+    if (!info?.cwd || info.ssh) return undefined
+    const canvas = workspaceStore.persistedCanvases().find((c) => c.id === projectId)
+    const node = canvas?.nodes.find((n) => n.id === nodeId)
+    if (!node || (node.kind && node.kind !== 'terminal') || node.ssh || node.sshRemoteTmux) return undefined
+    return { projectRoot: info.cwd, cwd: node.cwd || info.cwd, author: node.agentId || 'agent' }
+  }, (projectId, nodeId) => corePlatform.broadcast(IPC.readinessChanged, projectId, nodeId))
+  registerReadiness(corePlatform, readiness)
+  ptyManager.setBeforeLocalSpawn(async (nodeId, cwd) => {
+    const projectIds = workspaceStore.projectIdsForNode(nodeId)
+    await readiness.rememberBaseline(nodeId, cwd, projectIds.length === 1 ? projectIds[0] : undefined)
+  })
   registerLogHandlers(corePlatform, logBuffer, () => settingsStore.get().debugLogPanel)
 
   // Agent messaging (the `send`/`reply` control verbs). Canvas.tsx forwards the validated verb
@@ -4354,6 +4368,11 @@ app.whenReady().then(async () => {
           appendBoardLog: (projectId, entry) => appendBoardLogVia(boardLogRouter, projectId, entry)
         }
       )
+    }
+    if (verb === 'readiness') {
+      const ids = workspaceStore.projectIdsForNode(nodeId)
+      if (ids.length !== 1) return { ok: false, error: 'Readiness requires one saved owning project.', message: 'Readiness requires one saved owning project.' }
+      return readiness.control(ids[0], nodeId, args, verified)
     }
     // `browser` is answered in MAIN and never forwarded to the renderer's agent-control dispatch:
     // the debugger handle and the CDP allowlist are main-side, and the renderer is the more

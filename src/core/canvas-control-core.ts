@@ -87,6 +87,19 @@ function boardCommentGuidanceLines(): string[] {
   ]
 }
 
+function readinessDocLines(): string[] {
+  return [
+    '- `readiness --action read|criteria|snapshot|report [--file <JSON path>]` — the readiness card for YOUR OWN task. Local Git projects in Desktop only; unsupported elsewhere.',
+    '  For a code task, record acceptance criteria at the start and submit a readiness report when delivering. Read first to obtain criteriaRevision; criteria input is {"expectedRevision":0,"criteria":[{"id":"c1","text":"Expected behavior"}]}, optionally with a full local baseCommit SHA.',
+    '  Put input JSON under .nodeterm/readiness-input/ or in a temporary directory so preparing a report does not change the code snapshot.',
+    '  Capture a snapshot BEFORE running checks: readiness --action snapshot returns its id, HEAD and changed files. Then run tests/review and submit readiness --action report --file <path>. Never reuse old evidence under a fresh snapshot.',
+    '  Report input: {"snapshotId":"<returned id>","criteria":[{"id":"c1","status":"met","note":"Evidence"}],"tests":{"status":"recorded","items":[{"command":"npm test","status":"passed","exitCode":0,"summary":"Results"}]},"review":{"status":"recorded","items":[{"summary":"Review result","outcome":"passed","findings":[]}]},"preview":{"status":"recorded","items":[{"label":"Preview","url":"http://localhost:3000"}]}}.',
+    '  Criterion status: met|unmet|unknown. Test status: passed|failed|skipped|unknown. Review outcome: passed|issues; findings: {summary,severity:info|warning|blocking,file?,line?}; a review may name sourceNodeId.',
+    '  A section without evidence uses {"status":"missing","items":[]} or {"status":"not-applicable","reason":"Why","items":[]}. Missing is never a pass.',
+    '  Reports are declarations with source and version shown. Code changes mark them stale; they never move cards, release dependents, run commands or approve a task.'
+  ]
+}
+
 /**
  * What a station-failure notice is and what to do with one — RENDERED from the trigger table
  * (@shared/station-notice), the same derive-don't-retype rule as `messagingGuidanceLines`: a reason
@@ -503,6 +516,7 @@ export type ControlVerb =
   | 'settings'
   | 'report-issue'
   | 'report-outcome'
+  | 'readiness'
   | 'issues'
   | 'prs'
 
@@ -512,6 +526,7 @@ export interface ControlCommand {
 }
 
 const VERBS: ControlVerb[] = [
+  'readiness',
   'list',
   'open-terminal',
   'open-claude',
@@ -943,6 +958,7 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     ...afterHandoverDocLines(),
     ...afterSuccessDocLines(),
     ...reportOutcomeDocLines(),
+    ...readinessDocLines(),
     '- `open-project --cwd </abs/path> [--name N] [--color C]` — register (or find) the project for a',
     '  local directory; the reply carries `{ projectId, name, cwd, created }`. Idempotent: the same',
     `  cwd always returns the same project, never a duplicate. A \`--name\` over ${PROJECT_NAME_MAX} characters is`,
@@ -1527,6 +1543,7 @@ ${afterHandoverDocLines().join('\n')}
 
 ${afterSuccessDocLines().join('\n')}
 ${reportOutcomeDocLines().join('\n')}
+${readinessDocLines().join('\n')}
 - \`open-project --cwd </abs/path> [--name N] [--color C]\` — register (or find) the project for a
   local directory; the reply carries \`{ projectId, name, cwd, created }\`. Idempotent: the same
   cwd always returns the same project, never a duplicate — and \`--name\`/\`--color\` apply only

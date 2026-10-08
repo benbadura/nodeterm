@@ -271,6 +271,7 @@ import { useTerminalFocus } from '../state/terminalFocus'
 import { useProjects } from '../state/projects'
 import { markWorkspaceDirty } from '../state/workspaceDirty'
 import { isGlobalKanbanOpen, isKanbanOpen, isOmniKanbanEnabled, openIssueOnBoard, useViewMode, viewFor } from '../state/viewMode'
+import { ReadinessChip } from '../components/ReadinessChip'
 import { useSshConn } from '../state/sshConn'
 import { useWorktrees } from '../state/worktrees'
 import { isRemoteSessionNode } from '@shared/worktree'
@@ -6116,6 +6117,7 @@ export function TerminalNode({
             )
           }}
         />
+        <ReadinessChip api={api.readiness} projectId={owningProjectId()} nodeId={id} enabled={!isRemoteSessionNode(data)} />
         {/* Dev servers this session listens on (CLAUDE.md → Dev-server ports). On an SSH project a
             row forwards the SAME port over the project's master before opening it. The card modal
             draws the same component. */}

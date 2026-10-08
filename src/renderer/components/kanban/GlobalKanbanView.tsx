@@ -212,6 +212,7 @@ const Swimlane = memo(function Swimlane({
       count: cards.length,
       cards: cards.map(s => (
         <SessionCard
+          projectId={projectId}
           key={s.id}
           session={s}
           meta={cardMeta(board, s.id)}

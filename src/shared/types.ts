@@ -4221,6 +4221,7 @@ export interface TriggersApi {
 
 export interface NodeTerminalApi {
   workflows: import('./workflows').WorkflowsApi
+  readiness: import('./task-readiness').ReadinessApi
   pty: PtyApi
   workspace: WorkspaceApi
   projectSettings: ProjectSettingsApi

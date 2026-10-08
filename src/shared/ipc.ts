@@ -586,6 +586,12 @@ export const IPC = {
    *  Payload: { requestId }. */
   sshPassphraseDismiss: 'ssh-project:passphrase-dismiss',
   gitStatus: 'git:status',
+  readinessRead: 'readiness:read',
+  readinessCriteria: 'readiness:criteria',
+  readinessCapture: 'readiness:capture',
+  readinessReport: 'readiness:report',
+  readinessCheck: 'readiness:check',
+  readinessChanged: 'readiness:changed',
   gitInit: 'git:init',
   gitClone: 'git:clone',
   gitCloneAbort: 'git:clone-abort',

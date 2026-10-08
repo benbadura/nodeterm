@@ -800,6 +800,18 @@ const api: NodeTerminalApi = {
     setLinks: (map) => ipcRenderer.invoke(IPC.contextLinkSetLinks, map),
     info: () => ipcRenderer.invoke(IPC.contextLinkInfo)
   },
+  readiness: {
+    read: (projectId, nodeId, offset) => ipcRenderer.invoke(IPC.readinessRead, projectId, nodeId, offset),
+    criteria: (projectId, nodeId, criteria, expectedRevision, baseCommit) => ipcRenderer.invoke(IPC.readinessCriteria, projectId, nodeId, criteria, expectedRevision, baseCommit),
+    capture: (projectId, nodeId) => ipcRenderer.invoke(IPC.readinessCapture, projectId, nodeId),
+    report: (projectId, nodeId, report) => ipcRenderer.invoke(IPC.readinessReport, projectId, nodeId, report),
+    check: (projectId, nodeId) => ipcRenderer.invoke(IPC.readinessCheck, projectId, nodeId),
+    onChanged: (listener) => {
+      const handler = (_event: unknown, projectId: string, nodeId: string): void => listener(projectId, nodeId)
+      ipcRenderer.on(IPC.readinessChanged, handler)
+      return () => ipcRenderer.removeListener(IPC.readinessChanged, handler)
+    }
+  },
   boardLog: {
     append: (projectId, entry) => ipcRenderer.invoke(IPC.boardLogAppend, projectId, entry),
     read: (projectId, opts) => ipcRenderer.invoke(IPC.boardLogRead, projectId, opts),

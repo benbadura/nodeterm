@@ -69,7 +69,8 @@ export const HOST_ONLY_CHANNEL_PREFIXES: readonly string[] = [
   'watchLink:',
   // Agent-integration consent status: paths in the host's home it kept or wrote. The consent itself
   // is in settings (already host-only).
-  'integrations:'
+  'integrations:',
+  'readiness:'
 ]
 
 export const HOST_ONLY_CHANNELS: ReadonlySet<string> = new Set([

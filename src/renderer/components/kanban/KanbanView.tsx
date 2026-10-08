@@ -909,6 +909,7 @@ export const KanbanView = memo(function KanbanView({
           <SessionCard
             key={s.id}
             session={s}
+            projectId={projectId}
             meta={metaOf(s.id)}
             labels={labelsOf(s.id)}
             onOpen={setModalNodeId}

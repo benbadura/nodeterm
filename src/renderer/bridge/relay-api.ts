@@ -200,6 +200,7 @@ export function buildRelayApi(
     // tab's nodes live in the host's core, whose notices are the host's renderer's to draw.
     stationNotice: stub.stationNotice,
     boardDispatch: stub.boardDispatch,
+    readiness: stub.readiness,
     stationOutcome: stub.stationOutcome,
     stationHandover: stub.stationHandover,
     // Live links publish THIS machine's terminals; a relay tab shows another machine's, so it takes

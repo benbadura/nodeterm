@@ -26,6 +26,7 @@ import {
   type UpdatePolicy
 } from '../../shared/types'
 import { E_UNSUPPORTED } from '../../shared/rpc'
+import { unavailableReadiness } from '../../shared/task-readiness'
 import { isMacPlatform } from '../../shared/platform-utils'
 import { effectiveBindings, terminalShortcutPolicy } from '../lib/keybindingOverrides'
 import type { ContextElement } from '../lib/keyContext'
@@ -147,6 +148,7 @@ export function buildStubApi(): Omit<
   | 'speech'
 > {
   const api = {
+    readiness: unavailableReadiness,
     ssh: {
       list: U('ssh.list'),
       save: U('ssh.save'),
