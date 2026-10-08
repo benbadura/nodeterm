@@ -50,6 +50,7 @@ import { buildStubApi } from './stubs'
 import { relayPtyDataKey } from '../../shared/relay-pty-channel'
 import { mountPickerRoot, openDirectoryPicker } from './dialog-picker'
 import { projectIdsBoundToApi } from '../session/session'
+import { unavailablePreviewApi } from '../../shared/integration-preview'
 
 /** What Task 6 consumes: the bridged api for `createSession`, an approval gate to await, and a
  *  teardown hook to run on disconnect/revoke. */
@@ -103,6 +104,7 @@ export function buildRelayApi(
     //    announcements/usage/ssh*/remote*/relay*/notifications/menu events). The core-bound spreads
     //    below override the handful that must hit the remote core.
     ...local,
+    integrationPreview: unavailablePreviewApi(),
 
     // ── CORE-BOUND: route to the REMOTE core over the relay RpcClient. ──
     workspace: real.workspace, // the host's canvas/project files

@@ -22,6 +22,7 @@ import { chipFor, effectiveBindings } from '../lib/keybindingOverrides'
 import { matchesShortcut } from '@shared/shortcut'
 import { isMacPlatform } from '@shared/platform-utils'
 import { gitStatusColor } from '../lib/gitStatusColors'
+import { IntegrationPreviewDialog } from './IntegrationPreviewDialog'
 
 export interface SourceControlPanelProps {
   onClose: () => void
@@ -126,6 +127,7 @@ export function SourceControlPanel({
     null
   )
   const [publishOpen, setPublishOpen] = useState(false)
+  const [integrationPreviewOpen, setIntegrationPreviewOpen] = useState(false)
   const [moreMenu, setMoreMenu] = useState<{ x: number; y: number } | null>(null)
   const [branchPick, setBranchPick] = useState<{
     x: number
@@ -135,7 +137,7 @@ export function SourceControlPanel({
 
   // This panel's core api (a stable context read — the local session's api IS window.nodeTerminal,
   // so `git` keeps its identity and every hook dep array it sits in behaves exactly as before).
-  const { api } = useSession()
+  const { api, source: sessionSource } = useSession()
   const git = api.git
   // The fs the ACTIVE CHECKOUT lives on: an SSH project's repo is on the host, so its .gitignore
   // must be read/written over the project's ControlMaster fs — the local fs would edit (or invent)
@@ -838,6 +840,13 @@ export function SourceControlPanel({
           zIndex={80}
           onClose={() => setMoreMenu(null)}
           items={[
+            {
+              label: 'Integration preview…',
+              disabled: isSsh || sessionSource !== 'local',
+              hint: 'Combine committed branch changes and run tests in a temporary local worktree.',
+              onClick: () => setIntegrationPreviewOpen(true)
+            },
+            { type: 'separator' },
             // Plain Pull/Push/Sync (always available when the branch has an upstream), independent
             // of the morphing primary button's current state — like VS Code's "…" menu. SSH-project
             // repos route these to the remote over the master via the Phase-4 git chokepoint.
@@ -884,6 +893,15 @@ export function SourceControlPanel({
             { label: 'Stash Changes', onClick: () => void act(() => git.stashPush(cwd!)) },
             { label: 'Pop Stash', onClick: () => void act(() => git.stashPop(cwd!)) }
           ] as MenuItem[]}
+        />
+      )}
+
+      {integrationPreviewOpen && project && (
+        <IntegrationPreviewDialog
+          key={project.id}
+          projectId={project.id}
+          api={api.integrationPreview}
+          onClose={() => setIntegrationPreviewOpen(false)}
         />
       )}
 

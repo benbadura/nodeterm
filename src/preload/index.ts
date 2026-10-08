@@ -195,6 +195,20 @@ const api: NodeTerminalApi = {
     launchInfo: (projectId: string) => ipcRenderer.invoke(IPC.projectSettingsLaunchInfo, projectId),
     onTrustChanged: subscribeProjectTrustChanged
   },
+  integrationPreview: {
+    inspect: (id, base) => ipcRenderer.invoke(IPC.integrationPreviewInspect, id, base),
+    start: (id, options) => ipcRenderer.invoke(IPC.integrationPreviewStart, id, options),
+    get: (id) => ipcRenderer.invoke(IPC.integrationPreviewGet, id),
+    listReports: (id) => ipcRenderer.invoke(IPC.integrationPreviewList, id),
+    cancel: (id, runId) => ipcRenderer.invoke(IPC.integrationPreviewCancel, id, runId),
+    retryCleanup: (id, runId) => ipcRenderer.invoke(IPC.integrationPreviewCleanup, id, runId),
+    onEvent: (id, cb) => {
+      const channel = IPC.integrationPreviewEvent(id)
+      const listener = (_event: unknown, report: import('../shared/integration-preview').PreviewReport) => cb(report)
+      ipcRenderer.on(channel, listener)
+      return () => ipcRenderer.removeListener(channel, listener)
+    }
+  },
   projectSetup: {
     // Wire carries exactly `(projectId, kind, worktreePath?)` — no rootPath/projectName/ssh: main
     // derives those itself from its own workspace index by projectId and never trusts what crosses

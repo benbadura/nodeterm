@@ -26,6 +26,7 @@ import {
   type UpdatePolicy
 } from '../../shared/types'
 import { E_UNSUPPORTED } from '../../shared/rpc'
+import { unavailablePreviewApi } from '../../shared/integration-preview'
 import { unavailableReadiness } from '../../shared/task-readiness'
 import { isMacPlatform } from '../../shared/platform-utils'
 import { effectiveBindings, terminalShortcutPolicy } from '../lib/keybindingOverrides'
@@ -148,6 +149,7 @@ export function buildStubApi(): Omit<
   | 'speech'
 > {
   const api = {
+    integrationPreview: unavailablePreviewApi(),
     readiness: unavailableReadiness,
     ssh: {
       list: U('ssh.list'),

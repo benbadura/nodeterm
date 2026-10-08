@@ -1,6 +1,13 @@
 // IPC channel names — single source of truth for both main and preload.
 
 export const IPC = {
+  integrationPreviewInspect: 'integration-preview:inspect',
+  integrationPreviewStart: 'integration-preview:start',
+  integrationPreviewGet: 'integration-preview:get',
+  integrationPreviewList: 'integration-preview:list',
+  integrationPreviewCancel: 'integration-preview:cancel',
+  integrationPreviewCleanup: 'integration-preview:cleanup',
+  integrationPreviewEvent: (projectId: string) => `integration-preview:event:${projectId}`,
   ptyCreate: 'pty:create',
   ptyListProfiles: 'pty:list-profiles',
   ptyWrite: 'pty:write',

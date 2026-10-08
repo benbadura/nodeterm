@@ -4226,6 +4226,7 @@ export interface NodeTerminalApi {
   workspace: WorkspaceApi
   projectSettings: ProjectSettingsApi
   projectSetup: ProjectSetupApi
+  integrationPreview: import('./integration-preview').IntegrationPreviewApi
   worktree: WorktreeApi
   dialog: DialogApi
   settings: SettingsApi

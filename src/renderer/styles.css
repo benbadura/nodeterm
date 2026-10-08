@@ -5794,6 +5794,57 @@ body,
 
 /* ---- Source control (VS Code style) ---- */
 
+.integration-preview {
+  width: min(760px, calc(100vw - 40px));
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  text-align: left;
+}
+.integration-preview__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.integration-preview h2 { margin: 0; font-size: 17px; }
+.integration-preview__note { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.integration-preview__fields { border: 0; margin: 0; padding: 0; }
+.integration-preview label { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; font-size: 12px; }
+.integration-preview select,
+.integration-preview textarea,
+.integration-preview input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font: inherit;
+}
+.integration-preview textarea { font-family: monospace; resize: vertical; }
+.integration-preview__branches { padding-left: 26px; }
+.integration-preview__branches li { margin: 6px 0; }
+.integration-preview__branches span { display: inline-block; min-width: 55%; overflow-wrap: anywhere; }
+.integration-preview__branches button { margin-left: 6px; cursor: pointer; }
+.integration-preview__error { color: var(--danger, #ef6464); white-space: pre-wrap; }
+.integration-preview__report { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--border); }
+.integration-preview__progress { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
+.integration-preview__progress span { opacity: .4; font-size: 11px; }
+.integration-preview__progress .reached { opacity: 1; }
+.integration-preview__progress [aria-current] { font-weight: 700; }
+.integration-preview details { margin: 10px 0; }
+.integration-preview summary { cursor: pointer; }
+.integration-preview code { overflow-wrap: anywhere; font-size: 11px; }
+.integration-preview pre {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--bg);
+  padding: 10px;
+  font-size: 11px;
+}
 .scm-bar {
   display: flex;
   align-items: center;

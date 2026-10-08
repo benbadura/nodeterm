@@ -45,6 +45,7 @@ import { IPC } from './ipc'
  */
 export const HOST_ONLY_CHANNEL_PREFIXES: readonly string[] = [
   'workflows:',
+  'integration-preview:',
   'githubControl:',
   // The host's credential and identity planes. None of these crosses the relay for a legitimate
   // tab (relay-api.ts keeps license/accounts/usage LOCAL), and each is something the invite never

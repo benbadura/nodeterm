@@ -134,6 +134,8 @@ import { registerProjectLaunchInfoHandlers } from '../core/project-launch-info-h
 import { registerWorktreeSharedPathsHandlers } from '../core/worktree-shared-paths-handlers'
 import { makeProjectSpawnOverrides } from '../core/project-spawn-overrides'
 import { makeLocalSetupRunner } from '../core/project-setup-runner-local'
+import { IntegrationPreviewService } from '../core/integration-preview-service'
+import { registerIntegrationPreviewHandlers } from '../core/integration-preview-handlers'
 import { makeSshSetupRunner } from './remote-ssh/ssh-setup-runner'
 import { createShareTeamHandlers, SHARE_INSTALL_TIMEOUT_MS } from './remote-ssh/share-team'
 import { registerShareTeamIpc } from './remote-ssh/share-team-ipc'
@@ -669,6 +671,14 @@ ptyManager.setRelayNodeResolver({
   projectIsRemote: (projectId) => !!workspaceStore.projectTargetInfo(projectId)?.ssh
 })
 const gitService = new GitService()
+const integrationPreviewService = new IntegrationPreviewService({
+  userDataDir: corePlatform.userDataDir,
+  targetInfo: (id) => workspaceStore.projectTargetInfo(id),
+  readSettings: (id) => workspaceStore.readProjectSettings(id),
+  emit: (id, report) => sendToMain(IPC.integrationPreviewEvent(id), report)
+})
+registerIntegrationPreviewHandlers(corePlatform, integrationPreviewService)
+void integrationPreviewService.initialize().catch((error) => console.error('Integration preview recovery failed:', error))
 
 // Project setup/archive runner (SDD: 2026-08-19-project-settings-trust). The trust store is keyed
 // by LOCATION, never project id (hostile-project-json), so one instance covers every project.
@@ -5274,6 +5284,7 @@ app.on('before-quit', (e) => {
   // hook/pty teardown below would never touch it. Idempotent, so the second before-quit pass (the
   // deferred app.quit()) costs nothing.
   projectSetupService.disposeAll()
+  const integrationPreviewStopped = integrationPreviewService.dispose()
   if (quitFlushed) {
     // Second pass (the deferred app.quit() below): the flush had its chance — drop the masters.
     sshProjectManager?.disconnectAll()
@@ -5312,7 +5323,7 @@ app.on('before-quit', (e) => {
   // Pending throttled .nodeterm mirror writes must land BEFORE the ControlMasters die — killing
   // a master mid-write used to leave a truncated project.json on the server. The masters are
   // therefore kept up through the raced flush and dropped on the second before-quit pass.
-  const flush = Promise.allSettled([remoteWorkspaceIO.flush(), ptyManager.killAll(), watchLinksStopped])
+  const flush = Promise.allSettled([remoteWorkspaceIO.flush(), ptyManager.killAll(), watchLinksStopped, integrationPreviewStopped])
   void Promise.race([flush, new Promise((r) => setTimeout(r, 1500))])
     // Then let whisper go. A dictation still transcribing when Electron tears down the main
     // process's node env aborts the WHOLE app from inside the native addon (SIGABRT in
