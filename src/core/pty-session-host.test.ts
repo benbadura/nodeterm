@@ -199,6 +199,24 @@ describe('PtyManager session-host contracts', () => {
     })
   })
 
+  it('warm-attaches an existing Windows host session at the view size, not the client default', async () => {
+    // A warm reattach (offscreen revive, expired park, refresh, app restart) used to ask the host
+    // for 80x24 while recording the view's size as applied, so the pty ran at 80x24 under a wider
+    // xterm until the user resized the node.
+    const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+    try {
+      const m = await makeManager()
+      m.registerIpc()
+      backend.hasSession.mockResolvedValue(true)
+      await host.handlers[IPC.ptyCreate](7, { cols: 100, rows: 30, persistKey: 'node-warm' })
+      expect(backend.create).not.toHaveBeenCalled()
+      expect(backend.attachExisting).toHaveBeenCalledWith('nt-node-warm', { cols: 100, rows: 30 })
+    } finally {
+      if (realPlatform) Object.defineProperty(process, 'platform', realPlatform)
+    }
+  })
+
   it('asks the session host whether a no-tmux persisted session exists', async () => {
     const m = await makeManager()
     backend.hasSession.mockResolvedValue(true)

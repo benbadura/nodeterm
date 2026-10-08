@@ -4319,7 +4319,9 @@ export class PtyManager {
       // The non-session-host branch above already resolves this correctly. Sharing that logic is
       // the fix; two places deciding "which shell" is what let them disagree.
       proc = (attachExistingHost
-        ? attachExistingSessionHostPty(sessionName(options.persistKey as string))
+        ? // The view's real size, not the client's 80x24 default: `appliedSize` below records
+          // this size as what the pty runs at, so a different one would never be re-voted.
+          attachExistingSessionHostPty(sessionName(options.persistKey as string), normalizeSize(options.cols, options.rows))
         : createSessionHostPty(
             sessionName(options.persistKey as string),
             {

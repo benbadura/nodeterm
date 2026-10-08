@@ -1280,13 +1280,16 @@ export class SessionHostClient {
 
   /** Warm-only attach. The request carries the generation confirmed by hasSession/attach and no
    * spawn plan, so an exit racing the attach cannot recreate a shell with stale options. */
-  async attachExisting(name: string, sub: SessionSubscriber): Promise<AttachResult> {
-    return this.attachSubscriber(
-      name,
-      sub,
-      { kind: 'existing', scrollback: 1 },
-      { cols: 80, rows: 24 }
-    )
+  async attachExisting(
+    name: string,
+    sub: SessionSubscriber,
+    initialSize: { cols: number; rows: number } = { cols: 80, rows: 24 }
+  ): Promise<AttachResult> {
+    // `initialSize` is the attaching view's size claim. It must be the renderer's real fit: this
+    // claim is the most recent one, so the host resizes the ConPTY to it and serializes the seed
+    // screen at it. A fixed 80x24 here left every warm reattach (offscreen revive, expired park,
+    // refresh, app restart) running at 80x24 under a wider xterm until the next manual resize.
+    return this.attachSubscriber(name, sub, { kind: 'existing', scrollback: 1 }, initialSize)
   }
 
   private async attachSubscriber(

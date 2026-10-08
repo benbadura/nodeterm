@@ -3725,9 +3725,6 @@ export function TerminalNode({
         setCo(termKey, { lostSession: false })
         // …and the skipped-resume notice, for the same reason.
         setCo(termKey, { resumeSkipped: false })
-        // Catch up a size change that landed while the spawn was in flight (applyFit skips the
-        // IPC until sessionId is set, and the observer won't re-fire without another change).
-        applyFit()
         // The pty is the authority on the grid: it runs at the SMALLEST subscriber's size, so
         // render exactly that and letterbox the leftover space. With one subscriber the min is our
         // own proposal, so a solo user is never sent this at all — nothing re-fits, nothing repaints.
@@ -3741,6 +3738,15 @@ export function TerminalNode({
             })
           )
         }
+        // Re-report our size now that the session exists AND the size listener is wired. Two gaps
+        // close here: a fit that changed while `create` was in flight (applyFit set sentCols before
+        // it had a session to send to, so the gate would skip it), and a backend size answer sent
+        // DURING create (the session host's attach answer), which arrived before this listener
+        // existed and was dropped. A same-size report makes the core re-send its last backend size
+        // (PtyManager.resize) and costs nothing on tmux.
+        sentCols = 0
+        sentRows = 0
+        applyFit()
         // Someone else permanently destroyed this node (tmux kill-session): show who, and make sure
         // this component never respawns the session — see CoState.
         if (transport.onClosed) {
