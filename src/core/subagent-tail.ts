@@ -5,8 +5,23 @@
 // plus an agent-<agentId>.meta.json that carries the spawning tool_use_id. We resolve the
 // file by matching that toolUseId, then tail it (offset-based) and forward formatted lines.
 // All read-only — if Claude changes the format we just stream less (no crash).
+//
+// A native Claude child (`trackNative`, keyed by its agent_id) is RESOLVED instead: it lives at
+//   <parent transcript dir>/<sessionId>/subagents/agent-<agentId>.jsonl
+// for an Agent/Task subagent, or (MEASURED 2.1.289) at
+//   <parent transcript dir>/<sessionId>/subagents/workflows/<runId>/agent-<agentId>.jsonl
+// for an agent of the `Workflow` tool, whose run id no hook hands us.
 import fs from 'fs'
 import path from 'path'
+import {
+  claudeSubagentMetaPath,
+  claudeSubagentTranscriptPath,
+  claudeWorkflowAgentTranscriptPath,
+  claudeWorkflowsDir,
+  isClaudeAgentId,
+  labelFromSubagentMeta,
+  SUBAGENT_META_READ_MAX
+} from '../shared/agents/claude-subagents'
 
 // Per-tick read ceiling, the same discipline as context-tail's INITIAL_READ_CAP: without it the
 // first tick after track() (or any burst) allocates the entire delta in one Buffer. Unlike
@@ -36,7 +51,33 @@ interface Tracked {
   fmt?: (text: string) => string
   /** finish() was called: the entry is dropped when this fires, unless a re-track revives it. */
   finishing?: ReturnType<typeof setTimeout>
+  /**
+   * trackNative's resolution: until `file` is found, each tick stats the flat path and then looks
+   * for `<workflowsDir>/<run>/agent-<agentId>.jsonl`. Never matches another id: the file name is
+   * built from this entry's own (token-validated) agent id.
+   */
+  resolve?: { agentId: string; parent: string; flat: string; workflowsDir?: string }
+  /** trackNative's label callback, fed once from the resolved file's `.meta.json`. */
+  onLabel?: (label: string) => void
+  /** trackNative: the file was found under `subagents/workflows/` (a Workflow agent). */
+  onWorkflow?: () => void
+  /** Meta reads still allowed (the meta may land a moment after the transcript). */
+  metaTries?: number
 }
+
+/**
+ * How many run directories one resolution tick looks into — the NEWEST by mtime (a run directory's
+ * mtime moves as its agents' files are written, so the running workflow is at the front), never the
+ * first entries of an unsorted readdir: those are in name order, and a run id is random, so past
+ * this many runs a new one used to be missed at random.
+ */
+export const WORKFLOW_RUNS_SCAN_MAX = 64
+/** A run listing is re-read when the workflows directory changes, else at most this often. */
+const RUN_LIST_REFRESH_MS = 5000
+/** Workflows directories whose listing is remembered (one per parent session). */
+const RUN_LIST_CACHE_MAX = 32
+/** How many ticks may try the `.meta.json` before giving up on a label. */
+const META_TRIES = 5
 
 /** How many finished entries remember where they stopped (see `resumeAt`). */
 const RESUME_MEMORY = 256
@@ -143,8 +184,24 @@ export function splitCompleteLines(data: Buffer): { text: string; carry: Buffer 
   }
 }
 
+export interface TrackNativeHooks {
+  /** A parseable `.meta.json` `description`, sanitized — at most once. */
+  onLabel?: (label: string) => void
+  /** The transcript was found under `subagents/workflows/<run>/` — once, when it is found. */
+  onWorkflow?: () => void
+}
+
 export interface SubagentTail {
   track(toolUseId: string, transcriptPath: string | undefined): void
+  /**
+   * Tail a NATIVE Claude child by its agent_id, resolving its transcript from the parent's: the
+   * flat `subagents/agent-<id>.jsonl`, else a Workflow run's `subagents/workflows/<run>/agent-<id>
+   * .jsonl` (polled each tick until one exists). Once found, a Workflow location is reported to
+   * `onWorkflow`, and the sibling `.meta.json` is read (bounded) and a parseable `description` is
+   * handed to `onLabel` (sanitized). Same tick, cap, carry, finish and resume-by-agent-id semantics
+   * as trackFile.
+   */
+  trackNative(agentId: string, parentTranscript: string | undefined, hooks?: TrackNativeHooks): void
   /**
    * Tail an already-resolved transcript FILE — no meta-dir matching, no claude formatting.
    * The codex leg: SubagentStart hands us the child rollout's path directly, and `newFormatter`
@@ -191,6 +248,13 @@ export function createSubagentTail(
     if (e.reading) return
     e.reading = true
     try {
+      if (!e.file && e.resolve) {
+        const found = await resolveNative(e.resolve)
+        if (!found) return
+        e.file = found
+        if (found !== e.resolve.flat) e.onWorkflow?.()
+      }
+      if (e.file && e.onLabel && (e.metaTries ?? 0) > 0) await readMetaLabel(e)
       if (!e.file) {
         let metas: string[]
         try {
@@ -240,6 +304,98 @@ export function createSubagentTail(
     }
   }
 
+  const exists = async (p: string): Promise<boolean> => {
+    try {
+      return (await fs.promises.stat(p)).isFile()
+    } catch {
+      return false
+    }
+  }
+
+  // Run directories, newest mtime first, shared by every child of one parent session. Re-read when
+  // the workflows directory's own mtime moves (a new run) and at most every RUN_LIST_REFRESH_MS
+  // otherwise (an older run's directory moving to the front), so a session with hundreds of runs
+  // costs one stat per run per refresh — not per tick per child.
+  const runLists = new Map<string, { dirMtimeMs: number; at: number; runs: string[] }>()
+  const workflowRuns = async (dir: string): Promise<string[]> => {
+    let dirMtimeMs: number
+    try {
+      dirMtimeMs = (await fs.promises.stat(dir)).mtimeMs
+    } catch {
+      return [] // no workflow has run in this session (yet)
+    }
+    const cached = runLists.get(dir)
+    const now = Date.now()
+    if (cached && cached.dirMtimeMs === dirMtimeMs && now - cached.at < RUN_LIST_REFRESH_MS) return cached.runs
+    let names: string[]
+    try {
+      names = (await fs.promises.readdir(dir)).filter((n) => isClaudeAgentId(n))
+    } catch {
+      return []
+    }
+    const stamped = await Promise.all(
+      names.map(async (n) => {
+        try {
+          const st = await fs.promises.stat(path.join(dir, n))
+          return st.isDirectory() ? { n, m: st.mtimeMs } : null
+        } catch {
+          return null
+        }
+      })
+    )
+    const runs = stamped
+      .filter((x): x is { n: string; m: number } => !!x)
+      .sort((a, b) => b.m - a.m)
+      .map((x) => x.n)
+    runLists.delete(dir)
+    runLists.set(dir, { dirMtimeMs, at: now, runs })
+    if (runLists.size > RUN_LIST_CACHE_MAX) runLists.delete(runLists.keys().next().value!)
+    return runs
+  }
+
+  const resolveNative = async (r: NonNullable<Tracked['resolve']>): Promise<string | null> => {
+    if (await exists(r.flat)) return r.flat
+    if (!r.workflowsDir) return null
+    for (const run of (await workflowRuns(r.workflowsDir)).slice(0, WORKFLOW_RUNS_SCAN_MAX)) {
+      const candidate = claudeWorkflowAgentTranscriptPath(r.parent, run, r.agentId)
+      if (candidate && (await exists(candidate))) return candidate
+    }
+    return null
+  }
+
+  // The label is cosmetic: any failure just costs a try; a meta that parses but carries no usable
+  // description ends the attempts (it will not grow one).
+  const readMetaLabel = async (e: Tracked): Promise<void> => {
+    e.metaTries = (e.metaTries ?? 0) - 1
+    const meta = e.file ? claudeSubagentMetaPath(e.file) : undefined
+    if (!meta) return void (e.metaTries = 0)
+    // Bounded like the SSH locator's `head -c` (SUBAGENT_META_READ_MAX), so both shells read the
+    // same prefix of the same file.
+    let text: string
+    try {
+      const fd = await fs.promises.open(meta, 'r')
+      try {
+        const buf = Buffer.alloc(SUBAGENT_META_READ_MAX)
+        const { bytesRead } = await fd.read(buf, 0, SUBAGENT_META_READ_MAX, 0)
+        text = buf.subarray(0, bytesRead).toString('utf-8')
+      } finally {
+        await fd.close()
+      }
+    } catch {
+      return
+    }
+    let parsed = true
+    try {
+      JSON.parse(text)
+    } catch {
+      parsed = false
+    }
+    if (!parsed) return // mid-write: retry next tick while tries remain
+    e.metaTries = 0
+    const label = labelFromSubagentMeta(text)
+    if (label) e.onLabel?.(label)
+  }
+
   const tick = () => {
     for (const [toolUseId, e] of tracked) void readOne(toolUseId, e)
     if (!tracked.size && timer) {
@@ -254,6 +410,24 @@ export function createSubagentTail(
       const dir = path.join(transcriptPath.replace(/\.jsonl$/, ''), 'subagents')
       tracked.set(toolUseId, { dir, file: null, offset: 0 })
       if (!timer) timer = setInterval(tick, 400) // only runs while subagents are active
+    },
+    trackNative(agentId, parentTranscript, hooks) {
+      const onLabel = hooks?.onLabel
+      const flat = parentTranscript ? claudeSubagentTranscriptPath(parentTranscript, agentId) : undefined
+      if (!parentTranscript || !flat || revive(agentId)) return
+      const resumed = resumeAt.get(agentId)
+      resumeAt.delete(agentId)
+      tracked.set(agentId, {
+        dir: path.dirname(flat),
+        // A resumed child: the file was already resolved under this same agent id.
+        file: resumed?.file ?? null,
+        offset: resumed?.offset ?? 0,
+        resolve: { agentId, parent: parentTranscript, flat, workflowsDir: claudeWorkflowsDir(parentTranscript) },
+        onLabel,
+        onWorkflow: hooks?.onWorkflow,
+        metaTries: onLabel ? META_TRIES : 0
+      })
+      if (!timer) timer = setInterval(tick, 400)
     },
     trackFile(toolUseId, filePath, newFormatter) {
       if (!filePath || revive(toolUseId)) return

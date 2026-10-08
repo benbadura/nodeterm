@@ -1546,6 +1546,7 @@ describe('--after-success + report-outcome: a dependent that waits for a reporte
     expect(flat).toContain("A person typing in the station's pane is not a hand-over")
     expect(flat).toContain('A turn that ENDS with a background SUBAGENT still running')
     expect(flat).toContain('waits for a later turn end that reports none left')
+    expect(flat).toContain("A running WORKFLOW (Claude's `Workflow` tool) holds the same way: its completion wakes the station")
     expect(flat).toContain('A background SHELL (a dev server, a watcher, a long test run) does NOT hold')
     expect(flat).toContain('"waiting for <station> to finish the tasks still running in its background"')
   })

@@ -10,6 +10,7 @@ import {
   registerClaudeAccountsSource,
   resetClaudeAccountsSourceForTests
 } from '../core/claude-config-dir'
+import { claudeSubagentTranscriptPath } from '../shared/agents/claude-subagents'
 import { normalizeClaude } from '../shared/agents/normalize'
 import { IPC } from '../shared/ipc'
 import { decodePtyData } from '../shared/rpc'
@@ -55,6 +56,7 @@ function recTail() {
     tail: {
       track: (...args: unknown[]) => calls.push({ m: 'track', args }),
       trackFile: (...args: unknown[]) => calls.push({ m: 'trackFile', args }),
+      trackNative: (...args: unknown[]) => calls.push({ m: 'trackNative', args }),
       finish: (...args: unknown[]) => calls.push({ m: 'finish', args }),
       untrack: (...args: unknown[]) => calls.push({ m: 'untrack', args })
     },
@@ -546,8 +548,9 @@ describe('wireAgentStatus — Claude native subagent hooks', () => {
       payloads.filter((p) => p.hook_event_name === 'SubagentStop').map((p) => [p.agent_id, p.agent_transcript_path])
     )
     for (const s of starts) {
-      const tf = sub.calls.find((c) => c.m === 'trackFile' && c.args[0] === s.agent_id)
-      expect(tf?.args[1]).toBe(stops.get(s.agent_id)) // the derived path IS the file the stop names
+      const tf = sub.calls.find((c) => c.m === 'trackNative' && c.args[0] === s.agent_id)
+      // The tail resolves from the parent; its first candidate (the flat path) IS the file the stop names.
+      expect(claudeSubagentTranscriptPath(tf?.args[1] as string, s.agent_id as string)).toBe(stops.get(s.agent_id))
       expect(sub.calls.some((c) => c.m === 'finish' && c.args[0] === s.agent_id)).toBe(true)
     }
     // Only the first tool call (before the session proved native hooks) got a tool-path tail…
@@ -575,6 +578,61 @@ describe('wireAgentStatus — Claude native subagent hooks', () => {
       agent_type: 'general-purpose',
       transcript_path: path.join(os.homedir(), '.ssh', 'x.jsonl')
     })
-    expect(sub.calls.filter((c) => c.m === 'trackFile' && c.args[1] !== undefined)).toEqual([])
+    expect(
+      sub.calls.filter((c) => (c.m === 'trackFile' || c.m === 'trackNative') && c.args[1] !== undefined)
+    ).toEqual([])
+  })
+})
+
+// The agents of Claude Code's `Workflow` tool, replayed from the REAL 2.1.289 capture
+// (src/shared/agents/__fixtures__/claude/workflow-hook-payloads.json) through this shell.
+describe('wireAgentStatus — Claude Workflow agents', () => {
+  const fixture = JSON.parse(
+    fs.readFileSync(
+      path.join(__dirname, '../shared/agents/__fixtures__/claude/workflow-hook-payloads.json'),
+      'utf8'
+    )
+  ) as { events: Record<string, unknown>[] }
+  const home = path.join(os.homedir(), '.claude')
+  const rehome = (p: Record<string, unknown>): Record<string, unknown> =>
+    JSON.parse(JSON.stringify(p).split('/home/user/.claude').join(home))
+
+  it('draws a card per workflow agent that survives the launch-time Stop, tails it, and labels it from its meta', () => {
+    const fh = fakeHooks()
+    const sub = recTail()
+    wireAgentStatus(platform, { hooks: fh.hooks as never, subagentTail: sub.tail as never, contextTail: recTail().tail as never })
+    const payloads = fixture.events.map(rehome)
+    const ids = payloads.filter((p) => p.hook_event_name === 'SubagentStart').map((p) => p.agent_id as string)
+    const statuses = (): Record<string, unknown>[] =>
+      sent
+        .filter((m) => (m as { channel?: string }).channel === IPC.agentStatus)
+        .map((m) => (m as { args: Record<string, unknown>[] }).args[0])
+    let firstStopAt = -1
+    for (const payload of payloads) {
+      fh.fireRaw('claude', 'n1', payload)
+      const e = normalizeClaude({ nodeId: 'n1', agentId: 'claude', payload })
+      if (e) fh.fireNormalized(e)
+      if (payload.hook_event_name === 'Stop' && firstStopAt < 0) {
+        firstStopAt = statuses().length
+        // The launch-time Stop (inventory = the workflow, never its agents) ended nothing.
+        expect(statuses().filter((s) => s.kind === 'subagent-end')).toEqual([])
+        // The meta label, as the resolving tail would hand it, redraws the still-working card.
+        const tn = sub.calls.find((c) => c.m === 'trackNative' && c.args[0] === ids[0])
+        const hooks = tn?.args[2] as { onLabel: (l: string) => void; onWorkflow: () => void }
+        hooks.onWorkflow() // found under subagents/workflows/: already a workflow card, nothing redrawn
+        expect(statuses().length).toBe(firstStopAt)
+        hooks.onLabel('read-a')
+        const relabel = statuses().at(-1)!
+        expect(relabel).toMatchObject({ kind: 'subagent-start', toolUseId: ids[0], taskLabel: 'read-a' })
+      }
+    }
+    const starts = statuses().filter((s) => s.kind === 'subagent-start' && !s.taskLabel)
+    expect(starts.map((s) => s.toolUseId)).toEqual(ids)
+    expect(starts.every((s) => s.subagentType === 'workflow-subagent')).toBe(true)
+    const ends = statuses().filter((s) => s.kind === 'subagent-end' && ids.includes(s.toolUseId as string))
+    expect(ends.map((s) => s.toolUseId).sort()).toEqual([...ids].sort())
+    for (const id of ids) {
+      expect(sub.calls.some((c) => c.m === 'trackNative' && c.args[0] === id)).toBe(true)
+    }
   })
 })

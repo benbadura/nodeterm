@@ -317,7 +317,8 @@ function afterHandoverDocLines(): string[] {
     '- A turn that ENDS with a background SUBAGENT still running (Claude reports them when its turn',
     '  ends) has not finished either: `--after` on that station waits for a later turn end that reports',
     '  none left — the subagent\'s result wakes the station for that turn (`list`: "waiting for',
-    '  <station> to finish the tasks still running in its background"). A background SHELL (a dev',
+    '  <station> to finish the tasks still running in its background"). A running WORKFLOW (Claude\'s',
+    '  `Workflow` tool) holds the same way: its completion wakes the station. A background SHELL (a dev',
     '  server, a watcher, a long test run) does NOT hold: it may never end. So if YOU are the station and',
     '  a dependent needs a background shell\'s result, wait for it before you end your turn. Agents that',
     '  do not report background tasks release on their turn end as before.'

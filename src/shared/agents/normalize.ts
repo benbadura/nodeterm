@@ -5,7 +5,8 @@ import {
   isClaudeAgentId,
   isInjectedSubagentPrompt,
   liveBackgroundSubagentIds,
-  liveBackgroundTaskIds
+  liveBackgroundTaskIds,
+  liveBackgroundWorkflowIds
 } from './claude-subagents'
 
 export type AgentState = 'working' | 'waiting' | 'blocked' | 'done'
@@ -124,15 +125,21 @@ export interface NormalizedAgentEvent {
    *  the ack names, measured to arrive ~1 ms after the child's `SubagentStart`. */
   subagentLaunch?: { toolUseId: string; agentId: string }
   /**
-   * Claude `Stop` only: the ids of the BACKGROUND tasks (async subagents, background shells) the
-   * CLI reports still running at this turn end. Present only when the payload carried the
-   * inventory — absent from older CLIs, so absent means "unknown", never "none". See
+   * Claude `Stop` only: the ids of the BACKGROUND tasks (async subagents, background shells,
+   * Workflow runs) the CLI reports still running at this turn end. Present only when the payload
+   * carried the inventory — absent from older CLIs, so absent means "unknown", never "none". A
+   * Workflow run is ONE entry keyed by its task id; its agents are not listed by their own ids. See
    * `liveBackgroundTaskIds`.
    */
   backgroundTaskIds?: string[]
-  /** The async SUBAGENTS among `backgroundTaskIds` (`liveBackgroundSubagentIds`) — the only
-   *  background work plain `--after` holds on. Present exactly when `backgroundTaskIds` is. */
+  /** The async SUBAGENTS among `backgroundTaskIds` (`liveBackgroundSubagentIds`). Present exactly
+   *  when `backgroundTaskIds` is. */
   backgroundSubagentIds?: string[]
+  /** The running WORKFLOW runs among `backgroundTaskIds` (`liveBackgroundWorkflowIds`, task ids,
+   *  not agent ids). Present exactly when `backgroundTaskIds` is. Plain `--after` holds on these
+   *  and on `backgroundSubagentIds`; the subagent lifecycle keeps workflow agents' cards while any
+   *  is live. */
+  backgroundWorkflowIds?: string[]
   /** Host-observed start time for display-only renderer reload replay. */
   subagentStartedAt?: number
   /** Host-observed time of the subagent's last transcript chunk, replayed with the start so a
@@ -411,6 +418,7 @@ export function normalizeClaude(env: RawHookEnvelope): NormalizedAgentEvent | nu
   if (ev === 'Stop') {
     const backgroundTaskIds = liveBackgroundTaskIds(p.background_tasks)
     const backgroundSubagentIds = liveBackgroundSubagentIds(p.background_tasks)
+    const backgroundWorkflowIds = liveBackgroundWorkflowIds(p.background_tasks)
     return {
       ...base,
       kind: 'state',
@@ -418,7 +426,8 @@ export function normalizeClaude(env: RawHookEnvelope): NormalizedAgentEvent | nu
       interrupted: p.is_interrupt === true,
       lastMessage: p.last_assistant_message,
       ...(backgroundTaskIds ? { backgroundTaskIds } : {}),
-      ...(backgroundSubagentIds ? { backgroundSubagentIds } : {})
+      ...(backgroundSubagentIds ? { backgroundSubagentIds } : {}),
+      ...(backgroundWorkflowIds ? { backgroundWorkflowIds } : {})
     }
   }
   // The turn died on an API/model error — Claude Code skips the normal Stop hook here,

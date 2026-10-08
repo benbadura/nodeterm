@@ -8,6 +8,7 @@ import {
   SUBAGENT_READ_CAP
 } from './subagent-tail'
 import { testTmpDir } from './test-tmp'
+import { SUBAGENT_META_READ_MAX } from '../shared/agents/claude-subagents'
 
 const assistant = (text: string): string =>
   JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text }] } })
@@ -282,5 +283,123 @@ describe('a resumed subagent (same id tracked again)', () => {
     await wait(600)
     expect(streamed(send)).toContain('in b')
     tail.finish('x')
+  })
+})
+
+// trackNative: a native Claude child keyed by agent_id, its file RESOLVED from the parent's
+// transcript — the flat `subagents/agent-<id>.jsonl`, or a Workflow run's
+// `subagents/workflows/<run>/agent-<id>.jsonl` (MEASURED 2.1.289).
+describe('trackNative (native Claude child, resolved file)', () => {
+  it('finds a Workflow agent created AFTER tracking starts, reads its meta label once, and streams it', async () => {
+    const { transcriptPath, subDir } = setup()
+    const send = vi.fn()
+    const labels: string[] = []
+    let workflow = 0
+    const tail = createSubagentTail(send)
+    tail.trackNative('a1', transcriptPath, { onLabel: (l) => labels.push(l), onWorkflow: () => workflow++ })
+    await wait(500) // nothing exists yet: no crash, no output
+    expect(send).not.toHaveBeenCalled()
+    const run = path.join(subDir, 'workflows', 'wf_1')
+    fs.mkdirSync(run, { recursive: true })
+    // A sibling run holding ANOTHER agent must never be read for this id.
+    const other = path.join(subDir, 'workflows', 'wf_0')
+    fs.mkdirSync(other, { recursive: true })
+    fs.writeFileSync(path.join(other, 'agent-a2.jsonl'), assistant('not mine') + '\n')
+    fs.writeFileSync(path.join(run, 'agent-a1.meta.json'), JSON.stringify({ agentType: 'workflow-subagent', description: 'read-a‮' }))
+    fs.writeFileSync(path.join(run, 'agent-a1.jsonl'), assistant('hello from a1') + '\n')
+    await wait(900)
+    fs.appendFileSync(path.join(run, 'agent-a1.jsonl'), assistant('more') + '\n')
+    await wait(600)
+    const out = streamed(send)
+    expect(out).toContain('hello from a1')
+    expect(out).toContain('more')
+    expect(out).not.toContain('not mine')
+    expect(labels).toEqual(['read-a'])
+    expect(workflow).toBe(1)
+    tail.finish('a1')
+  })
+
+  it('finds a new run past the first 64 directory entries (newest mtime first, not readdir order)', async () => {
+    const { transcriptPath, subDir } = setup()
+    const runs = path.join(subDir, 'workflows')
+    const old = Date.now() / 1000 - 3600
+    for (let i = 0; i < 70; i++) {
+      const d = path.join(runs, `wf_${String(i).padStart(3, '0')}aaaa`)
+      fs.mkdirSync(d, { recursive: true })
+      fs.utimesSync(d, old, old)
+    }
+    // Sorts after every older run by name — beyond index 64 in a name-ordered readdir.
+    const run = path.join(runs, 'wf_zzzz-new')
+    fs.mkdirSync(run)
+    fs.writeFileSync(path.join(run, 'agent-a1.jsonl'), assistant('found past 64') + '\n')
+    fs.writeFileSync(path.join(run, 'agent-a1.meta.json'), JSON.stringify({ description: 'lbl' }))
+    const send = vi.fn()
+    const labels: string[] = []
+    const tail = createSubagentTail(send)
+    tail.trackNative('a1', transcriptPath, { onLabel: (l) => labels.push(l) })
+    await wait(700)
+    expect(streamed(send)).toContain('found past 64')
+    expect(labels).toEqual(['lbl'])
+    tail.finish('a1')
+  })
+
+  it('reads only a bounded prefix of a meta (an oversized one yields no label, as on the SSH leg)', async () => {
+    const { transcriptPath, subDir } = setup()
+    const run = path.join(subDir, 'workflows', 'wf_1')
+    fs.mkdirSync(run, { recursive: true })
+    fs.writeFileSync(path.join(run, 'agent-a1.jsonl'), assistant('x') + '\n')
+    fs.writeFileSync(
+      path.join(run, 'agent-a1.meta.json'),
+      JSON.stringify({ description: 'big', pad: 'y'.repeat(SUBAGENT_META_READ_MAX * 2) })
+    )
+    const labels: string[] = []
+    const tail = createSubagentTail(vi.fn())
+    tail.trackNative('a1', transcriptPath, { onLabel: (l) => labels.push(l) })
+    await wait(2600)
+    expect(labels).toEqual([])
+    tail.finish('a1')
+  })
+
+  it('prefers the flat subagents/ path (an Agent/Task child)', async () => {
+    const { transcriptPath, subDir } = setup()
+    fs.writeFileSync(path.join(subDir, 'agent-a1.jsonl'), assistant('flat child') + '\n')
+    const send = vi.fn()
+    const tail = createSubagentTail(send)
+    tail.trackNative('a1', transcriptPath)
+    await wait(600)
+    expect(streamed(send)).toContain('flat child')
+    tail.finish('a1')
+  })
+
+  it('a resumed child continues from where it stopped (resume keyed by agent id)', async () => {
+    const { transcriptPath, subDir } = setup()
+    const run = path.join(subDir, 'workflows', 'wf_1')
+    fs.mkdirSync(run, { recursive: true })
+    const file = path.join(run, 'agent-a1.jsonl')
+    fs.writeFileSync(file, assistant('first turn') + '\n')
+    const send = vi.fn()
+    const tail = createSubagentTail(send)
+    tail.trackNative('a1', transcriptPath)
+    await wait(600)
+    tail.finish('a1')
+    await wait(1700)
+    fs.appendFileSync(file, assistant('second turn') + '\n')
+    tail.trackNative('a1', transcriptPath)
+    await wait(600)
+    const out = streamed(send)
+    expect(out.match(/first turn/g)).toHaveLength(1)
+    expect(out).toContain('second turn')
+    tail.finish('a1')
+  })
+
+  it('an unsafe id or a non-transcript parent is ignored', () => {
+    const send = vi.fn()
+    const tail = createSubagentTail(send)
+    tail.trackNative('../x', '/tmp/p.jsonl')
+    tail.trackNative('a1', '/tmp/p.txt')
+    tail.trackNative('a1', undefined)
+    tail.finish('../x')
+    tail.finish('a1')
+    expect(send).not.toHaveBeenCalled()
   })
 })

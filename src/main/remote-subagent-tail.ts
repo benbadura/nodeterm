@@ -31,6 +31,14 @@ interface Tracked {
 export interface RemoteSubagentTail {
   track(toolUseId: string, ref: RemoteFileRef | undefined): void
   untrack(toolUseId: string): void
+  /** Bytes read so far for a tracked key (`undefined` when not tracked) — a native child whose
+   *  derived flat path has produced data needs no remote locate at all. */
+  offsetFor(toolUseId: string): number | undefined
+  /** Point a TRACKED key at another file (a native child located under `subagents/workflows/`),
+   *  from byte 0. No-op when the key is not tracked or already reads that path. */
+  retarget(toolUseId: string, ref: RemoteFileRef): void
+  /** Where an untracked key stopped (see `resumeAt`), for a resumed native child. */
+  resumeFor(toolUseId: string): { path: string; offset: number } | undefined
 }
 
 export function createRemoteSubagentTail(win: BrowserWindow, remoteFile: RemoteFile): RemoteSubagentTail {
@@ -83,6 +91,19 @@ export function createRemoteSubagentTail(win: BrowserWindow, remoteFile: RemoteF
       tracked.set(toolUseId, { ref, offset, reading: false, carry: null })
       void readOne(toolUseId, tracked.get(toolUseId)!) // immediate first read
       if (!timer) timer = setInterval(tick, POLL_MS)
+    },
+    offsetFor(toolUseId) {
+      return tracked.get(toolUseId)?.offset
+    },
+    retarget(toolUseId, ref) {
+      const e = tracked.get(toolUseId)
+      if (!e || e.ref.path === ref.path) return
+      // A fresh entry: an in-flight read of the old one mutates only that (now dropped) object.
+      tracked.set(toolUseId, { ref, offset: 0, reading: false, carry: null })
+      void readOne(toolUseId, tracked.get(toolUseId)!)
+    },
+    resumeFor(toolUseId) {
+      return resumeAt.get(toolUseId)
     },
     untrack(toolUseId) {
       const e = tracked.get(toolUseId)
