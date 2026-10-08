@@ -34,6 +34,7 @@ import {
   type ShutdownResult
 } from './protocol'
 import { HostSession } from './session'
+import { setEmulatorParseErrorReporter } from './terminal-emulator'
 import { sendTextWhenSettled } from '../core/settled-text'
 import { paneCommand as readPaneCommand } from './process-tree'
 import { terminateWindowsProcessTree } from './windows-process-tree'
@@ -155,6 +156,7 @@ async function main(): Promise<void> {
   const paths = sessionHostPaths(userDataDir)
   logPath = path.join(userDataDir, 'session-host.log')
   log(`starting pid=${process.pid} endpoint=${paths.endpoint}`)
+  setEmulatorParseErrorReporter(log)
 
   // 1) Exclusive-create race gate. Two app instances launched at once will both spawn a host;
   // exactly one of them may proceed past this point on the first try.

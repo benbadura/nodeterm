@@ -27,6 +27,64 @@ import { SerializeAddon } from '@xterm/addon-serialize'
  * sequence is appended by hand below whenever tracking is active. If a future xterm.js version
  * starts emitting it itself, appending it twice is a harmless idempotent DECSET, not a bug.
  */
+/** Where a swallowed parser exception is reported. The session host points this at its own log;
+ *  the default stays silent rather than writing to a console nobody reads. */
+let reportParseError: (detail: string) => void = () => {}
+export function setEmulatorParseErrorReporter(fn: (detail: string) => void): void {
+  reportParseError = fn
+}
+
+/** The private xterm internals `guardWriteBuffer` patches, pinned by terminal-emulator.test.ts. */
+interface XtermWriteInternals {
+  _core?: {
+    _writeBuffer?: { _action?: (data: string | Uint8Array, promiseResult?: boolean) => unknown }
+    _inputHandler?: { _parser?: { reset?: () => void } }
+  }
+}
+
+/**
+ * ONE parser exception must not wedge the emulator for the rest of the session's life.
+ *
+ * xterm's WriteBuffer runs the parser from a `setTimeout`. When the parser throws, the throw
+ * escapes `_innerWrite` before that chunk's callback runs and before the next turn is scheduled,
+ * so every later `write` is queued behind it forever and its callback never fires (measured on
+ * @xterm/headless 6.0.0). In the session host every screen read waits on that callback
+ * (`HostSession.outputTail`), so a single throw turned into: `attachExisting` timing out on every
+ * reattach (the client then drops the whole socket, detaching every other terminal too), sendKeys
+ * and captures hanging, and the output backlog pausing the ConPTY so the program in the pane froze.
+ * The host process outlives the app, so an app restart did not clear it.
+ *
+ * The guard catches the throw at the parse call, resets the parser to ground state (otherwise the
+ * next bytes are read as the rest of the broken sequence) and lets the write complete. The rest of
+ * that one chunk is lost from the server-side screen; the pty itself is untouched.
+ */
+function guardWriteBuffer(term: Terminal): boolean {
+  const core = (term as unknown as XtermWriteInternals)._core
+  const buffer = core?._writeBuffer
+  const original = buffer?._action
+  if (!buffer || typeof original !== 'function') return false
+  let reported = 0
+  buffer._action = (data, promiseResult) => {
+    try {
+      return original(data, promiseResult)
+    } catch (error) {
+      try {
+        core?._inputHandler?._parser?.reset?.()
+      } catch {
+        /* a parser that cannot reset still must not wedge the buffer */
+      }
+      // Bounded: a pane that keeps producing the bad sequence must not flood the host log. The
+      // chunk itself is never logged — it is the user's terminal output.
+      if (reported++ < 20) {
+        const e = error as Error
+        reportParseError(`emulator parse error (chunk dropped): ${e?.stack ?? String(error)}`)
+      }
+      return undefined
+    }
+  }
+  return true
+}
+
 export class TerminalEmulator {
   private readonly term: Terminal
   private readonly serializer: SerializeAddon
@@ -40,6 +98,9 @@ export class TerminalEmulator {
       scrollback: this.defaultScrollback,
       allowProposedApi: true
     })
+    if (!guardWriteBuffer(this.term)) {
+      reportParseError('emulator parse guard not installed: xterm write-buffer internals changed')
+    }
     this.serializer = new SerializeAddon()
     this.term.loadAddon(this.serializer as unknown as ITerminalAddon)
   }
