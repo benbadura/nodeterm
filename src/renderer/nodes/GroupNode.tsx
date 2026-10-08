@@ -10,6 +10,7 @@ import { useWorktrees, WORKTREE_STATUS_POLL_MS } from '../state/worktrees'
 import { useSession } from '../session/session'
 import { useGitBranch } from '../state/gitBranches'
 import { useProjectSetup } from '../state/projectSetup'
+import { WorkflowGroupControls } from '../components/WorkflowControls'
 
 export type WorktreeAction = 'merge' | 'remove' | 'unbind' | 'rerun-setup'
 
@@ -171,6 +172,7 @@ export function GroupNode({ id, data, selected }: NodeProps<CanvasNode>) {
       />
 
       <div className="group-node__label">
+        <WorkflowGroupControls groupId={id} />
         <Tooltip label="Color">
           <button
             className="group-node__dot nodrag"

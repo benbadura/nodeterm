@@ -54,6 +54,7 @@ function subscribe<A extends unknown[] = []>(channel: string) {
 // Fan-out subscriber for the host's inbound apply-mutation events (a single ipcRenderer
 // listener shared by all renderer subscribers, like the other event channels).
 const subscribeMutation = subscribe<[CanvasMutation]>(IPC.remoteHostApplyMutation)
+const subscribeWorkflows = subscribe<[string, import('../shared/workflows').WorkflowRun[]]>(IPC.workflowsChanged)
 // Fan-out subscriber for the connection-approval prompt (main → host renderer when a client
 // finishes the handshake; carries the SAS to show in the approval dialog).
 const subscribePeerPending = subscribe<[{ sas: string | null; id: string; pub?: string | null; standing?: boolean }]>(
@@ -577,6 +578,13 @@ const api: NodeTerminalApi = {
     disarm: (projectId, nodeId) => ipcRenderer.invoke(IPC.triggersDisarm, { projectId, nodeId }),
     status: (projectId, nodeId) => ipcRenderer.invoke(IPC.triggersStatus, { projectId, nodeId }),
     runNow: (projectId, nodeId) => ipcRenderer.invoke(IPC.triggersRunNow, { projectId, nodeId })
+  },
+  workflows: {
+    saveTemplates: (id, value) => ipcRenderer.invoke(IPC.workflowsSave, id, value),
+    start: (id, template, ref) => ipcRenderer.invoke(IPC.workflowsStart, id, template, ref),
+    list: id => ipcRenderer.invoke(IPC.workflowsList, id),
+    act: (id, run, action) => ipcRenderer.invoke(IPC.workflowsAct, id, run, action),
+    onChanged: subscribeWorkflows
   },
   context: {
     onUpdate: (listener) => {

@@ -15,6 +15,8 @@ import {
 import { approvalFlags } from "../shared/agents/approval-mode";
 import { CODEX_NO_DAEMON_FLAG } from "../shared/agents/codex-daemon";
 import { SAFE_SESSION_ID } from "../shared/session-id";
+import { withAgentModel } from "../shared/agents/model-gateway";
+import { shellSplit } from "../shared/shell-quote";
 
 /** The parser that owns a live local Windows-profile terminal. */
 export type AgentLaunchDialect =
@@ -50,6 +52,8 @@ export type TrustedCustomAgentLaunchConfig = Pick<
  * peer. In particular, the intent carries no executable and cannot select a different node owner.
  */
 export interface AgentLaunchTrustedContext {
+  /** Model selected by the host for a saved workflow stage. */
+  model?: string;
   expectedAgentId: AgentId;
   customAgent?: TrustedCustomAgentLaunchConfig;
   sharedIdentityAvailable: boolean;
@@ -374,7 +378,9 @@ function logicalLaunch(
     )
       ? [CODEX_NO_DAEMON_FLAG]
       : [];
-  const modeFlags = [...approval, ...noDaemon];
+  if (context.model !== undefined && !safeText(context.model, 256)) fail("invalid-intent");
+  const modeFlags = [...approval, ...noDaemon,
+    ...shellSplit(withAgentModel("", config.id, context.model))];
 
   if (intent.action === "resume") {
     if (!config.builtin || !canResume(config.id)) fail("agent-unavailable");

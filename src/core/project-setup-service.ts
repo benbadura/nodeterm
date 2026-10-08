@@ -182,6 +182,20 @@ interface TrustFlight {
 }
 
 export class ProjectSetupService {
+  private readonly completion = new Map<string, Promise<boolean>>()
+  private readonly completionResolvers = new Map<string, (ok: boolean) => void>()
+
+  /** Host orchestration waits for the actual script exit, independent of a mounted UI. */
+  async runAndWait(target: ProjectSetupTarget): Promise<void> {
+    const result = await this.run(target, 'setup')
+    if (result.status === 'skipped') {
+      if (result.reason === 'no-script') return
+      throw new Error(`Project setup did not run: ${result.reason}.`)
+    }
+    const ok = await this.completion.get(result.runId)
+    this.completion.delete(result.runId)
+    if (!ok) throw new Error('Project setup failed or was cancelled.')
+  }
   private readonly active = new Map<string, ActiveRun>()
   private readonly pending = new Map<string, (answer: ProjectSetupConsentAnswer | undefined) => void>()
   /** App-wide prompt queue: each ask chains onto the previous one, so only one dialog is live.
@@ -474,6 +488,7 @@ export class ProjectSetupService {
     script: string,
     target: ProjectSetupTarget
   ): Promise<void> {
+    this.completion.set(entry.runId, new Promise(resolve => this.completionResolvers.set(entry.runId, resolve)))
     // For an ssh run every path the script sees is the REMOTE one — a local Mac path in these env
     // vars would name a directory that does not exist on the host.
     const cwd = target.ssh ? target.ssh.remoteCwd : target.worktreePath ?? target.rootPath
@@ -509,6 +524,13 @@ export class ProjectSetupService {
     else if (threw) this.emit(entry, { state: 'failed' })
     else this.emit(entry, { state: exitCode === 0 ? 'done' : 'failed', exitCode })
     entry.closed = true
+    this.completionResolvers.get(entry.runId)?.(!threw && !entry.abort.signal.aborted && exitCode === 0)
+    this.completionResolvers.delete(entry.runId)
+    // Keep only a small completed tail for callers whose acknowledgement races a fast script.
+    for (const key of this.completion.keys()) {
+      if (this.completion.size <= 200) break
+      if (!this.completionResolvers.has(key)) this.completion.delete(key)
+    }
   }
 
   private emit(entry: ActiveRun, ev: Omit<ProjectSetupEvent, 'runKey' | 'runId' | 'kind' | 'seq'>): void {

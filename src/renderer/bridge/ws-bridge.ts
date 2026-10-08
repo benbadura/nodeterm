@@ -1018,6 +1018,16 @@ export function buildTriggersApi(client: RpcClient): Pick<NodeTerminalApi, 'trig
   }
 }
 
+export function buildWorkflowsApi(client: RpcClient): Pick<NodeTerminalApi, 'workflows'> {
+  return { workflows: {
+    saveTemplates: (id, value) => client.request(IPC.workflowsSave, id, value) as ReturnType<NodeTerminalApi['workflows']['saveTemplates']>,
+    start: (id, template, ref) => client.request(IPC.workflowsStart, id, template, ref) as ReturnType<NodeTerminalApi['workflows']['start']>,
+    list: id => client.request(IPC.workflowsList, id) as ReturnType<NodeTerminalApi['workflows']['list']>,
+    act: (id, run, action) => client.request(IPC.workflowsAct, id, run, action) as ReturnType<NodeTerminalApi['workflows']['act']>,
+    onChanged: listener => client.subscribe(IPC.workflowsChanged, listener as Listener)
+  } }
+}
+
 /**
  * The Server Edition's live links — the REAL bridge, backed by the same core service the desktop
  * registers (src/core/watch-link/service.ts). Its browser tabs are the server's own user (owner
@@ -1411,6 +1421,7 @@ export async function installWsBridge(): Promise<boolean> {
     ...buildWallpaperApi(client),
     ...buildRunConfigApi(client),
     ...buildTriggersApi(client),
+    ...buildWorkflowsApi(client),
     ...buildGitHubApi(client),
     ...buildClaudeAccountsApi(client),
     codex: buildCodexApi(client),

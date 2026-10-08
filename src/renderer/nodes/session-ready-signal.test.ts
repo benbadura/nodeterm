@@ -77,7 +77,7 @@ describe('an ARMED node does not cold-start its agent under the hold (source pin
     // predicate's contents rather than the branch's old inline shape. `!data.pendingLaunch` and
     // `shouldColdResume` are independent refusals and must both survive a reformat.
     expect(src).toMatch(
-      /const canColdRestore =\s*\n?\s*session\.source !== 'relay' && !!agentId && canResume\(agentId\) && !data\.pendingLaunch && shouldColdResume\(pausedNow\)/
+      /const canColdRestore =\s*\n?\s*session\.source !== 'relay' && !!agentId && canResume\(agentId\) && !data\.pendingLaunch && !data\.workflowManaged && shouldColdResume\(pausedNow\)/
     )
     // …and the relaunch branch is the one that reads it.
     expect(src).toContain('} else if (coldStart && canColdRestore) {')

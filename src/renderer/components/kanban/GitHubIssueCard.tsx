@@ -7,6 +7,7 @@ import { PullRefChip } from './PullStatusBadges'
 import { NO_ISSUE_RUNS, type IssueRun } from '../../lib/issueRuns'
 import { IssueRunChips } from './IssueRunChips'
 import { DispatchChip } from './DispatchChip'
+import { IssueWorkflowControls } from '../WorkflowControls'
 
 export const GitHubIssueCard = memo(function GitHubIssueCard({
   issue,
@@ -22,7 +23,8 @@ export const GitHubIssueCard = memo(function GitHubIssueCard({
   onDragEnd,
   runs = NO_ISSUE_RUNS,
   onOpenRun,
-  onContext
+  onContext,
+  projectId
 }: {
   issue: GitHubIssueCardView
   columns: KanbanColumn[]
@@ -42,6 +44,7 @@ export const GitHubIssueCard = memo(function GitHubIssueCard({
   onOpenRun?: (nodeId: string) => void
   /** Right-click: the issue card's menu ("Start with agent ▸", Open on GitHub). */
   onContext?: (issue: GitHubIssueCardView, x: number, y: number) => void
+  projectId?: string
 }): React.JSX.Element {
   const [dragging, setDragging] = useState(false)
   return (
@@ -79,6 +82,7 @@ export const GitHubIssueCard = memo(function GitHubIssueCard({
         <span className="github-issue-source" title="GitHub issue">GH</span>
       </div>
       <div className="github-issue-card__number">#{issue.number}</div>
+      {projectId && <IssueWorkflowControls compact projectId={projectId} issue={issue} onOpenNode={onOpenRun} />}
       {pulls && pulls.length > 0 && (
         <div className="pull-refs">
           {pulls.slice(0, 3).map((pull) => (

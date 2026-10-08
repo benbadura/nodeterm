@@ -17,6 +17,7 @@ import { useViewMode } from '../../state/viewMode'
 import { useGitHubIssues } from '../../state/githubIssues'
 
 vi.mock('../../session/session', () => ({
+  sessionForProject: () => ({ source: 'local', api: window.nodeTerminal }),
   useSession: () => ({ source: 'local', api: window.nodeTerminal })
 }))
 

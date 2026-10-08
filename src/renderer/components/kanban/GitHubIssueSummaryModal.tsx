@@ -16,6 +16,7 @@ import { openDialogCount } from '../dialog-stack'
 import { NO_ISSUE_RUNS, type IssueRun } from '../../lib/issueRuns'
 import { IssueRunChips } from './IssueRunChips'
 import { BoardLogPanel } from './BoardLogPanel'
+import { IssueWorkflowControls } from '../WorkflowControls'
 import { ISSUE_WORKTREE_BUTTON_LABEL, type IssueWorktreeMenuAnswer } from '../../lib/issueWorktree'
 
 export function GitHubIssueSummaryModal({
@@ -211,6 +212,7 @@ export function GitHubIssueSummaryModal({
         <div className="github-issue-modal__body">
           {issue.body.trim() || 'No description provided.'}
         </div>
+        {!isPull && projectId && <IssueWorkflowControls projectId={projectId} issue={issue} onOpenNode={onOpenRun} />}
         {logId && (
           <div className="github-issue-modal__history">
             <BoardLogPanel

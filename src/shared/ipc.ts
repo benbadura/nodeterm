@@ -397,6 +397,11 @@ export const IPC = {
   triggersDisarm: 'triggers:disarm',
   triggersStatus: 'triggers:status',
   triggersRunNow: 'triggers:run-now',
+  workflowsSave: 'workflows:save',
+  workflowsStart: 'workflows:start',
+  workflowsList: 'workflows:list',
+  workflowsAct: 'workflows:act',
+  workflowsChanged: 'workflows:changed',
   contextUpdate: 'context:update',
   contextEnsure: 'context:ensure',
   // Team presence (docs/team-presence.md). `presence:hello` is a REQUEST: its response tells the

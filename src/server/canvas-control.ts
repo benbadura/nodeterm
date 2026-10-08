@@ -54,6 +54,7 @@ import {
 } from '../core/github/control-read'
 
 export interface ServerCanvasControlDeps {
+  onOrchestrationChange?(): void
   workspaceStore: WorkspaceStore
   ptyManager: PtyManager
   settings(): Settings
@@ -145,7 +146,7 @@ export async function initServerCanvasControl(
   // already restored (server/index.ts runs `initAgentStatusMirror` first), so load it here.
   const outcomesFile = new DurableFactFile(OUTCOME_FACT, { userDataDir: platform().userDataDir })
   const stationOutcomes = new StationOutcomeStore(
-    (records) => platform().broadcast(IPC.stationOutcomeChanged, records),
+    (records) => { platform().broadcast(IPC.stationOutcomeChanged, records); deps.onOrchestrationChange?.() },
     {
       durable: outcomesFile,
       sessionOf: (id) => {
@@ -165,6 +166,7 @@ export async function initServerCanvasControl(
   const stationHandovers = new StationHandoverTracker(
     (records) => {
       platform().broadcast(IPC.stationHandoverChanged, records)
+      deps.onOrchestrationChange?.()
       void factoryRef?.refreshArmed()
     },
     Date.now,

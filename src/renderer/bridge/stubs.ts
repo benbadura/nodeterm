@@ -366,6 +366,13 @@ export function buildStubApi(): Omit<
       status: U('triggers.status'),
       runNow: U('triggers.runNow')
     },
+    workflows: {
+      saveTemplates: async () => ({ ok: false, error: 'Workflow templates are managed on the project host.' }),
+      start: async () => ({ ok: false, error: 'Workflows cannot start through a relay connection. Open the project host.' }),
+      act: async () => ({ ok: false, error: 'Workflow runs are controlled on the project host.' }),
+      list: async () => [],
+      onChanged: () => () => {}
+    },
     codex: {
       // Overridden by the real WS-backed namespace in ws-bridge. The stub's answer is the same
       // one the Server Edition gives on purpose (see server/handlers/index.ts): no shared

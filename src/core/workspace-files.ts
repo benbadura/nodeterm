@@ -9,6 +9,7 @@ import {
   type LocalNodeExecMap
 } from '../shared/node-exec'
 import { sanitizeViews } from '../shared/kanban-views'
+import { sanitizeProjectWorkflows, type ProjectWorkflows } from '../shared/workflows'
 import { CLOSED_SESSIONS_CAP } from '../shared/types'
 import type { BridgeLink, CanvasNodeState, ClosedSessionEntry, HandedOffTo, NavStop, Project, ProjectKanban, Viewport, Workspace } from '../shared/types'
 import { projectCapabilityFields, readProjectCapabilities } from '../shared/project-capabilities'
@@ -101,6 +102,7 @@ export function inlineProjectFileRelPath(id: string): string {
  * Node cwds inside the root are stored relative ("./sub").
  */
 export interface ProjectFileV1 {
+  workflows?: ProjectWorkflows
   version: 1
   /** Monotonic save counter; picks a winner when an offline cache and the file diverge (SSH). */
   rev: number
@@ -392,7 +394,8 @@ export function projectToFile(
     ...(kanban ? { kanban } : {}),
     // `layoutViewports` is deliberately absent: a field of that name in the shared file is a
     // forgery (a repo carrying one person's camera), and `fileToProject` never reads one.
-    ...(layouts ? { layouts } : {})
+    ...(layouts ? { layouts } : {}),
+    ...(sanitizeProjectWorkflows(p.workflows) ? { workflows: sanitizeProjectWorkflows(p.workflows) } : {})
   }
 }
 
@@ -718,7 +721,8 @@ export function fileToProject(
     ...(base.closedSessions?.length ? { closedSessions: base.closedSessions } : {}),
     ...(layouts ? { layouts } : {}),
     // Machine-local, from the index entry ONLY, same rule as `breadcrumbs`.
-    ...(layoutViewports ? { layoutViewports } : {})
+    ...(layoutViewports ? { layoutViewports } : {}),
+    ...(sanitizeProjectWorkflows(f.workflows) ? { workflows: sanitizeProjectWorkflows(f.workflows) } : {})
   }
 }
 

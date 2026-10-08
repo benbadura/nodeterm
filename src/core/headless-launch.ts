@@ -25,6 +25,8 @@ export const SETTLE_CAP_MS = 1500
 export const SETTLE_MAX_MS = 5000
 
 export interface HeadlessLaunchDeps {
+  /** A host workflow may pause/cancel while the shell settles. Check immediately before input. */
+  mayDeliver?(): Promise<boolean>
   persistentSpawnAvailable(): boolean
   createHeadless(options: PtyCreateOptions): Promise<PtyCreateResult>
   paneCommand(persistKey: string): Promise<string | null>
@@ -110,6 +112,7 @@ export async function launchHeadless(
       if (!isLaunchShell(pane)) return { outcome: 'failed', reason: 'no-shell', fresh }
     }
     const killLine = shellKillLineSequence(undefined, req.ptyOptions.shell)
+    if (deps.mayDeliver && !await deps.mayDeliver()) return { outcome: 'failed', reason: 'cancelled', fresh }
     const outcome = await deliver(deps, key, req.command, killLine, !fresh)
     return outcome === 'submitted'
       ? { outcome: 'delivered', fresh }

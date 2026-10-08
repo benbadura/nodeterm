@@ -476,6 +476,8 @@ export interface PendingLaunch {
 }
 
 export interface CanvasNodeState {
+  /** Workflow sessions attach on restore; only their host may launch a stage. */
+  workflowManaged?: boolean
   id: string
   kind: NodeKind
   position: { x: number; y: number }
@@ -1058,6 +1060,8 @@ export interface Project {
   id: string
   name: string
   color: string
+  /** Git-shared workflow definitions; execution history is private to the host. */
+  workflows?: import('./workflows').ProjectWorkflows
   /** Optional icon shown beside `name` (tab, start screen). Git-shared like `name`/`color` — see
    *  `sanitizeProjectIcon` (@shared/project-icon) for the hostile-input rules a stored value must
    *  pass on load. */
@@ -4216,6 +4220,7 @@ export interface TriggersApi {
 }
 
 export interface NodeTerminalApi {
+  workflows: import('./workflows').WorkflowsApi
   pty: PtyApi
   workspace: WorkspaceApi
   projectSettings: ProjectSettingsApi

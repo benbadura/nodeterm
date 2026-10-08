@@ -357,6 +357,8 @@ import { registerSpeechIpc } from '../core/speech/register-ipc'
 import { initClaudeAccounts } from './claude-accounts'
 import { initCodexAccounts } from './codex-accounts'
 import { claudeCliCaps, registerClaudeCliIpc, type ClaudeCliCaps } from '../core/claude-cli'
+import { createWorkflowRuntime } from '../core/workflow-runtime'
+import type { WorkflowService } from '../core/workflow-service'
 import type { CodexCliCaps } from '../shared/types'
 import { registerGrokCliIpc } from '../core/grok-cli'
 import { refreshCodexIdentityCaps, registerCodexIdentityIpc } from '../core/codex-identity-caps'
@@ -2090,8 +2092,9 @@ app.whenReady().then(async () => {
   // Durable across an app restart too (station-outcomes.json), each report bound to the session
   // that made it; `loadFromDisk()` runs below, after the status mirror it compares against.
   const stationOutcomesFile = new DurableFactFile(OUTCOME_FACT, { userDataDir: corePlatform.userDataDir })
+  let workflows: WorkflowService | undefined
   const stationOutcomes = new StationOutcomeStore(
-    (records) => sendToMain(IPC.stationOutcomeChanged, records),
+    (records) => { sendToMain(IPC.stationOutcomeChanged, records); workflows?.refresh() },
     {
       durable: stationOutcomesFile,
       sessionOf: (id) => {
@@ -2110,7 +2113,7 @@ app.whenReady().then(async () => {
   // between the reports and the queue.
   const stationHandoversFile = new DurableFactFile(HANDOVER_FACT, { userDataDir: corePlatform.userDataDir })
   const stationHandovers = new StationHandoverTracker(
-    (records) => sendToMain(IPC.stationHandoverChanged, records),
+    (records) => { sendToMain(IPC.stationHandoverChanged, records); workflows?.refresh() },
     Date.now,
     stationHandoversFile
   )
@@ -2261,6 +2264,14 @@ app.whenReady().then(async () => {
   // sender told, every message whose TTL ran out while the app was down.
   stationOutcomes.loadFromDisk()
   stationHandovers.loadFromDisk()
+  workflows = createWorkflowRuntime({ platform: corePlatform, workspaceStore, gitService, ptyManager,
+    projectSetupService, settings: () => settingsStore.get(), available: () => hookStartupWarning === null,
+    ownsDurableState: hookStartupWarning === null,
+    issueRepository: id => github.controller.status(id).then(view => view.project?.repository ?? null),
+    outcome: id => stationOutcomes.get(id), held: id => stationHandovers.isHandedOver(id) })
+  // The main quit gate runs first: a declined confirmation leaves orchestration active,
+  // while an accepted quit stops new delivery during the asynchronous teardown window.
+  app.on('before-quit', () => { if (quitting) workflows?.stop() })
   // The queue waits for the workspace INDEX: an entry that lapsed while the app was down is expired
   // here, and its sender leg (board-log line in the sender's project) resolves projects through the
   // index, which nothing else has loaded yet at this point of boot (the renderer's own
@@ -3219,6 +3230,7 @@ app.whenReady().then(async () => {
       // A station that starts a DIFFERENT session drops the report its old one made — before the
       // renderer hears the event, so no `--after-success` can fire on it in between.
       stationOutcomes.onAgentEvent(enriched)
+      workflows?.onAgentEvent(enriched)
       sendToMain(IPC.agentStatus, enriched)
       // Feed the macOS Notch HUD its prompt (ev.task on newTurn) + subagent grouping (no-op off/non-darwin).
       notchHudOnAgentEvent(enriched)

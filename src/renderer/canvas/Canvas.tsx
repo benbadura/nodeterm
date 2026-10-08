@@ -736,7 +736,7 @@ import type {
 } from '@shared/types'
 import type { KanbanCreateChoice, KanbanSession } from '../components/kanban/KanbanView'
 import { assignNode, assignedTo, defaultKanban, labelsForCard, migrateProjectTags, resolveColumnRef, unassigned } from '../lib/kanban'
-import { registerWorkspaceDirty } from '../state/workspaceDirty'
+import { registerWorkspaceDirty, registerWorkspaceFlush } from '../state/workspaceDirty'
 import { snapNodeToGrid } from '../lib/nodeSizing'
 import { snapResizeChanges } from '../lib/resizeSnap'
 import { canClearDirty, canCommitCanvas, canCreateOnCanvas, liveCanvasHolds } from '../state/persistGuards'
@@ -3649,6 +3649,10 @@ export function Canvas() {
   const dirtyRef = useRef(false)
   const conflictRef = useRef(conflict)
   conflictRef.current = conflict
+  useEffect(() => registerWorkspaceFlush(api, async () => {
+    if (conflictRef.current || loadingRef.current) return false
+    return persist()
+  }), [api, persist])
   useEffect(() => {
     dirtyRef.current = dirty
   }, [dirty])

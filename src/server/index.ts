@@ -36,6 +36,8 @@ import { DownloadTickets } from '../core/download-tickets'
 import { registerBoardLogHandlers, type BoardLogRoute } from '../core/board-log-handlers'
 import { ProjectTrustStore } from '../core/project-trust-store'
 import { ProjectSetupService } from '../core/project-setup-service'
+import { createWorkflowRuntime } from '../core/workflow-runtime'
+import type { WorkflowService } from '../core/workflow-service'
 import {
   makeProjectTrustRequester,
   registerProjectSetupHandlers,
@@ -546,6 +548,7 @@ export async function startServer(
   // Set after the initial workspace load when the opt-in flag is on. The status listener is wired
   // now so the runtime, once present, consumes the exact same normalized stream as the UI/mirror.
   let canvasControl: ServerCanvasControl | null = null
+  let workflows: WorkflowService | undefined
   // Station-failure notices: registered whether or not canvas control comes up, so a browser tab's
   // `list` answers "none" rather than an unknown channel. Only the canvas-control runtime has a
   // creator ledger, so only it has stations to report.
@@ -555,7 +558,7 @@ export async function startServer(
   registerStationOutcomeIpc(platform, () => canvasControl?.stationOutcomes ?? null)
   registerStationHandoverIpc(platform, () => canvasControl?.stationHandovers ?? null)
   const { contextTail, geminiContextTail, codexContextTail } = wireAgentStatus(platform, {
-    onEvent: (event) => canvasControl?.onAgentEvent(event)
+    onEvent: (event) => { canvasControl?.onAgentEvent(event); workflows?.onAgentEvent(event) }
   })
   // The ⌘M chat view + the find-bar's transcript index. Registered HERE rather than with the rest
   // of the handlers because the hook-fed path authority is the tail created just above. No remote
@@ -801,6 +804,7 @@ export async function startServer(
   if (config.canvasControl === true) {
     try {
       canvasControl = await initServerCanvasControl({
+        onOrchestrationChange: () => workflows?.refresh(),
         workspaceStore,
         ptyManager,
         settings: () => settingsStore.get(),
@@ -840,6 +844,12 @@ export async function startServer(
       )
     }
   }
+
+  workflows = createWorkflowRuntime({ platform, workspaceStore, gitService, ptyManager, projectSetupService,
+    settings: () => settingsStore.get(), available: () => canvasControl !== null && hookStartupWarning === null,
+    ownsDurableState: hookStartupWarning === null,
+    issueRepository: id => github.controller.status(id).then(view => view.project?.repository ?? null),
+    outcome: id => canvasControl?.stationOutcomes.get(id), held: id => canvasControl?.stationHandovers.isHandedOver(id) ?? true })
 
   // Session budget (docs/SERVER.md): reap long-idle DETACHED nt- tmux sessions under memory
   // pressure (10%-of-RAM watermark) or past a count cap, on BOTH the local socket and the
@@ -1174,6 +1184,7 @@ export async function startServer(
         pressure.stop()
         ptyPressure.stop()
         canvasControl?.stop()
+        workflows?.stop()
         workspaceWatcher.dispose()
         await contextLink.stop()
         // Every save already queued lands while the authority still governs (see the serving close).
@@ -1247,6 +1258,7 @@ export async function startServer(
       pressure.stop()
       ptyPressure.stop()
       canvasControl?.stop()
+      workflows?.stop()
       workspaceWatcher.dispose()
       await contextLink.stop()
       // Every save already queued lands while the authority still governs, then it writes what it owes.

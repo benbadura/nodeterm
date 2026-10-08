@@ -935,6 +935,7 @@ export const KanbanView = memo(function KanbanView({
         count: (columnId === null ? page?.counts.ungrouped : page?.counts[columnId]) ?? 0,
         cards: (page?.items ?? []).map((issue) => (
           <GitHubIssueCard
+            projectId={projectId}
             key={`github:${issue.id}`}
             issue={issue}
             columns={board.columns}

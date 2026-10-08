@@ -51,7 +51,7 @@ describe('desktop main', () => {
 
   it('registers the read channel and pushes every change to the window', () => {
     expect(main).toContain('registerStationOutcomeIpc(corePlatform, () => stationOutcomes)')
-    expect(main).toMatch(/new StationOutcomeStore\(\s*\(records\) =>\s*sendToMain\(IPC\.stationOutcomeChanged, records\)/)
+    expect(main).toMatch(/new StationOutcomeStore\(\s*\(records\) =>\s*\{\s*sendToMain\(IPC\.stationOutcomeChanged, records\)/)
   })
 
   it('persists the store and the delivery queue, and loads them after the status mirror (durable state)', () => {

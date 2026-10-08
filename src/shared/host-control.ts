@@ -44,6 +44,7 @@ import { IPC } from './ipc'
  * carrying their own `startsWith` is exactly how one of them ends up a release behind the other.
  */
 export const HOST_ONLY_CHANNEL_PREFIXES: readonly string[] = [
+  'workflows:',
   'githubControl:',
   // The host's credential and identity planes. None of these crosses the relay for a legitimate
   // tab (relay-api.ts keeps license/accounts/usage LOCAL), and each is something the invite never

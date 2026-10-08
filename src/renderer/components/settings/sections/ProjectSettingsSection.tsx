@@ -29,6 +29,7 @@ import { projectSectionId } from '../project-settings-targets'
 import { matchesQuery, type SettingsSearchEntry } from '../search'
 import { useProjectSettings } from '../useProjectSettings'
 import { PROJECT_NAME_MAX, clampProjectName } from '@shared/project-name'
+import { ProjectWorkflowsEditor } from '../ProjectWorkflowsEditor'
 
 /**
  * Persists an identity/defaults edit. The store setters (`renameProject`, `setProjectColor`,
@@ -98,7 +99,7 @@ export function ProjectSettingsSection({
   // The pane's own name is a search entry in its own right (so a name query reaches the gate at
   // all) AND the trigger for `forceVisible` (so the pane then renders whole).
   const entries = useMemo(
-    () => [...IDENTITY_ENTRIES, ...FAMILY_SEARCH_ENTRIES, { title: name, keywords: [name] }],
+    () => [...IDENTITY_ENTRIES, ...FAMILY_SEARCH_ENTRIES, { title: 'Workflows', keywords: ['templates', 'stages', 'agents', 'workflow', 'issue'] }, { title: name, keywords: [name] }],
     [name]
   )
   const forceVisible = matchesQuery(query, { title: name })
@@ -373,6 +374,9 @@ function EditableProjectSection({
         saveLocal={settings.saveLocal}
         reload={settings.reload}
       />
+      <SearchableRow title="Workflows" keywords={['templates', 'stages', 'agents', 'workflow', 'issue']}>
+        <ProjectWorkflowsEditor project={project} />
+      </SearchableRow>
     </SettingsSection>
   )
 }

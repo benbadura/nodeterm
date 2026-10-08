@@ -1,5 +1,6 @@
 @import '@xterm/xterm/css/xterm.css';
 @import '@xyflow/react/dist/style.css';
+@import './workflows.css';
 
 :root {
   /* macOS dark-mode palette (NSColor / HIG). The LIGHT overrides live in the

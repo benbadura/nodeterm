@@ -134,6 +134,12 @@ applicable here":
    answer — just make it a stated one. Never assume the phone is an iPhone in desktop copy or
    defaults.
 
+Saved workflows use the shared core runtime on Desktop and Server, with owner-only RPC and paused
+recovery after a host restart. Definitions are project content; launch claims, briefs, and run
+history are private host state. Keep transitions independent of mounted renderer components and
+preserve the write-ahead and verified-delivery barriers. See [Saved workflows](docs/SAVED_WORKFLOWS.md)
+for the UI, storage contract, Windows restrictions, and the mobile follow-up for @eneskirca.
+
 Anything reachable from `window.nodeTerminal` needs a **real** implementation in
 `src/renderer/bridge/`, or a deliberate, documented degrade. The `satisfies NodeTerminalApi` gate
 forces you to *declare* every member, but a no-op stub compiles fine while doing nothing.

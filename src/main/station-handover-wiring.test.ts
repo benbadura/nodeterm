@@ -38,7 +38,7 @@ describe('desktop main', () => {
 
   it('registers the read channel and pushes every change to the window', () => {
     expect(main).toContain('registerStationHandoverIpc(corePlatform, () => stationHandovers)')
-    expect(main).toMatch(/new StationHandoverTracker\(\s*\(records\) =>\s*sendToMain\(IPC\.stationHandoverChanged, records\)/)
+    expect(main).toMatch(/new StationHandoverTracker\(\s*\(records\) =>\s*\{\s*sendToMain\(IPC\.stationHandoverChanged, records\)/)
   })
 })
 

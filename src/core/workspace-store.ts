@@ -10,7 +10,9 @@ import {
   type BridgeLink, type CanvasNodeState, type HandedOffTo, type KanbanColumn, type KanbanLabel, type Project,
   type ProjectKanban, type Workspace, type WorkspaceSaveOptions, type WorkspaceV1
 } from '../shared/types'
-import { contentOf, type CanvasContent } from '../shared/canvas-content'
+import { contentOf, diffContent, type CanvasContent } from '../shared/canvas-content'
+import { publishCanvasMutation } from './canvas-sync'
+import { sanitizeProjectWorkflows } from '../shared/workflows'
 import {
   PROJECT_DIR, PROJECT_FILE, fileToProject, inlineProjectFileRelPath, isInlineProjectFileId,
   projectToFile, resolveNodes, sameProjectContent,
@@ -389,6 +391,8 @@ export class WorkspaceStore {
    * hands it out (a client that cannot save cannot be the one whose save would drop it).
    */
   private pendingAdoptions = new Set<string>()
+  /** Protect core additions from snapshots captured before the owner received their publication. */
+  private workflowPublications = new Map<string, { nodes: CanvasNodeState[]; bridges: BridgeLink[]; workflows?: import('../shared/workflows').ProjectWorkflows }>()
   /** The content authority, when this process runs one (Server Edition hosting a team). */
   private contentAuthority: ContentAuthorityHooks | null = null
 
@@ -1207,6 +1211,36 @@ export class WorkspaceStore {
     return this.saveChain.then(() => undefined)
   }
 
+  /** Host-owned workflow edits share the save FIFO. Resolve a fresh project inside it, publish
+   * canvas ops before the authority overlays the save, and merge the result into owner views. */
+  editWorkflowProject(projectId: string, edit: (project: Project) => void): Promise<Project> {
+    const run = this.saveChain.then(async () => {
+      const workspace = structuredClone(await this.load({ sideline: false }))
+      const project = workspace.projects.find(p => p.id === projectId)
+      if (!project || project.ssh || project.remote || project.unavailable || !project.cwd)
+        throw new Error('Workflows require an available local project folder.')
+      const before = contentOf(project)
+      const previousTemplates = JSON.stringify(project.workflows)
+      edit(project)
+      project.workflows = sanitizeProjectWorkflows(project.workflows)
+      for (const op of diffContent(before, contentOf(project), projectId)) publishCanvasMutation(projectId, op)
+      await this.saveNow(workspace, true)
+      const landed = await this.readProjectFile(project.cwd!, false)
+      if (!landed || !project.nodes.every(n => landed.file.nodes.some(saved => saved.id === n.id)) ||
+        (JSON.stringify(project.workflows) !== previousTemplates && JSON.stringify(landed.file.workflows) !== JSON.stringify(project.workflows)))
+        throw new Error('The workflow canvas could not be saved. Resolve the project file conflict before retrying.')
+      const pending = this.workflowPublications.get(projectId) ?? { nodes: [], bridges: [] }
+      pending.nodes.push(...project.nodes.filter(n => !before.nodes.some(old => old.id === n.id)))
+      pending.bridges.push(...(project.bridges ?? []).filter(e => !before.bridges.some(old => old.id === e.id)))
+      if (JSON.stringify(project.workflows) !== previousTemplates) pending.workflows = project.workflows
+      this.workflowPublications.set(projectId, pending)
+      platform().broadcast(IPC.workspaceServerChange, project)
+      return project
+    })
+    this.saveChain = run.catch(() => {})
+    return run
+  }
+
   /**
    * `localOnly` makes the save durable on THIS machine only: every local file and the index (which
    * carries each SSH project's cache) are written, but no SSH project is read, reconciled or
@@ -1228,10 +1262,42 @@ export class WorkspaceStore {
    * before the enqueue: an await ahead of it would let a later save overtake this one.
    */
   private saveFromRenderer(workspace: Workspace, localOnly: boolean): Promise<void> {
-    const run = this.saveChain.then(async () =>
-      this.saveNow(this.pendingAdoptions.size ? await this.withPendingAdoptions(workspace) : workspace, localOnly))
+    const run = this.saveChain.then(async () => {
+      const adopted = this.pendingAdoptions.size ? await this.withPendingAdoptions(workspace) : workspace
+      await this.saveNow(this.withWorkflowPublications(adopted), localOnly)
+    })
     this.saveChain = run.catch(() => {})
     return run
+  }
+
+  /** An explicit canvas remove is an intentional edit, even before the first save acknowledges
+   * an addition. Queue its acknowledgement with saves so it cannot release an older snapshot. */
+  acknowledgeWorkflowRemoval(projectId: string, nodeId: string): void {
+    const run = this.saveChain.then(() => {
+      const pending = this.workflowPublications.get(projectId)
+      if (!pending) return
+      pending.nodes = pending.nodes.filter(n => n.id !== nodeId)
+      pending.bridges = pending.bridges.filter(e => e.source !== nodeId && e.target !== nodeId)
+    })
+    this.saveChain = run.catch(() => {})
+  }
+
+  private withWorkflowPublications(workspace: Workspace): Workspace {
+    if (!this.workflowPublications.size) return workspace
+    return { ...workspace, projects: workspace.projects.map(project => {
+      const pending = this.workflowPublications.get(project.id)
+      if (!pending) return project
+      const nodes = project.nodes ?? []
+      pending.nodes = pending.nodes.filter(n => !nodes.some(live => live.id === n.id))
+      const mergedNodes = [...nodes, ...pending.nodes]
+      const bridges = project.bridges ?? []
+      pending.bridges = pending.bridges.filter(e => !bridges.some(live => live.id === e.id) && mergedNodes.some(n => n.id === e.source) && mergedNodes.some(n => n.id === e.target))
+      if (pending.workflows && JSON.stringify(sanitizeProjectWorkflows(project.workflows)) === JSON.stringify(pending.workflows)) pending.workflows = undefined
+      const merged = { ...project, nodes: mergedNodes, bridges: [...bridges, ...pending.bridges],
+        ...(pending.workflows ? { workflows: pending.workflows } : {}) }
+      if (!pending.nodes.length && !pending.bridges.length && !pending.workflows) this.workflowPublications.delete(project.id)
+      return merged
+    }) }
   }
 
   /** `workspace` plus the store's own copy of every pending adoption it does not carry. Runs on

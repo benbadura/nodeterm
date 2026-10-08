@@ -150,6 +150,12 @@ let seq = 0
  * the shell that sets it owns it, and clears it on close.
  */
 let reflectedListener: ((projectId: string, m: CanvasMutation) => void) | null = null
+const reflectedObservers = new Set<(projectId: string, m: CanvasMutation) => void>()
+
+export function observeCanvasMutations(fn: (projectId: string, m: CanvasMutation) => void): () => void {
+  reflectedObservers.add(fn)
+  return () => { reflectedObservers.delete(fn) }
+}
 
 /**
  * Set (or, with null, clear) the listener every reflected op reaches. It is called SYNCHRONOUSLY,
@@ -169,6 +175,9 @@ export function setReflectedListener(fn: ((projectId: string, m: CanvasMutation)
  *  reaches disk only through a save's own exec carry, into the machine-local index. Its reducer
  *  would drop an unvouched launch anyway; stripping it here keeps it out of the op log too. */
 function tellListener(projectId: string, stamped: CanvasMutation): void {
+  for (const observer of reflectedObservers) {
+    try { observer(projectId, stamped) } catch (error) { console.warn('[canvas-sync] mutation observer failed', error) }
+  }
   if (!reflectedListener) return
   try {
     reflectedListener(projectId, sanitizeInboundMutation(stamped))

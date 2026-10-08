@@ -4065,7 +4065,7 @@ export function TerminalNode({
         // resume, not armed, not paused. A plain terminal has no conversation to lose, and paying
         // a probe to tell it so would be the channel pressure this whole area exists to reduce.
         const canColdRestore =
-          session.source !== 'relay' && !!agentId && canResume(agentId) && !data.pendingLaunch && shouldColdResume(pausedNow)
+          session.source !== 'relay' && !!agentId && canResume(agentId) && !data.pendingLaunch && !data.workflowManaged && shouldColdResume(pausedNow)
         let coldStart = fresh
         if (!fresh && freshUnverified && !data.initialCommand && canColdRestore) {
           // After the shell has settled, not at this instant: the attach is a network round trip

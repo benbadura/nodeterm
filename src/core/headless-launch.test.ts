@@ -51,6 +51,15 @@ beforeEach(() => vi.useFakeTimers())
 afterEach(() => vi.useRealTimers())
 
 describe('launchHeadless (#925)', () => {
+  it('rechecks workflow permission after settling and sends no input if it was paused', async () => {
+    const { deps, writes } = harness()
+    deps.mayDeliver = vi.fn(async () => false)
+    const pending = launchHeadless(deps, req())
+    await vi.advanceTimersByTimeAsync(SETTLE_CAP_MS)
+    expect(await pending).toEqual({ outcome: 'failed', reason: 'cancelled', fresh: true })
+    expect(writes).toEqual([])
+    expect(deps.releaseHeadless).toHaveBeenCalledWith('n1')
+  })
   it('a PtyManager is the deps as-is (checked by npm run typecheck)', () => {
     const structural: PtyManager extends HeadlessLaunchDeps ? true : false = true
     expect(structural).toBe(true)

@@ -89,6 +89,21 @@ const recorder = (exitCode = 0): RunnerRecorder => {
 }
 
 describe('setupRunKey', () => {
+  it('lets host workflows wait for setup exit and propagates a failed exit', async () => {
+    let finish!: (value: { exitCode: number }) => void
+    const svc = new ProjectSetupService({ trust: new ProjectTrustStore(),
+      readSettings: async () => snapshot(null, { setup: { setupScript: 'build' } }),
+      runLocal: async () => new Promise(resolve => { finish = resolve }) })
+    let settled = false
+    const pending = svc.runAndWait(target()).then(() => { settled = true })
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+    expect(settled).toBe(false)
+    finish({ exitCode: 0 }); await pending
+    expect(settled).toBe(true)
+    const failed = new ProjectSetupService({ trust: new ProjectTrustStore(),
+      readSettings: async () => snapshot(null, { setup: { setupScript: 'build' } }), runLocal: recorder(1).runner })
+    await expect(failed.runAndWait(target())).rejects.toThrow('failed')
+  })
   it('is a location+kind identity, not a project id', () => {
     const a = setupRunKey(target({ projectId: 'a' }), 'setup')
     const b = setupRunKey(target({ projectId: 'b' }), 'setup')

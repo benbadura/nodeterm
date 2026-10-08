@@ -116,6 +116,7 @@ const COLLAPSED_FALLBACK_HEIGHT: Partial<Record<string, number>> = { terminal: 3
 
 /** User data carried in the React Flow node's data field. */
 export interface NodeData {
+  workflowManaged?: boolean
   title: string
   /**
    * Agent nodes only: while true (the default for agent nodes), the title auto-tracks the
@@ -2639,6 +2640,7 @@ export function nodeStatesToFlow(states: CanvasNodeState[]): CanvasNode[] {
         // Same seam rule again: the launch loop iterates `after`, and a PR wait decides when a
         // command is typed into a pane. An unreadable hold becomes one that waits for ▶.
         pendingLaunch: normalizePendingLaunch(n.pendingLaunch),
+        workflowManaged: n.workflowManaged === true || undefined,
         ssh: n.ssh,
         sshRemoteTmux: n.sshRemoteTmux,
         sshFs: n.sshFs,
@@ -2719,6 +2721,7 @@ export function flowToNodeStates(nodes: CanvasNode[], retainInitialCommand = tru
         commitOid: n.data.commitOid,
         highScore: n.data.highScore,
         agentId: n.data.agentId,
+        workflowManaged: n.data.workflowManaged === true || undefined,
         agentModel: n.data.agentModel,
         // Re-validated on the way OUT as well — the file is only as trustworthy as its last writer.
         issueRef: normalizeIssueRef(n.data.issueRef),
