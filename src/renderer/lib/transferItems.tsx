@@ -65,6 +65,8 @@ export function transferTargets(
 
 /** The args a caller has already resolved for a node; the builder does no store reads itself. */
 export interface TransferConversationArgs {
+  /** Task memory does not require a live source transcript and may target the same agent. */
+  taskTransfer?: boolean
   /** The node's agent (`agentIdOf(nodeId)`), or `undefined` if it isn't an agent node. */
   sourceAgentId: AgentId | undefined
   /** The node's live session id from the agent-status store, or `undefined` if not yet known. */
@@ -113,8 +115,8 @@ export function transferConversationItems(
   const { sourceAgentId, sessionId, disabledAgents, customAgents, gatewayModels, relaySession } = args
   // Gate: single node, a transfer-capable agent, and a live session id (the handoff reads the
   // transcript by session id — no id means the conversation isn't ready to hand off yet).
-  if (!sourceAgentId || !sessionId || !canTransferFrom(sourceAgentId)) return []
-  const targets = transferTargets(sourceAgentId, disabledAgents, customAgents)
+  if (!args.taskTransfer && (!sourceAgentId || !sessionId || !canTransferFrom(sourceAgentId))) return []
+  const targets = transferTargets(args.taskTransfer ? '' as AgentId : sourceAgentId!, disabledAgents, customAgents)
   if (targets.length === 0) return []
   const rows = targets.map((tg): MenuItem => {
     // A model submenu only for a switch-capable target with discovered models, and never for a
@@ -153,6 +155,6 @@ export function transferConversationItems(
     }
   })
   return [
-    { type: 'submenu', label: 'Transfer conversation', icon: <IconMoveTo />, children: rows }
+    { type: 'submenu', label: args.taskTransfer ? 'Transfer task' : 'Transfer conversation', icon: <IconMoveTo />, children: rows }
   ]
 }

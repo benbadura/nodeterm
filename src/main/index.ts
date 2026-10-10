@@ -70,6 +70,8 @@ import {
   type BrowserSurfaceKind
 } from './browser-guest-registry'
 import { appendBoardLogVia, registerBoardLogHandlers, type BoardLogRoute } from '../core/board-log-handlers'
+import { ProjectMemoryService, registerProjectMemory } from '../core/project-memory'
+import { prepareMemoryCommand } from '../shared/memory-launch'
 import { TaskReadinessService, registerReadiness } from '../core/task-readiness'
 import {
   createDeliveryQueue,
@@ -1657,7 +1659,11 @@ app.whenReady().then(async () => {
   corePlatform.handle(
     IPC.ptyLaunchHeadless,
     (req: { ptyOptions: PtyCreateOptions; command: string }) =>
-      launchHeadless(ptyManager, desktopHeadlessRequest(req))
+      (async () => {
+        const request = desktopHeadlessRequest(req)
+        request.command = await prepareMemoryCommand(request.command, request.ptyOptions.persistKey || '', (id) => projectMemory.prepare(id))
+        return launchHeadless(ptyManager, request)
+      })()
   )
 
   // Gemini's title read needs the transcript path its own context tail already tracks (nothing
@@ -2016,6 +2022,20 @@ app.whenReady().then(async () => {
     if (!node || (node.kind && node.kind !== 'terminal') || node.ssh || node.sshRemoteTmux) return undefined
     return { projectRoot: info.cwd, cwd: node.cwd || info.cwd, author: node.agentId || 'agent' }
   }, (projectId, nodeId) => corePlatform.broadcast(IPC.readinessChanged, projectId, nodeId))
+  const projectMemory = new ProjectMemoryService({
+    project: (projectId, nodeId) => {
+      const info = workspaceStore.projectTargetInfo(projectId)
+      if (!info?.cwd || info.ssh) return undefined
+      const node = nodeId ? workspaceStore.persistedCanvases().find((c) => c.id === projectId)?.nodes.find((n) => n.id === nodeId) : undefined
+      if (node?.ssh || node?.sshRemoteTmux || (node && node.kind && node.kind !== 'terminal')) return undefined
+      return { root: info.cwd, ...(node ? { node: { cwd: node.cwd || info.cwd, author: node.agentId || 'agent', title: node.title } } : {}) }
+    },
+    projectForNode: (nodeId) => {
+      const ids = workspaceStore.projectIdsForNode(nodeId)
+      return ids.length === 1 ? ids[0] : undefined
+    }
+  }, (projectId) => corePlatform.broadcast(IPC.projectMemoryChanged, projectId))
+  registerProjectMemory(corePlatform, projectMemory)
   registerReadiness(corePlatform, readiness)
   ptyManager.setBeforeLocalSpawn(async (nodeId, cwd) => {
     const projectIds = workspaceStore.projectIdsForNode(nodeId)
@@ -2289,6 +2309,7 @@ app.whenReady().then(async () => {
   stationOutcomes.loadFromDisk()
   stationHandovers.loadFromDisk()
   workflows = createWorkflowRuntime({ platform: corePlatform, workspaceStore, gitService, ptyManager,
+    memoryPacket: (id) => projectMemory.packet(id, {}, true),
     projectSetupService, settings: () => settingsStore.get(), available: () => hookStartupWarning === null,
     ownsDurableState: hookStartupWarning === null,
     issueRepository: id => github.controller.status(id).then(view => view.project?.repository ?? null),
@@ -4378,6 +4399,11 @@ app.whenReady().then(async () => {
           appendBoardLog: (projectId, entry) => appendBoardLogVia(boardLogRouter, projectId, entry)
         }
       )
+    }
+    if (verb === 'memory') {
+      const ids = workspaceStore.projectIdsForNode(nodeId)
+      if (ids.length !== 1) return { ok: false, error: 'Memory requires one saved owning project.', message: 'Memory requires one saved owning project.' }
+      return projectMemory.control(ids[0], nodeId, args, verified)
     }
     if (verb === 'readiness') {
       const ids = workspaceStore.projectIdsForNode(nodeId)

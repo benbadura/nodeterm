@@ -4224,6 +4224,7 @@ export interface TriggersApi {
 
 export interface NodeTerminalApi {
   workflows: import('./workflows').WorkflowsApi
+  projectMemory: import('./project-memory').ProjectMemoryApi
   readiness: import('./task-readiness').ReadinessApi
   pty: PtyApi
   workspace: WorkspaceApi

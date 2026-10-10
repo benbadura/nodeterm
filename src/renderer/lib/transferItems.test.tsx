@@ -76,6 +76,21 @@ function rowsOf(items: MenuItem[]): MenuItem[] {
 describe('transferConversationItems', () => {
   const handler = () => {}
 
+  it('transfers task memory without a transcript, including to the same agent and a chosen model', () => {
+    const calls: unknown[][] = []
+    const items = transferConversationItems('task-node', undefined,
+      args({ taskTransfer: true, sessionId: undefined, gatewayModels: models }), (...values) => { calls.push(values) })
+    const menu = items[0]
+    if (menu.type !== 'submenu') throw new Error('expected task submenu')
+    expect(menu.label).toBe('Transfer task')
+    const claude = menu.children.find((item) => 'label' in item && item.label === 'Claude Code')!
+    if (claude.type !== 'submenu') throw new Error('expected model submenu')
+    const model = claude.children.find((item) => 'label' in item && item.label === models[0].id)!
+    if (!('onClick' in model)) throw new Error('expected model action')
+    model.onClick()
+    expect(calls).toEqual([['task-node', 'claude', undefined, models[0].id]])
+  })
+
   it('returns ONE submenu holding a row per target for a transfer-capable agent with a session', () => {
     const items = transferConversationItems('node-1', undefined, args({}), handler)
     expect(rowsOf(items).length).toBeGreaterThan(1)

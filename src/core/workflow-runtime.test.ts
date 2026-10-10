@@ -52,6 +52,7 @@ describe('host workflow integration', () => {
     await store.save({ version: 2, activeProjectId: p.id, projects: [p] })
     const outcomes = new Map()
     const deps: WorkflowRuntimeDeps = { platform, workspaceStore: store, gitService: new GitService(),
+      memoryPacket: vi.fn(async () => ({ ok: true as const, value: { body: 'Approved memory', filePath: path.join(repo, '.nodeterm/memory/packets/context.md') } })),
       settings: () => ({ ...DEFAULT_SETTINGS, agentIntegrations: { agents: { claude: 'enabled' } } }), available: () => true,
       outcome: id => outcomes.get(id), held: () => false,
       ptyManager: { persistentSpawnAvailable: () => true, sessionExists: async () => true, paneCommand: async () => 'zsh',
@@ -82,6 +83,9 @@ describe('host workflow integration', () => {
     const brief = await fs.readFile(path.join(platform.userDataDir, 'orchestration-state', 'workflow-briefs', `${second}.md`), 'utf8')
     expect(brief).toContain(first); expect(brief).toContain('report-outcome --outcome succeeded')
     expect(brief).toContain('GitHub issue o/r#42')
+    expect(brief).toContain('First read project memory at')
+    expect(brief).toContain('.nodeterm/memory/packets/context.md')
+    expect(deps.memoryPacket).toHaveBeenCalledTimes(2)
     expect(facts.launches[1]).toContain('$(cat ')
     expect(git('rev-parse', 'HEAD')).toBe(head)
     expect(git('rev-parse', run.worktree!.branch)).toBe(head)

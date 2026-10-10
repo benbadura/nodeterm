@@ -814,6 +814,21 @@ const api: NodeTerminalApi = {
     setLinks: (map) => ipcRenderer.invoke(IPC.contextLinkSetLinks, map),
     info: () => ipcRenderer.invoke(IPC.contextLinkInfo)
   },
+  projectMemory: {
+    read: (...args) => ipcRenderer.invoke(IPC.projectMemoryPrefix + 'read', ...args),
+    propose: (...args) => ipcRenderer.invoke(IPC.projectMemoryPrefix + 'propose', ...args),
+    checkpoint: (...args) => ipcRenderer.invoke(IPC.projectMemoryPrefix + 'checkpoint', ...args),
+    review: (...args) => ipcRenderer.invoke(IPC.projectMemoryPrefix + 'review', ...args),
+    packet: (...args) => ipcRenderer.invoke(IPC.projectMemoryPrefix + 'packet', ...args),
+    source: (...args) => ipcRenderer.invoke(IPC.projectMemoryPrefix + 'source', ...args),
+    bind: (...args) => ipcRenderer.invoke(IPC.projectMemoryPrefix + 'bind', ...args),
+    prepare: (...args) => ipcRenderer.invoke(IPC.projectMemoryPrefix + 'prepare', ...args),
+    onChanged: (listener) => {
+      const handler = (_event: unknown, projectId: string): void => listener(projectId)
+      ipcRenderer.on(IPC.projectMemoryChanged, handler)
+      return () => ipcRenderer.removeListener(IPC.projectMemoryChanged, handler)
+    }
+  },
   readiness: {
     read: (projectId, nodeId, offset) => ipcRenderer.invoke(IPC.readinessRead, projectId, nodeId, offset),
     criteria: (projectId, nodeId, criteria, expectedRevision, baseCommit) => ipcRenderer.invoke(IPC.readinessCriteria, projectId, nodeId, criteria, expectedRevision, baseCommit),

@@ -202,6 +202,7 @@ export function buildRelayApi(
     // tab's nodes live in the host's core, whose notices are the host's renderer's to draw.
     stationNotice: stub.stationNotice,
     boardDispatch: stub.boardDispatch,
+    projectMemory: stub.projectMemory,
     readiness: stub.readiness,
     stationOutcome: stub.stationOutcome,
     stationHandover: stub.stationHandover,

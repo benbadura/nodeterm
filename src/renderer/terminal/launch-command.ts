@@ -30,6 +30,7 @@ export function hasLaunchWriter(id: string, scope: object = defaultScope): boole
 
 export function createLaunchWriter(opts: {
   claimAttempt(manual: boolean, command: string): Promise<LaunchClaim>
+  prepareCommand?(command: string): Promise<string>
   io: DeliveryIo
   shellReady(manual: boolean): Promise<boolean>
   killLine: string
@@ -50,6 +51,7 @@ export function createLaunchWriter(opts: {
       if (claim === 'deferred' && !disposed) return 'deferred' as const
       if (!claim || disposed) return 'cancelled' as const
       attempted = true
+      const prepared = opts.prepareCommand ? await opts.prepareCommand(command) : command
       // Saving can take a remote round trip. Recheck after the barrier, before any input.
       if (!(await opts.shellReady(manual)) || disposed) return 'cancelled' as const
       return new Promise<DeliveryOutcome>((resolve) => {
@@ -57,7 +59,7 @@ export function createLaunchWriter(opts: {
           // A cancelled delivery may have left an unsubmitted prefix in the shell editor.
           // Explicit recovery starts a new line rather than appending another CLI command.
           if (manual) opts.io.write(opts.killLine)
-          opts.cleanup(deliverCommand(opts.io, command, resolve, { killLine: opts.killLine }))
+          opts.cleanup(deliverCommand(opts.io, prepared, resolve, { killLine: opts.killLine }))
         } catch { resolve('cancelled') }
       })
     })().then((outcome) => {

@@ -10,6 +10,7 @@ import { installGlassCellBackgrounds, scheduleGlassCellAlpha, setGlassCellAlpha 
 import { deliverRelayInitialLaunch } from '../terminal/relay-initial-launch'
 import { commitLaunch } from '../terminal/launch-attempt'
 import { isLaunchShell } from '@shared/agents/pane'
+import { prepareMemoryCommand } from '@shared/memory-launch'
 import { createLaunchWriter, deliverInitialLaunch, launchCommand, registerLaunchWriter } from '../terminal/launch-command'
 import { trustsFreshShell } from '@shared/launch-trust'
 import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -4014,6 +4015,13 @@ export function TerminalNode({
           cleanup: (cancel: () => void) => { cleanups.push(cancel) }
         }
         const launchWriter = createLaunchWriter({ ...launchWriterOptions,
+          prepareCommand: async (command) => {
+            try { return await prepareMemoryCommand(command, id, (nodeId) => api.projectMemory.prepare(nodeId)) }
+            catch (error) {
+              term.writeln('\r\nProject memory: ' + (error instanceof Error ? error.message : String(error)))
+              throw error
+            }
+          },
           claimAttempt: (manual, command) => commitLaunch(api, id, command, manual)
         })
         const writeWhenShellReady = (cmd: string): void => {

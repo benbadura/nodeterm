@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
+import { useProjectMemoryPanel } from '../state/projectMemory'
 import { createPortal } from 'react-dom'
 import { useProjects } from '../state/projects'
 import { isOmniKanbanEnabled, toggleBoardView, useViewMode, viewFor } from '../state/viewMode'
@@ -662,6 +663,7 @@ export function TabBar({
             >
               Project settings…
             </button>
+            <button onClick={() => { useProjectMemoryPanel.getState().open(menuProject.id); closeMenu() }}>Project memory…</button>
             <button
               onClick={() => {
                 onCloseProject(menuProject.id)

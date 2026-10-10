@@ -5,7 +5,7 @@ import { createLaunchWriter, deliverInitialLaunch, hasLaunchWriter, launchComman
 import { trustsFreshShell } from '@shared/launch-trust'
 import { KILL_LINE, WINDOWS_KILL_LINE, VERIFY_TIMEOUT_MS, DELIVERY_ATTEMPTS } from '@shared/command-delivery'
 
-function fixture(attempted = false, killLine = KILL_LINE) {
+function fixture(attempted = false, killLine = KILL_LINE, prepareCommand?: (command: string) => Promise<string>) {
   const cleanups: Array<() => void> = []
   let output: ((text: string) => void) | undefined
   const write = vi.fn()
@@ -15,7 +15,7 @@ function fixture(attempted = false, killLine = KILL_LINE) {
   const writer = createLaunchWriter({ claimAttempt: (manual, command) => commitLaunchAttempt({
     pending: { ...durable, command }, command, manual,
     update: (next) => { durable = next }, save
-  }), io: {
+  }), prepareCommand, io: {
     write, onData: (cb) => { output = cb; return () => { output = undefined } }
   }, shellReady, killLine, cleanup: (cancel) => cleanups.push(cancel) })
   return { writer, write, shellReady, save, snapshot: () => JSON.parse(JSON.stringify(durable)) as PendingLaunch, echo: (text: string) => output?.(text),
@@ -35,6 +35,40 @@ describe('durable launch delivery', () => {
     expect(await first).toBe('submitted')
     expect(await f.writer(command, true)).toBe('submitted')
     expect(f.write.mock.calls).toEqual([[command], ['\r']])
+  })
+  it('claims the saved recipe but delivers only the prepared command, once', async () => {
+    const prepare = vi.fn(async () => 'claude current-memory-and-brief')
+    const f = fixture(false, KILL_LINE, prepare)
+    const result = f.writer('# saved-memory-recipe', false)
+    await tick()
+    expect(f.snapshot()).toMatchObject({ command: '# saved-memory-recipe', attempted: true })
+    expect(f.save.mock.invocationCallOrder[0]).toBeLessThan(prepare.mock.invocationCallOrder[0])
+    expect(f.write.mock.calls).toEqual([['claude current-memory-and-brief']])
+    f.echo('claude current-memory-and-brief')
+    expect(await result).toBe('submitted')
+    expect(await f.writer('# saved-memory-recipe', true)).toBe('submitted')
+    expect(prepare).toHaveBeenCalledTimes(1)
+  })
+  it('keeps failed preparation recoverable without typing a stale launch', async () => {
+    const prepare = vi.fn<(command: string) => Promise<string>>().mockRejectedValueOnce(new Error('Memory corrupt')).mockResolvedValue('codex recovered')
+    const f = fixture(false, KILL_LINE, prepare)
+    expect(await f.writer('recipe', false)).toBe('cancelled')
+    expect(f.write).not.toHaveBeenCalled()
+    expect(await f.writer('recipe', false)).toBe('cancelled')
+    const retry = f.writer('recipe', true)
+    await tick()
+    f.echo('codex recovered')
+    expect(await retry).toBe('submitted')
+  })
+  it('does not type if the node unmounts while its packet is being prepared', async () => {
+    let resolve!: (command: string) => void
+    const f = fixture(false, KILL_LINE, () => new Promise((r) => { resolve = r }))
+    const result = f.writer('recipe', false)
+    await tick()
+    f.dispose()
+    resolve('codex late')
+    expect(await result).toBe('cancelled')
+    expect(f.write).not.toHaveBeenCalled()
   })
   it('repairs a swallowed head using Ctrl-U before submitting', async () => {
     vi.useFakeTimers()

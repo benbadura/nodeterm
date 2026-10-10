@@ -45,6 +45,8 @@ export interface LaunchInputs {
    *  into the pane, and a newline would submit the half-typed line. Multi-line briefs go through
    *  `promptFile` instead. */
   initialPrompt?: string
+  /** Internal literal prefix, concatenated with the original prompt as one argv value. */
+  contextPrefix?: string
   /** Absolute path to a file holding the first-launch prompt (canvas-control `--prompt-file`).
    *  Wins over `initialPrompt`. Composed as `"$(cat '<path>')"` so the TYPED line stays one line
    *  while the pane's shell expands the file — newlines and all — into a single argv element at
@@ -205,11 +207,12 @@ export function assembleLaunchCommand(
   //   make the substitution a single word and keep its RESULT data — file content is never
   //   re-parsed as shell syntax. On an SSH project the path (and the `cat`) are on the host,
   //   which is exactly where the node runs. Only the PATH is interpolated, single-quoted.
-  const promptArg = inputs.promptFile
+  const userPromptArg = inputs.promptFile
     ? `"$(cat ${shellSingleQuote(inputs.promptFile.trim())})"`
     : inputs.initialPrompt
       ? shellSingleQuote(inputs.initialPrompt.replace(/\s+/g, ' ').trim())
       : null
+  const promptArg = inputs.contextPrefix ? shellSingleQuote(inputs.contextPrefix) + (userPromptArg ?? '') : userPromptArg
   const sep = eff.argvPromptSeparator
   const promptFlag =
     eff.promptInjectionMode === 'flag-prompt'

@@ -74,6 +74,7 @@ import {
 } from './LocalFilePreviewModal'
 import { ChatPanelFallback } from '../../nodes/ChatPanelFallback'
 import { ReadinessPanel } from './ReadinessPanel'
+import { ProjectMemoryPanel } from '../ProjectMemoryPanel'
 import { useTaskReadiness } from '../../state/taskReadiness'
 
 // Code-split exactly like the canvas node's: ChatPanel carries the markdown renderer, and the
@@ -175,15 +176,18 @@ export function CardModal({ session, projectId, projectName, projectColor, colum
   const isTerminal = session.kind === 'terminal'
   const isBrowser = session.kind === 'browser'
   const requestedReadiness = useTaskReadiness((s) => s.requestedNode)
+  const [memoryOpen, setMemoryOpen] = useState(false)
   const [readinessOpen, setReadinessOpen] = useState(() => requestedReadiness === session.id)
   const [readinessVisited, setReadinessVisited] = useState(() => requestedReadiness === session.id)
   useEffect(() => {
+    setMemoryOpen(false)
     setReadinessOpen(useTaskReadiness.getState().requestedNode === session.id)
     setReadinessVisited(useTaskReadiness.getState().requestedNode === session.id)
   }, [session.id])
   useEffect(() => { if (readinessOpen) setReadinessVisited(true) }, [readinessOpen])
   useEffect(() => {
     if (requestedReadiness === session.id) {
+      setMemoryOpen(false)
       setReadinessOpen(true)
       useTaskReadiness.getState().clearRequest()
     }
@@ -613,12 +617,13 @@ export function CardModal({ session, projectId, projectName, projectColor, colum
         <CardMetaBar nodeId={session.id} board={board} onChange={onChangeBoard} />
         <CardPullRequests session={session} board={board} onChangeBoard={onChangeBoard} />
         {isTerminal && <div className="readiness-tabs" role="tablist" aria-label="Task views">
-          <button role="tab" aria-selected={!readinessOpen} onClick={() => setReadinessOpen(false)}>Session</button>
-          <button role="tab" aria-selected={readinessOpen} onClick={() => setReadinessOpen(true)}>Readiness</button>
+          <button role="tab" aria-selected={!readinessOpen && !memoryOpen} onClick={() => { setReadinessOpen(false); setMemoryOpen(false) }}>Session</button>
+          <button role="tab" aria-selected={readinessOpen && !memoryOpen} onClick={() => { setReadinessOpen(true); setMemoryOpen(false) }}>Readiness</button>
+          <button role="tab" aria-selected={memoryOpen} onClick={() => { setMemoryOpen(true); setReadinessOpen(false) }}>Memory</button>
         </div>}
         <div className="kanban-modal__body">
           {/* Body is a flex row: the card's own pane (2/3) + the board-log panel (1/3, all kinds). */}
-          <div className={`kanban-modal__main${readinessOpen && isTerminal ? ' kanban-modal__main--readiness' : ''}`}>
+          <div className={`kanban-modal__main${(readinessOpen || memoryOpen) && isTerminal ? ' kanban-modal__main--readiness' : ''}`}>
             {session.kind === 'sticky' ? (
               editingNote ? (
                 <textarea
@@ -687,7 +692,7 @@ export function CardModal({ session, projectId, projectName, projectColor, colum
                       spawn={session.spawn}
                       searchOpen={searchOpen}
                       onCloseSearch={() => setSearchOpen(false)}
-                      covered={mdOpen || readinessOpen}
+                      covered={mdOpen || readinessOpen || memoryOpen}
                       projectId={projectId}
                       onOpenFile={setPreviewFile}
                     />
@@ -746,7 +751,8 @@ export function CardModal({ session, projectId, projectName, projectColor, colum
                 )}
               </div>
             )}
-            {readinessVisited && isTerminal && <ReadinessPanel key={session.id} projectId={projectId} nodeId={session.id} active={readinessOpen} />}
+            {readinessVisited && isTerminal && <ReadinessPanel key={session.id} projectId={projectId} nodeId={session.id} active={readinessOpen && !memoryOpen} />}
+            {memoryOpen && isTerminal && <ProjectMemoryPanel key={session.id} projectId={projectId} nodeId={session.id} /> }
           </div>
           {panelOpen && <BoardLogPanel card={session} mentionables={mentionables} />}
         </div>

@@ -214,6 +214,8 @@ import {
 } from '../lib/addMenuSpec'
 import { planSetProjectFolder } from '../lib/setProjectFolder'
 import { effectiveAccountId, observationIsRemote, type ObservationOrigin } from '../lib/accountChip'
+import { ProjectMemoryDialog } from '../components/ProjectMemoryPanel'
+import { useProjectMemoryPanel } from '../state/projectMemory'
 import { transferConversationItems } from '../lib/transferItems'
 import { reopenVariants } from '../lib/reopenVariants'
 import { modelsForAgent, type GatewayModel } from '@shared/agents/model-gateway'
@@ -9036,6 +9038,48 @@ export function Canvas() {
     },
     [setNodes, markDirty, placeSpawned, besideNode]
   )
+
+  const memoryHandoff = useProjectMemoryPanel((s) => s.handoff)
+  const memorySource = useProjectMemoryPanel((s) => s.source)
+  useEffect(() => {
+    if (!memorySource) return
+    useProjectMemoryPanel.getState().consumeSource()
+    const project = useProjects.getState().getProject(memorySource.projectId)
+    if (project?.nodes.some((n) => n.id === memorySource.nodeId)) travelToNodeRef.current(memorySource.nodeId)
+  }, [memorySource])
+  useEffect(() => {
+    if (!memoryHandoff) return
+    useProjectMemoryPanel.getState().consumeTransfer()
+    void (async () => {
+      const { projectId, taskId, sourceNodeId, agentId, model } = memoryHandoff
+      const project = useProjects.getState().getProject(projectId)
+      if (!project || project.ssh || session.source !== 'local' || useProjects.getState().activeProjectId !== projectId) {
+        setConfirm({ message: 'Open the local project before transferring this task.', alert: true, onConfirm: () => setConfirm(null) })
+        return
+      }
+      try {
+        const memory = api.projectMemory
+        const packet = await memory.packet(projectId, { taskId })
+        if (!packet.ok || !packet.value.filePath) throw new Error(packet.ok ? 'Memory packet unavailable.' : packet.error)
+        const source = sourceNodeId ? nodesRef.current.find((n) => n.id === sourceNodeId) as CanvasNode | undefined : undefined
+        const prompt = 'You are taking over an existing task. Read the project/task memory supplied at startup. Then reply with a short recap of the goal, current state, approved decisions, missing information and next step. Make no changes and start no task. Wait for the user to tell you what to do next.'
+        const node = createAgentNode(agentId, nodesRef.current.length, source?.data.cwd || project.cwd,
+          undefined, prompt, undefined, source?.data.agentId === agentId ? source.data.accountId : undefined,
+          activePermissionMode(agentId), projectId, model)
+        const bound = await memory.bind(projectId, taskId, node.id)
+        if (!bound.ok) throw new Error(bound.error)
+        // Binding precedes mounting: first-launch preparation must see the inherited task.
+        if (useProjects.getState().activeProjectId !== projectId) throw new Error('Project changed during transfer. Reopen it and retry.')
+        node.selected = true
+        const placed = placeSpawned(node, source ? besideNode(source) : node.position)
+        setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), placed])
+        markDirty()
+        useProjectMemoryPanel.getState().close()
+      } catch (e) {
+        setConfirm({ message: e instanceof Error ? e.message : String(e), alert: true, onConfirm: () => setConfirm(null) })
+      }
+    })()
+  }, [memoryHandoff, api, session.source, setNodes, markDirty, placeSpawned, besideNode])
 
   const setNodesColor = useCallback(
     (ids: string[], color: string) => {
@@ -18874,6 +18918,7 @@ export function Canvas() {
 
   return (
     <div className="canvas-root" style={wallpaperStyle}>
+      <ProjectMemoryDialog />
       <TabBar
         onSwitch={switchProject}
         onReconnect={reconnectRelay}

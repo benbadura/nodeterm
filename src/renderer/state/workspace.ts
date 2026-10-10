@@ -17,6 +17,9 @@ import {
   FALLBACK_AGENT_COLOR,
   supportsSessionIdFlag
 } from '@shared/agents/config'
+import { deferMemoryCommand, MEMORY_PROMPT_MARKER } from '@shared/memory-launch'
+import { isBrowserRuntime } from '../bridge/runtime'
+import { sessionForProject } from '../session/session'
 import { assembleLaunchCommand, assembleResumeCommand } from '@shared/agents/launch'
 import { agentAccountColor } from '@shared/agents/account-color'
 import { boundAccountId } from '@shared/agents/account-binding'
@@ -844,8 +847,20 @@ export function createAgentNode(
     )
   }
   const size = terminalNodeSize()
+  const nodeId = nextId('term')
+  let launchCommand = initialCommand
+  // Gate by the owning runtime; a relay/SSH session must never read local memory.
+  let localMemory = false
+  try { localMemory = !!projectId && !ssh && !isBrowserRuntime() && sessionForProject(projectId!).source === 'local' } catch { /* no runtime in pure factory tests */ }
+  if (localMemory && resumeSessionId === undefined) {
+    const contextual = assembleLaunchCommand({ ...resumeInputs, agentId, customAgent,
+      launchCmdOverride, initialPrompt, promptFile, contextPrefix: MEMORY_PROMPT_MARKER,
+      approvalCaps: codexApprovalCaps(ssh, projectId),
+      sessionId: mintedSessionId, sessionIdFlagSupported }, agentEnvSnapshot()).command
+    launchCommand = deferMemoryCommand(nodeId, initialCommand, contextual)
+  }
   return {
-    id: nextId('term'),
+    id: nodeId,
     type: 'terminal',
     ...placeNode('terminal', center, index, size.width, size.height),
     data: {
@@ -867,7 +882,7 @@ export function createAgentNode(
       // later restarts keep it; `withAgentModel` re-applies it on relaunch. Only stamped when set.
       ...(model ? { agentModel: model } : {}),
       cwd: ssh ? ssh.remoteCwd : cwd,
-      initialCommand,
+      initialCommand: launchCommand,
       ...(ssh ? { ssh: ssh.server, sshRemoteTmux: true } : {})
     }
   }
