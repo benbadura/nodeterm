@@ -164,6 +164,7 @@ import {
   claudeAccountEnv,
   generateCommitMessage,
   generateGroupName,
+  generateNodeName,
   generateTerminalName
 } from '../core/commit-message'
 import { initUpdater } from './updater'
@@ -1630,6 +1631,12 @@ app.whenReady().then(async () => {
     const contents = await Promise.all(memberKeys.map((k) => ptyManager.captureSession(k)))
     return generateGroupName(contents, localNamingCwd(memberKeys, cwd), settingsStore.get())
   })
+
+  corePlatform.handle(
+    IPC.ptyGenerateNodeName,
+    (context: import('../shared/node-naming').NodeNamingContext, cwd: string, accountId?: string) =>
+      generateNodeName(context, cwd, settingsStore.get(), namingEnv(accountId))
+  )
 
   corePlatform.handle(IPC.ptyCapture, (persistKey: string, full?: boolean) =>
     ptyManager.captureSession(persistKey, full)

@@ -33,6 +33,7 @@ import { sessionNameRepeatsTitle } from '../../lib/cardRedundancy'
 import type { IssueRef } from '@shared/github-issue-ref'
 import { useAgentStatus } from '../../state/agentStatus'
 import { useCardPanel } from '../../state/cardPanel'
+import { useSessionNaming } from '../../state/sessionNaming'
 import {
   useCardModalSize,
   resolveModalSize,
@@ -168,7 +169,7 @@ export function CardModal({ session, projectId, projectName, projectColor, colum
   const sessionName = useAgentStatus((st) => st.byId[session.id]?.session)
   const portsRemote = useProjects((s) => !!(portsProjectId && s.getProject(portsProjectId)?.ssh))
   const accountChip = useAccountChip(session.spawn.accountId, observedAccount)
-  const [naming, setNaming] = useState(false)
+  const naming = useSessionNaming((s) => !!s.byId[session.id])
   // Comments & activity panel: OPEN by default in the modal; the header 💬 collapses it. The
   // choice is remembered (localStorage) — once collapsed, later cards open collapsed too.
   const panelOpen = useCardPanel((s) => s.open)
@@ -309,10 +310,13 @@ export function CardModal({ session, projectId, projectName, projectColor, colum
   const RESIZE_DIRS = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw']
 
   const nameWithAi = async () => {
-    setNaming(true)
-    const r = await api.pty.generateName(session.id, session.spawn.cwd ?? '', session.spawn.accountId)
-    setNaming(false)
-    if (r.ok) onRename(r.message)
+    if (!useSessionNaming.getState().tryStart(session.id)) return
+    try {
+      const r = await api.pty.generateName(session.id, session.spawn.cwd ?? '', session.spawn.accountId)
+      if (r.ok) onRename(r.message)
+    } finally {
+      useSessionNaming.getState().set(session.id, false)
+    }
   }
   // Ref mirrors: the capture-phase listener below closes over stale state otherwise.
   const editingTitleRef = useRef(false)

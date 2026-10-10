@@ -6,11 +6,27 @@ import { create } from 'zustand'
 // at the Canvas level and applies its result regardless of the row's mount state.
 interface SessionNamingState {
   byId: Record<string, boolean>
+  batchProjectId: string | null
+  tryStart(id: string): boolean
+  tryStartBatch(projectId: string): boolean
+  finishBatch(): void
   set(id: string, naming: boolean): void
 }
 
-export const useSessionNaming = create<SessionNamingState>((set) => ({
+export const useSessionNaming = create<SessionNamingState>((set, get) => ({
   byId: {},
+  batchProjectId: null,
+  tryStart: (id) => {
+    if (get().byId[id]) return false
+    get().set(id, true)
+    return true
+  },
+  tryStartBatch: (projectId) => {
+    if (get().batchProjectId) return false
+    set({ batchProjectId: projectId })
+    return true
+  },
+  finishBatch: () => set({ batchProjectId: null }),
   set: (id, naming) =>
     set((s) => {
       if (!!s.byId[id] === naming) return s

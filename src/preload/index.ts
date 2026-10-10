@@ -104,6 +104,8 @@ const api: NodeTerminalApi = {
       ipcRenderer.invoke(IPC.ptyGenerateName, persistKey, cwd, accountId),
     generateGroupName: (memberKeys, cwd) =>
       ipcRenderer.invoke(IPC.ptyGenerateGroupName, memberKeys, cwd),
+    generateNodeName: (context, cwd, accountId) =>
+      ipcRenderer.invoke(IPC.ptyGenerateNodeName, context, cwd, accountId),
     capture: (persistKey, full) => ipcRenderer.invoke(IPC.ptyCapture, persistKey, full),
     remoteSessionConfirmed: (persistKey, sshRemote) =>
       ipcRenderer.invoke(IPC.ptyRemoteSessionConfirmed, persistKey, sshRemote),

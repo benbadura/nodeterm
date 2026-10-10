@@ -1752,8 +1752,8 @@ Typical requests this skill covers:
 - "Open a Codex/Gemini/Copilot session" → \`open-agent --agent codex|gemini|copilot\`.
 - "Tidy up / group my terminals" → \`list\`, then \`group --nodes …\`, then \`arrange --group <the new frame's id>\`
   to tidy the new frame's contents (grouping keeps each node's scattered spot, so arrange after grouping).
-- "Tidy the canvas" / "clean up the layout" → \`arrange --group top\` — the user's own Tidy canvas: you stay at the
-  top-left of the team you opened. Once, after the team is open — not after every \`open-*\`.
+- "Tidy the canvas" / "clean up the layout" → \`arrange --group top\` — the user's own Tidy canvas: working
+  first, then waiting/blocked, idle and unknown; oldest opened first in each category. Once, not after every \`open-*\`.
 - "Move this node into that group" → \`move --nodes <id> --group <targetGroupId>\` (not \`group\`, which only
   wraps loose nodes). "Break up this group" → \`ungroup --group <id>\`.
 - "Rename this node/group" → \`rename\`.

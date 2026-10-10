@@ -127,9 +127,10 @@ describe('parseControlRequest', () => {
       ['instructions', buildCanvasControlInstructions('/x/shim.sh')]
     ] as const) {
       expect(body, name).toContain('- `arrange --group <frameId> [--layout grid|row|column|lineage] [--cols N]`')
-      // The whole-canvas form is in both bodies, and says what Tidy does with an orchestrator.
+      // Both bodies describe the same status/date ordering as the user's Tidy canvas.
       expect(body, name).toContain('- `arrange --group top [--layout tidy|lineage]` — tidy the WHOLE canvas')
-      expect(body, name).toMatch(/each orchestrator is placed first, at the top-left of the nodes and\s+frames it opened/)
+      expect(body, name).toContain('working first, then waiting/blocked, idle')
+      expect(body, name).toContain('oldest opened units come first')
       // The `--nodes` form is still there, and still says what it accepts.
       expect(body, name).toContain('`arrange --nodes <id,id> [--layout grid|row|column] [--cols N]`')
       expect(body, name).toMatch(/frame's direct children \(a frame nested\s+inside moves as one unit\)/)

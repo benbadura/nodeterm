@@ -116,11 +116,12 @@ describe('arrange inside a group (source pins)', () => {
     expect(nodesForm).not.toContain('fitGroupToChildren(')
   })
 
-  it('Tidy canvas is tidyCanvas over the ropes WITH their ids, and a no-op writes nothing', () => {
+  it('Tidy canvas reads current status, and a no-op writes nothing', () => {
     const tidy = between('const arrangeAllNodes = useCallback(', '\n  // Whether the lineage tidy')
-    const guard = tidy.indexOf('tidyCanvas(nodesRef.current as CanvasNode[], edges) !== nodesRef.current')
+    expect(tidy).toContain('const statusById = useAgentStatus.getState().byId')
+    const guard = tidy.indexOf('tidyCanvas(nodesRef.current as CanvasNode[], statusById) !== nodesRef.current')
     expect(guard).toBeGreaterThan(-1)
-    expect(tidy.indexOf('setNodes((ns) => tidyCanvas(ns as CanvasNode[], edges))')).toBeGreaterThan(guard)
+    expect(tidy.indexOf('setNodes((ns) => tidyCanvas(ns as CanvasNode[], statusById))')).toBeGreaterThan(guard)
     expect(tidy).not.toContain('arrangeNodes(')
     expect(tidy).toContain('isKanbanOpen(')
     const edges = between('const lineageEdges = useCallback(', 'const arrangeAllNodes')
@@ -130,7 +131,7 @@ describe('arrange inside a group (source pins)', () => {
   it('arrange --group top runs the same Tidy canvas (or its bands) and writes only on a change', () => {
     const top = groupBranch.slice(groupBranch.indexOf('if (isTopLevelGroupArg(gid))'), groupBranch.indexOf('const groupLayout'))
     expect(top).toContain("TOP_ARRANGE_LAYOUTS.find((l) => l === args.layout) ?? 'tidy'")
-    expect(top).toContain("topLayout === 'lineage' ? arrangeByLineage(live, edges) : tidyCanvas(live, edges)")
+    expect(top).toContain("topLayout === 'lineage' ? arrangeByLineage(live, edges) : tidyCanvas(live, useAgentStatus.getState().byId)")
     expect(top).toContain('if (next !== live) commitCtlNodes(next)')
     expect(top).not.toMatch(/\barrangeNodes\(/)
   })

@@ -23,6 +23,7 @@ export const IPC = {
   /** Desktop-only awaited recycle path used after an explicit destructive-action confirmation. */
   ptyRecycleConfirmed: 'pty:recycle-confirmed',
   ptyGenerateName: 'pty:generate-name',
+  ptyGenerateNodeName: 'pty:generate-node-name',
   ptyGenerateGroupName: 'pty:generate-group-name',
   ptyCapture: 'pty:capture',
   /** Renderer → core: has the host behind this ControlMaster POSITIVELY listed the node's remote

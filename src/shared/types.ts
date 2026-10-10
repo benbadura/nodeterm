@@ -485,9 +485,9 @@ export interface CanvasNodeState {
   size: { width: number; height: number }
   title: string
   /**
-   * Agent nodes only: while true (the default), the node title auto-tracks the agent's own
-   * session name. Set false once the user renames the node by hand, so we stop overwriting it
-   * and instead push the user's name back to the agent via `/rename`. Persisted.
+   * While true (the default), supported nodes track their session name, page title or folder.
+   * Explicit user/AI naming sets false to preserve the chosen title. Rename-capable agents
+   * also receive the chosen name via `/rename`. Persisted.
    */
   titleAuto?: boolean
   color: string
@@ -1291,6 +1291,8 @@ export interface PtyApi {
   generateName(persistKey: string, cwd: string, accountId?: string): Promise<GitResult>
   /** Suggest a group title from its member terminals' recent output via the configured AI agent. */
   generateGroupName(memberKeys: string[], cwd: string): Promise<GitResult>
+  /** Suggest a title for any persistent node from its display context via the configured AI agent. */
+  generateNodeName(context: import('./node-naming').NodeNamingContext, cwd: string, accountId?: string): Promise<GitResult>
   /** Capture a terminal session's output as text. `full` grabs the entire scrollback. */
   capture(persistKey: string, full?: boolean): Promise<string>
   /**

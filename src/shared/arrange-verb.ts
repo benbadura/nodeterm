@@ -19,9 +19,8 @@ export type GroupArrangeLayout = (typeof GROUP_ARRANGE_LAYOUTS)[number]
 
 /**
  * What the TOP LEVEL of the canvas can be laid out as, through `arrange --group top`: `tidy` is the
- * Tidy canvas command itself (every top-level unit packed, each orchestrator at the top-left of the
- * team it opened), `lineage` its bands. The id-list packs are not offered here — `--nodes` already
- * says them, and a top-level grid that ignores lineage is exactly what Tidy no longer does.
+ * Tidy canvas command itself (top-level units sorted by live status, then opening time),
+ * `lineage` its bands. The id-list packs are offered separately through `--nodes`.
  */
 export const TOP_ARRANGE_LAYOUTS = ['tidy', 'lineage'] as const
 export type TopArrangeLayout = (typeof TOP_ARRANGE_LAYOUTS)[number]
@@ -88,9 +87,9 @@ export function arrangeGroupGuidanceLines(): string[] {
     '  one call to make after `group`, or after opening stations into a frame.',
     `- \`arrange --group top [--layout ${TOP_ARRANGE_LAYOUTS.join('|')}]\` — tidy the WHOLE canvas, exactly as the`,
     '  user\'s Tidy canvas command does: every top-level node and frame (a frame moves as one unit) is',
-    '  packed without overlap, and each orchestrator is placed first, at the top-left of the nodes and',
-    '  frames it opened, with the team it opened packed directly to its right (opened-by only; an',
-    '  `--after` wait does not move anything). Nodes nobody opened are packed after the teams.',
+    '  packed without overlap: working first, then waiting/blocked, idle, and unknown/non-session',
+    '  nodes. Within each category the oldest opened units come first. A frame inherits the highest',
+    '  status priority of its descendants; its children keep their positions inside it.',
     '  `--layout lineage` instead stacks one row per level of opened-by and `--after`. Call it once',
     '  after spawning teams, not after every open.'
   ]

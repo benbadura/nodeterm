@@ -150,6 +150,7 @@ import {
   IconSearch,
   IconSelectAll,
   IconSessions,
+  IconSparkle,
   IconSmiley,
   IconSwitch,
   IconTerminal,
@@ -715,6 +716,9 @@ import { useSettings } from '../state/settings'
 import { activePermissionMode, grokCliCapsNow, projectPermissionMode } from '../state/permissionMode'
 import { useContextWindow } from '../state/contextWindow'
 import { useSessionNaming } from '../state/sessionNaming'
+import { nameAllNodes, summarizeBulkNaming } from '../lib/bulkNaming'
+import { browserNavigationData } from '../lib/browserNavigation'
+import { NAMING_NODE_KINDS } from '@shared/node-naming'
 import { useSshServers } from '../state/sshServers'
 import { useSshConn } from '../state/sshConn'
 import {
@@ -9176,15 +9180,59 @@ export function Canvas() {
     prevAutoAlignRef.current = on
   }, [settings.autoAlignGrid, alignToGrid])
 
+  // The current rename funnel is read after AI returns, so a project switch cannot leave the
+  // batch holding the old render's activeProjectId or accidentally update the new canvas.
+  const renameSessionRef = useRef<(projectId: string, id: string, title: string) => void>(() => {})
+  const namingBatchProject = useSessionNaming((s) => s.batchProjectId)
+  const hasNameableNodes = useCallback(
+    () => nodesRef.current.some((n) => NAMING_NODE_KINDS.has(n.type ?? 'terminal')),
+    []
+  )
+  const namingAvailable = useCallback(
+    () => sessionForProject(nodesProjectIdRef.current ?? '').source === 'local',
+    []
+  )
+  const nameAllWithAi = useCallback(async () => {
+    const projectId = nodesProjectIdRef.current
+    if (!projectId || projectId !== useProjects.getState().activeProjectId || !hasNameableNodes()) return
+    if (!namingAvailable()) {
+      setNotice({ kind: 'info', text: 'AI naming is available in the desktop app for local projects.' })
+      return
+    }
+    const naming = useSessionNaming.getState()
+    if (!naming.tryStartBatch(projectId)) return
+    try {
+      const snapshot = flowToNodeStates(nodesRef.current)
+      const pty = sessionForProject(projectId).api.pty
+      const result = await nameAllNodes(snapshot, {
+        pty,
+        current: (id) => {
+          if (nodesProjectIdRef.current === projectId && useProjects.getState().activeProjectId === projectId) {
+            const node = nodesRef.current.find((n) => n.id === id)
+            return node ? flowToNodeStates([node])[0] : undefined
+          }
+          return useProjects.getState().getProject(projectId)?.nodes.find((n) => n.id === id)
+        },
+        rename: (id, title) => renameSessionRef.current(projectId, id, title),
+        tryStart: (id) => useSessionNaming.getState().tryStart(id),
+        finish: (id) => useSessionNaming.getState().set(id, false),
+        progress: (p) => setNotice({ kind: 'info', text: `Naming with AI ${p.completed}/${p.total}…`, sticky: true })
+      })
+      setNotice({ kind: result.failed ? 'error' : 'info', text: summarizeBulkNaming(result) })
+    } catch (error) {
+      setNotice({ kind: 'error', text: error instanceof Error ? error.message : String(error) })
+    } finally {
+      useSessionNaming.getState().finishBatch()
+    }
+  }, [hasNameableNodes, namingAvailable])
+
   const selectAll = useCallback(() => {
     setNodes((ns) => ns.map((n) => ({ ...n, selected: true })))
   }, [setNodes])
 
   // Pane-level "Tidy canvas": packs every top-level node (terminal, agent, sticky, editor, diff,
   // group frame — a frame moves as one unit, its children ride along untouched) into a
-  // non-overlapping layout, keeping each orchestrator at the top-left of the team it opened
-  // (`tidyCanvas`, state/workspace.ts — opener ropes only, lifted to the top-level unit; a canvas
-  // with no lineage gets exactly the reading-order grid this action always produced).
+  // non-overlapping grid ordered by live status and opening time, oldest first.
   const hasArrangeableNodes = useCallback((): boolean => {
     return nodesRef.current.filter((n) => !n.parentId).length >= 2
   }, [])
@@ -9197,15 +9245,15 @@ export function Canvas() {
   )
   const arrangeAllNodes = useCallback(() => {
     if (isGlobalKanbanOpen() || isKanbanOpen(useProjects.getState().activeProjectId)) return
-    const edges = lineageEdges()
+    const statusById = useAgentStatus.getState().byId
     // The SAME array means nothing moves (under 2 units, or already tidy): no undo entry, no
     // project.json write. Decided against nodesRef BEFORE the write — see arrangeByLineageAction.
-    if (tidyCanvas(nodesRef.current as CanvasNode[], edges) !== nodesRef.current) {
-      setNodes((ns) => tidyCanvas(ns as CanvasNode[], edges))
+    if (tidyCanvas(nodesRef.current as CanvasNode[], statusById) !== nodesRef.current) {
+      setNodes((ns) => tidyCanvas(ns as CanvasNode[], statusById))
       markDirty()
     }
     fitAll()
-  }, [setNodes, markDirty, fitAll, lineageEdges])
+  }, [setNodes, markDirty, fitAll])
 
   // Whether the lineage tidy has anything to say. Asked when the menu OPENS so the row can be
   // disabled with its reason instead of silently doing nothing on click: on a canvas nobody
@@ -11403,6 +11451,17 @@ export function Canvas() {
           ...(hasArrangeableNodes()
             ? [{ label: 'Tidy canvas', icon: <IconGrid />, onClick: arrangeAllNodes } as MenuItem]
             : []),
+          ...(hasNameableNodes()
+            ? [{
+                label: 'Name All with AI',
+                icon: <IconSparkle />,
+                disabled: !!namingBatchProject || !namingAvailable(),
+                hint: namingBatchProject ? 'AI naming is in progress.' : !namingAvailable()
+                  ? 'AI naming is available in the desktop app for local projects.'
+                  : 'Rename every node in this project, including manually named nodes.',
+                onClick: () => void nameAllWithAi()
+              } as MenuItem]
+            : []),
           // Same visibility gate as Tidy canvas, then disabled WITH the reason when this canvas
           // has no lineage to lay out — a row that is off for an invisible reason teaches nothing.
           ...(hasArrangeableNodes()
@@ -11441,6 +11500,10 @@ export function Canvas() {
       selectAll,
       fitAll,
       arrangeAllNodes,
+      nameAllWithAi,
+      hasNameableNodes,
+      namingAvailable,
+      namingBatchProject,
       arrangeByLineageAction,
       hasArrangeableNodes,
       hasLineageLayers,
@@ -12698,7 +12761,7 @@ export function Canvas() {
   // Persist a browser card's navigation (url/title) from the modal webview back to the node.
   const browserNavFromKanban = useCallback(
     (nodeId: string, patch: { url?: string; title?: string }) => {
-      setNodes((ns) => ns.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n)))
+      setNodes((ns) => ns.map((n) => (n.id === nodeId ? { ...n, data: browserNavigationData(n.data, patch) } : n)))
       markDirty()
     },
     [setNodes, markDirty]
@@ -15059,7 +15122,7 @@ export function Canvas() {
               // that owns the caller — the same pure transforms the pane menu runs.
               if (isTopLevelGroupArg(gid)) {
                 const topLayout = TOP_ARRANGE_LAYOUTS.find((l) => l === args.layout) ?? 'tidy'
-                const next = topLayout === 'lineage' ? arrangeByLineage(live, edges) : tidyCanvas(live, edges)
+                const next = topLayout === 'lineage' ? arrangeByLineage(live, edges) : tidyCanvas(live, useAgentStatus.getState().byId)
                 const count = live.filter((nd) => !nd.parentId).length
                 if (next !== live) commitCtlNodes(next)
                 reply({
@@ -16430,13 +16493,15 @@ export function Canvas() {
       // Both facts about the node are read BEFORE the rename lands: `renameNode` mutates the
       // store synchronously, so reading the previous title afterwards would compare the new name
       // against itself and push a duplicate `/rename` on every no-op rename (#582).
-      const liveNode = nodesRef.current.find((n) => n.id === id)
+      const holdsProject = nodesProjectIdRef.current === projectId && useProjects.getState().activeProjectId === projectId
+      const liveNode = holdsProject ? nodesRef.current.find((n) => n.id === id) : undefined
       const storedNode = useProjects
         .getState()
         .projects.find((p) => p.id === projectId)
         ?.nodes.find((n) => n.id === id)
       const prevTitle = (liveNode?.data.title as string | undefined) ?? storedNode?.title ?? ''
-      if (projectId === activeProjectId) {
+      if (!liveNode && !storedNode) return
+      if (holdsProject) {
         // An explicit rename takes ownership of the name → stop auto-tracking the session.
         setNodes((ns) =>
           ns.map((n) => (n.id === id ? { ...n, data: { ...n.data, title, titleAuto: false } } : n))
@@ -16455,11 +16520,12 @@ export function Canvas() {
       const agentId = (liveNode?.data.agentId as AgentId | undefined) ?? storedNode?.agentId
       const name = title.trim()
       if (agentId && canRename(agentId) && name) {
-        void pushSessionRename(api.pty, id, name, prevTitle)
+        void pushSessionRename(sessionForProject(projectId).api.pty, id, name, prevTitle)
       }
     },
     [activeProjectId, setNodes, markDirty, writeDisk]
   )
+  renameSessionRef.current = renameSession
 
   // Stable identity for the memoized KanbanView — an inline arrow would re-render the whole
   // board on every Canvas render.
@@ -16549,12 +16615,12 @@ export function Canvas() {
     ) => {
       const { projectId, nodeId, patch } = e.detail
       if (projectId === useProjects.getState().activeProjectId) {
-        setNodes((ns) => ns.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n)))
+        setNodes((ns) => ns.map((n) => (n.id === nodeId ? { ...n, data: browserNavigationData(n.data, patch) } : n)))
         markDirty()
       } else {
         useProjects.setState((s) => ({
           projects: s.projects.map((p) =>
-            p.id === projectId ? { ...p, nodes: p.nodes.map((n) => (n.id === nodeId ? { ...n, ...patch } as never : n)) } : p
+            p.id === projectId ? { ...p, nodes: p.nodes.map((n) => (n.id === nodeId ? browserNavigationData(n, patch) : n)) } : p
           )
         }))
         void writeDisk()
@@ -16614,7 +16680,7 @@ export function Canvas() {
     async (projectId: string, id: string, cwd?: string) => {
       // Track progress in a store keyed by node id so the spinner survives the row/sidebar
       // unmounting mid-request; this Canvas-level call completes and applies the name anyway.
-      useSessionNaming.getState().set(id, true)
+      if (!useSessionNaming.getState().tryStart(id)) return
       try {
         // The node's managed Claude account, so the naming request runs under the same login the
         // node does (live node first, then the serialized one for a non-active project).
@@ -16638,7 +16704,7 @@ export function Canvas() {
   const aiNameGroup = useCallback(
     async (projectId: string, groupId: string, memberIds: string[], cwd?: string) => {
       if (memberIds.length === 0) return
-      useSessionNaming.getState().set(groupId, true)
+      if (!useSessionNaming.getState().tryStart(groupId)) return
       try {
         const r = await api.pty.generateGroupName(memberIds, cwd ?? '')
         if (r.ok) renameSession(projectId, groupId, r.message)
@@ -18645,6 +18711,15 @@ export function Canvas() {
         run: toggleFocusMode
       },
       { id: 'fit', label: 'Fit view', icon: <IconFit />, run: fitAll },
+      ...(hasNameableNodes() && namingAvailable() && !namingBatchProject
+        ? [{
+            id: 'name-all-ai',
+            label: 'Name All with AI',
+            hint: 'rename titles all nodes project',
+            icon: <IconSparkle />,
+            run: () => void nameAllWithAi()
+          } as Command]
+        : []),
       // Hidden below 2 top-level nodes — see arrangeAllNodes.
       ...(hasArrangeableNodes()
         ? [
@@ -18866,6 +18941,10 @@ export function Canvas() {
     restartIdleAgents,
     zoomTo100,
     arrangeAllNodes,
+    nameAllWithAi,
+    hasNameableNodes,
+    namingAvailable,
+    namingBatchProject,
     hasArrangeableNodes,
     saveCanvasLayout,
     restoreCanvasLayout,

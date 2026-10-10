@@ -70,9 +70,10 @@ export default function BrowserNode({ id, data, selected }: NodeProps<CanvasNode
           onUrlChange={(u) =>
             ghost ? useWebviewKeepAlive.getState().updateGhostData(id, { url: u }) : updateNodeData(id, { url: u })
           }
-          onTitleChange={(t) =>
+          onTitleChange={(t) => {
+            if (data.titleAuto === false) return
             ghost ? useWebviewKeepAlive.getState().updateGhostData(id, { title: t }) : updateNodeData(id, { title: t })
-          }
+          }}
           onGuestDiscarded={ghost ? () => useWebviewKeepAlive.getState().drop(id) : undefined}
         />
       </div>

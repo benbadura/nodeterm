@@ -7,6 +7,7 @@ import type { GitResult, Settings } from '../shared/types'
 import { directExecutableInvocation, findInPathString, shellPathNow } from './exec-path'
 import { resolveGitRemote, runRemoteGit } from './remote-ssh/remote-git'
 import { AUTH_ENV_STRIP } from './claude-accounts-core'
+import { cleanNodeName, EMPTY_NAMING_OUTPUT, nodeNamePrompt, type NodeNamingContext } from '../shared/node-naming'
 
 const run = promisify(execFile)
 
@@ -342,7 +343,7 @@ export async function generateTerminalName(
   env?: NodeJS.ProcessEnv
 ): Promise<GitResult> {
   const trimmed = content.trim()
-  if (!trimmed) return { ok: false, message: 'No terminal output to read yet.' }
+  if (!trimmed) return { ok: false, message: EMPTY_NAMING_OUTPUT }
   const clip = trimmed.split('\n').slice(-150).join('\n').slice(-8000)
   const prompt = `Below is the recent output of a terminal session. Suggest a very short title (2-4 words, Title Case, no surrounding quotes, no trailing punctuation) describing what this terminal is used for. Output ONLY the title.
 
@@ -352,11 +353,7 @@ ${clip}
 \`\`\``
   const r = await runAgent(prompt, cwd, settings, env)
   if (!r.ok) return r
-  const name = r.message
-    .split('\n')[0]
-    .replace(/["'`.]+$/g, '')
-    .trim()
-    .slice(0, 40)
+  const name = cleanNodeName(r.message)
   return name ? { ok: true, message: name } : { ok: false, message: 'No name produced.' }
 }
 
@@ -372,16 +369,27 @@ export async function generateGroupName(
       return clip ? `Terminal ${i + 1}:\n\`\`\`\n${clip}\n\`\`\`` : ''
     })
     .filter(Boolean)
-  if (!blocks.length) return { ok: false, message: 'No terminal output to read yet.' }
+  if (!blocks.length) return { ok: false, message: EMPTY_NAMING_OUTPUT }
   const prompt = `Below are the recent outputs of several terminal sessions that belong to one group. Suggest a very short group title (2-4 words, Title Case, no surrounding quotes, no trailing punctuation) describing the group's shared purpose. Output ONLY the title.
 
 ${blocks.join('\n\n')}`
   const r = await runAgent(prompt, cwd, settings)
   if (!r.ok) return r
-  const name = r.message
-    .split('\n')[0]
-    .replace(/["'`.]+$/g, '')
-    .trim()
-    .slice(0, 40)
+  const name = cleanNodeName(r.message)
+  return name ? { ok: true, message: name } : { ok: false, message: 'No name produced.' }
+}
+
+/** Names non-terminal nodes, or a terminal/group that has not produced output yet. */
+export async function generateNodeName(
+  context: NodeNamingContext,
+  cwd: string,
+  settings: Settings,
+  env?: NodeJS.ProcessEnv
+): Promise<GitResult> {
+  const prompt = nodeNamePrompt(context)
+  if (!prompt) return { ok: false, message: 'Invalid node naming context.' }
+  const result = await runAgent(prompt, cwd, settings, env)
+  if (!result.ok) return result
+  const name = cleanNodeName(result.message)
   return name ? { ok: true, message: name } : { ok: false, message: 'No name produced.' }
 }

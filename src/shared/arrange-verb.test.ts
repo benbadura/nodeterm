@@ -79,7 +79,8 @@ describe('arrangeGroupGuidanceLines', () => {
   it('documents the whole-canvas form with the layouts the parser accepts', () => {
     expect(text).toContain(`arrange --group top [--layout ${TOP_ARRANGE_LAYOUTS.join('|')}]`)
     expect(text).toContain("exactly as the\n  user's Tidy canvas command does")
-    expect(text).toMatch(/top-left of the nodes and\s+frames it opened/)
-    expect(text).toMatch(/opened-by only; an\s+`--after` wait does not move anything/)
+    expect(text).toContain('working first, then waiting/blocked, idle')
+    expect(text).toContain('oldest opened units come first')
+    expect(text).toContain('children keep their positions')
   })
 })

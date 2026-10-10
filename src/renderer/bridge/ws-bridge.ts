@@ -276,6 +276,7 @@ export function buildRealApi(
     // No server handler — degrade gracefully (never reject the boot path).
     generateName: () => Promise.resolve(AI_NAMING_UNAVAILABLE),
     generateGroupName: () => Promise.resolve(AI_NAMING_UNAVAILABLE),
+    generateNodeName: () => Promise.resolve(AI_NAMING_UNAVAILABLE),
     capture: (persistKey, full) =>
       client.request(IPC.ptyCapture, persistKey, full).catch(() => '') as Promise<string>,
     // Documented degrade, not a stub with a hole in it: SSH PROJECTS are desktop-only (the whole

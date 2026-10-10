@@ -3,6 +3,7 @@ import { useContextEnsure } from '../terminal/useContextEnsure'
 import { canPlainApprove, sendHeaderAnswer } from '../lib/approveGate'
 import { FIND_DECORATIONS } from '../lib/palette'
 import { ptyRefusal } from '@shared/pty-refusal'
+import { useSessionNaming } from '../state/sessionNaming'
 
 import { patchImeModeSwitch } from '../terminal/ime-mode-switch'
 import { installGlassCellBackgrounds, scheduleGlassCellAlpha, setGlassCellAlpha } from '../terminal/glass-cell-backgrounds'
@@ -1553,7 +1554,7 @@ export function TerminalNode({
   useEffect(() => () => {
     if (uploadNoteTimer.current) clearTimeout(uploadNoteTimer.current)
   }, [])
-  const [naming, setNaming] = useState(false)
+  const naming = useSessionNaming((s) => !!s.byId[id])
   // Is a glyph grid attached RIGHT NOW? Drives the `term-node--glyphgrid` class on the node ROOT,
   // which is what turns the node into a transparent window onto the shared canvas (see styles.css).
   // React state, not an imperative `classList.add`: the root's className is recomputed from
@@ -5853,16 +5854,19 @@ export function TerminalNode({
   // AI-generated names compare against the node's current title (issue #714): the model can
   // return the same name back, and clicking "Name with AI" repeatedly must not spam /rename.
   const nameWithAi = async () => {
-    setNaming(true)
-    const r = await api.pty.generateName(
-      id,
-      (data.cwd as string) ?? '',
-      data.accountId as string | undefined
-    )
-    setNaming(false)
-    if (r.ok) {
-      const current = titleRef.current ?? (data.title as string) ?? ''
-      applyManualTitle(r.message, current)
+    if (!useSessionNaming.getState().tryStart(id)) return
+    try {
+      const r = await api.pty.generateName(
+        id,
+        (data.cwd as string) ?? '',
+        data.accountId as string | undefined
+      )
+      if (r.ok) {
+        const current = titleRef.current ?? (data.title as string) ?? ''
+        applyManualTitle(r.message, current)
+      }
+    } finally {
+      useSessionNaming.getState().set(id, false)
     }
   }
 
