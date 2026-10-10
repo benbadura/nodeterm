@@ -143,6 +143,9 @@ Gemini / GitHub Copilot / opencode / Grok / custom) · 📝 **Sticky note** (lin
   git, and even the board run there while the canvas stays local.
 - **Source control** — VS Code-style stage/unstage, discard, branch switch/create,
   commit, push/sync/publish, **worktrees**, and `gh` sign-in — backed by system `git`.
+  Adding an agent lets you choose the **current directory or a new worktree**. A new
+  worktree opens the agent in its own branch-bound group; the last successful choice
+  is remembered separately for each project on this machine.
 - **GitHub Issues on Kanban** – opt-in issue cards, exact label-to-column mapping,
   All / GitHub / Sessions filtering, and two-way move, close, and reopen sync. See
   [setup and security details](./docs/github-issues-kanban.md).

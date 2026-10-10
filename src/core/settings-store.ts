@@ -4,6 +4,7 @@ import { writeFileAtomic } from "./fs-atomic";
 import { IPC } from "../shared/ipc";
 import { platform } from "./platform";
 import { DEFAULT_SETTINGS, type Settings } from "../shared/types";
+import { sanitizeAgentWorkspacePreferences } from "../shared/agent-workspace";
 
 /**
  * Merge a possibly-partial/legacy `Settings` object over `DEFAULT_SETTINGS`. A plain
@@ -15,6 +16,9 @@ import { DEFAULT_SETTINGS, type Settings } from "../shared/types";
  */
 function mergeSettings(saved: Partial<Settings> | null | undefined): Settings {
   const merged = { ...DEFAULT_SETTINGS, ...saved };
+  if (saved?.agentWorkspacePreferences !== undefined) {
+    merged.agentWorkspacePreferences = sanitizeAgentWorkspacePreferences(saved.agentWorkspacePreferences);
+  }
   merged.speech = { ...DEFAULT_SETTINGS.speech, ...saved?.speech };
   merged.modelGateway = {
     ...DEFAULT_SETTINGS.modelGateway,

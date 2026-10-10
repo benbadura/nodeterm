@@ -268,6 +268,13 @@ import {
 } from '../lib/liveLinkEntry'
 import { RemotePicker } from '../components/RemotePicker'
 import { WorktreeDialog } from '../components/WorktreeDialog'
+import {
+  agentWorkspaceMode,
+  rememberAgentWorkspaceMode,
+  type AgentWorkspaceMode
+} from '@shared/agent-workspace'
+import { createAgentWorktree } from '../lib/agentWorkspace'
+import { ACCOUNT_CAPABLE_AGENT_IDS } from '@shared/agents/account-binding'
 import { SpawnTeamDialog } from '../components/SpawnTeamDialog'
 import { conductorPrompt } from '../lib/spawnTeamPrompt'
 import { NotifyConsentDialog } from '../components/NotifyConsentDialog'
@@ -1099,6 +1106,20 @@ const CODEX_ACCOUNT_NO_CONNECTION_NOTICE =
   'That Codex account lives on a host that is not connected — connect its SSH project first.'
 const CODEX_ACCOUNT_GONE_NOTICE = 'That Codex account is no longer available. Nothing was created.'
 
+interface ManualAgentRequest {
+  projectId: string
+  agentId: AgentId
+  accountId?: string | null
+  label: string
+  accountLabel?: string
+  currentCwd?: string
+  initialMode: AgentWorkspaceMode
+  at?: { x: number; y: number }
+  groupId?: string
+  /** Undefined = canvas creation; null = the board's Ungrouped column. */
+  columnId?: string | null
+}
+
 // The webview's file loader renders off the LOCAL disk and has no remote counterpart, so a host
 // path from a remote agent could only resolve to a same-named local file — or nothing. Refuse and
 // say why, rather than opening a node that quietly shows the wrong thing. `%s` is the verb.
@@ -1707,6 +1728,12 @@ export function Canvas() {
   // dialog opens (a branch created in a terminal since the last store refresh should still show), so
   // it is dialog-local state rather than a store fact.
   const [worktreeBranches, setWorktreeBranches] = useState<string[]>([])
+  const [agentWorkspaceDialog, setAgentWorkspaceDialogState] = useState<ManualAgentRequest | null>(null)
+  const agentWorkspaceDialogRef = useRef<ManualAgentRequest | null>(null)
+  const agentWorkspaceBusyRef = useRef(false)
+  const [agentWorkspaceBusy, setAgentWorkspaceBusy] = useState(false)
+  const [agentWorkspaceError, setAgentWorkspaceError] = useState<string | null>(null)
+  const [agentWorkspaceBranches, setAgentWorkspaceBranches] = useState<string[]>([])
   // The store is filled asynchronously by the active-project effect, so the dialog subscribes
   // (rather than reading getState() once) — the repo may resolve after it's already open.
   const worktreeRepoRoot = useWorktrees((s) => s.repoRoot)
@@ -2107,6 +2134,7 @@ export function Canvas() {
     closeProject: false,
     deleteProject: false,
     issueWorktree: false,
+    agentWorkspace: false,
     lastSessionOffer: false
   })
   // Every confirm setter flips its flag AT CALL TIME. Assigning the mirror during RENDER (what this
@@ -2207,10 +2235,21 @@ export function Canvas() {
       f.closeProject ||
       f.deleteProject ||
       f.issueWorktree ||
+      f.agentWorkspace ||
       f.lastSessionOffer ||
       removePendingRef.current
     )
   }, [])
+  const setAgentWorkspaceDialog = useCallback((request: ManualAgentRequest | null) => {
+    agentWorkspaceDialogRef.current = request
+    confirmFlags.current.agentWorkspace = !!request
+    setAgentWorkspaceDialogState(request)
+  }, [])
+  useEffect(() => useProjects.subscribe((next, previous) => {
+    if (next.activeProjectId !== previous.activeProjectId || next.reloadNonce !== previous.reloadNonce) {
+      setAgentWorkspaceDialog(null)
+    }
+  }), [setAgentWorkspaceDialog])
   // Issue #848's offer is an actionable dialog like the rest, so it is in the same guard: an agent
   // `write`/`close` or a worktree removal must not stack over it (flag flipped at call time).
   const setLastSessionOffer = useCallback((v: { id: string; name: string } | null) => {
@@ -6513,6 +6552,58 @@ export function Canvas() {
     ]
   )
 
+  /** All manual "New agent" actions stop here; programmatic creation keeps addAgentNode. */
+  const requestManualAgent = useCallback(
+    (agentId: AgentId, at?: { x: number; y: number }, groupId?: string,
+      accountId?: string | null, columnId?: string | null) => {
+      if (agentWorkspaceBusyRef.current || confirmBusy() || worktreeDialog) {
+        setNotice({ kind: 'info', text: 'Finish the open dialog before adding another agent.' })
+        return
+      }
+      const refusal = agentCreateRefusal(agentId, accountId)
+      if (refusal) {
+        setNotice({ kind: 'error', text: refusal })
+        return
+      }
+      const projectId = useProjects.getState().activeProjectId
+      const project = useProjects.getState().getProject(projectId ?? '')
+      if (!projectId || !project) return
+      const settings = useSettings.getState().settings
+      // Pin the resolved account so a default edited while the dialog is open cannot change it.
+      const codexAccount = agentId === 'codex'
+        ? resolveNewCodexNodeAccount(accountId ?? undefined, settings.codexAccounts, connectedProjectIdForHost)
+        : undefined
+      const resolvedAccount = agentId === 'codex'
+        ? codexAccount?.create ? codexAccount.accountId : undefined
+        : agentId === 'claude' ? resolveNewNodeAccount(accountId, project, settings.claudeAccounts) : undefined
+      const account = agentId === 'codex'
+        ? settings.codexAccounts.find((a) => a.id === resolvedAccount)
+        : settings.claudeAccounts.find((a) => a.id === resolvedAccount)
+      const request: ManualAgentRequest = {
+        projectId, agentId, at, groupId, columnId,
+        accountId: resolvedAccount ?? null,
+        label: agentConfig(agentId)?.label ?? settings.customAgents.find((a) => a.id === agentId)?.label ?? agentId,
+        accountLabel: ACCOUNT_CAPABLE_AGENT_IDS.includes(agentId)
+          ? account?.label ?? (agentId === 'claude'
+            ? systemAccountDisplay(settings.systemAccountLabel, useSystemAccount.getState().email)
+            : systemAccountDisplay(undefined, useSystemCodexAccount.getState().email))
+          : undefined,
+        currentCwd: cwdForNewNodeIn(groupId) ?? project.ssh?.remoteCwd ?? project.cwd,
+        initialMode: agentWorkspaceMode(settings.agentWorkspacePreferences, projectId)
+      }
+      setAgentWorkspaceError(null)
+      setAgentWorkspaceBranches([])
+      setAgentWorkspaceDialog(request)
+      const repoRoot = useWorktrees.getState().repoRoot
+      if (repoRoot && !project.ssh && sessionForProject(projectId).source !== 'relay') {
+        void activeSessionApi().git.status(repoRoot).then((status) => {
+          if (agentWorkspaceDialogRef.current === request) setAgentWorkspaceBranches(status.branches ?? [])
+        }).catch(() => {})
+      }
+    },
+    [agentCreateRefusal, connectedProjectIdForHost, cwdForNewNodeIn, confirmBusy, worktreeDialog, setAgentWorkspaceDialog]
+  )
+
   // A terminal node asking for an agent node BESIDE it — today only the Gemini-retirement banner
   // ("Open Antigravity", terminal/gemini-retired.ts). Same no-direct-line-to-the-canvas pattern as
   // `nodeterm:open-terminal`. The new node joins the source's frame (so a bound worktree's cwd is
@@ -6531,11 +6622,11 @@ export function Canvas() {
       const center = rect
         ? { x: rect.x + rect.width * 1.5 + 40, y: rect.y + rect.height / 2 }
         : undefined
-      addAgentNode(agentId, center, source?.parentId)
+      requestManualAgent(agentId, center, source?.parentId)
     }
     window.addEventListener('nodeterm:open-agent', onOpenAgent)
     return () => window.removeEventListener('nodeterm:open-agent', onOpenAgent)
-  }, [addAgentNode, nodesRef])
+  }, [requestManualAgent, nodesRef])
 
   // "Spawn a team…" (issue #78): the dialog collects the task; this opens ONE conductor node
   // pre-prompted with it. The conductor's own manage-nodeterm-canvas skill does the role split
@@ -10127,7 +10218,7 @@ export function Canvas() {
         // (`.nodeterm/settings.json` → agents.defaultAgentId), else the global one, and a default
         // naming a since-removed custom agent is guarded so its bare `custom:<uuid>` id is never
         // typed into the new node's shell (like launchableDefaultAgent).
-        addAgentNode(
+        requestManualAgent(
           resolveNewNodeAgent(
             undefined,
             useProjects.getState().activeProjectId,
@@ -10138,13 +10229,13 @@ export function Canvas() {
       },
       // Per-agent creates: the chord names the agent, so these bypass resolveNewNodeAgent (which
       // answers "what does this project default to?") and open exactly what the row says.
-      'node.newAgent.claude': () => { addAgentNode('claude'); return true },
-      'node.newAgent.codex': () => { addAgentNode('codex'); return true },
-      'node.newAgent.gemini': () => { addAgentNode('gemini'); return true },
-      'node.newAgent.opencode': () => { addAgentNode('opencode'); return true },
-      'node.newAgent.grok': () => { addAgentNode('grok'); return true },
-      'node.newAgent.copilot': () => { addAgentNode('copilot'); return true },
-      'node.newAgent.antigravity': () => { addAgentNode('antigravity'); return true },
+      'node.newAgent.claude': () => { requestManualAgent('claude'); return true },
+      'node.newAgent.codex': () => { requestManualAgent('codex'); return true },
+      'node.newAgent.gemini': () => { requestManualAgent('gemini'); return true },
+      'node.newAgent.opencode': () => { requestManualAgent('opencode'); return true },
+      'node.newAgent.grok': () => { requestManualAgent('grok'); return true },
+      'node.newAgent.copilot': () => { requestManualAgent('copilot'); return true },
+      'node.newAgent.antigravity': () => { requestManualAgent('antigravity'); return true },
       'node.newSticky': () => { addSticky(); return true },
       'node.newBrowser': () => { addBrowser(); return true },
       // Opening the URL prompt IS claiming the chord — a cancelled prompt creates nothing, but the
@@ -10894,7 +10985,7 @@ export function Canvas() {
     ): AgentAddEntry[] => {
       const create = (aid: AgentId, acct?: string | null): void => {
         if (pick) pick.onPick(aid, acct)
-        else addAgentNode(aid, at, groupId, acct)
+        else requestManualAgent(aid, at, groupId, acct)
       }
       const rowLabel = (agentLabel: string): string =>
         pick?.label ? pick.label(agentLabel) : `New ${agentLabel}`
@@ -10973,7 +11064,7 @@ export function Canvas() {
         // Codex gets its own account picker submenu when ≥1 managed account lives on this
         // project's machine (S6 §3.4). Every managed row is gated through `codexAccountSelectable`
         // — a missing/hostile/unconnected account renders DISABLED, so the fail-closed refusal is
-        // enforced before the click, and again in `addAgentNode` (the UI is not the boundary).
+        // enforced before the click, and again in `requestManualAgent` (the UI is not the boundary).
         if (aid === 'codex' && codexAccountsHere.length > 0) {
           return {
             type: 'submenu',
@@ -11032,7 +11123,7 @@ export function Canvas() {
           )
       ]
     },
-    [addAgentNode, connectedProjectIdForHost]
+    [requestManualAgent, connectedProjectIdForHost]
   )
 
   const groupItems = useCallback(
@@ -11609,6 +11700,10 @@ export function Canvas() {
   // list until the next render, and a pruned commit would strip the assignment right back off.
   const createNodeInColumn = useCallback(
     (choice: KanbanCreateChoice, columnId: string | null) => {
+      if (choice.kind === 'agent') {
+        requestManualAgent(choice.agentId, undefined, undefined, undefined, columnId)
+        return
+      }
       // Live read + epoch guard, like addAgentNode/addTerminal (issue #443): board cards are the
       // active project's sessions, so a board-created node must be charged to the project whose
       // canvas React Flow actually holds under the overlay.
@@ -11631,24 +11726,7 @@ export function Canvas() {
           ? createTerminalNode(index, project?.cwd, at, undefined, project?.ssh)
           : choice.kind === 'sticky'
             ? createStickyNode(index, at)
-            : choice.kind === 'browser'
-              ? createBrowserNode(index, '', at)
-              : createAgentNode(
-                choice.agentId,
-                index,
-                project?.cwd,
-                at,
-                undefined,
-                project?.ssh,
-                resolveNewNodeAccount(
-                  undefined,
-                  project,
-                  useSettings.getState().settings.claudeAccounts
-                ),
-                activePermissionMode(choice.agentId),
-                // Board-created nodes belong to the active project like any other.
-                targetProjectId
-              )
+            : createBrowserNode(index, '', at)
       setNodes((ns) => [...ns, node])
       const board = project?.kanban ?? defaultKanban(targetProjectId)
       if (columnId) {
@@ -11667,12 +11745,7 @@ export function Canvas() {
           ? 'Terminal'
           : choice.kind === 'sticky'
             ? 'Sticky note'
-            : choice.kind === 'browser'
-              ? 'Browser'
-              : agentConfig(choice.agentId)?.label ??
-              useSettings.getState().settings.customAgents.find((a) => a.id === choice.agentId)
-                ?.label ??
-              choice.agentId
+            : 'Browser'
       const title = (node.data.title as string) || kindLabel
       useBoardLog.getState().append(sessionForProject(targetProjectId).api, targetProjectId, {
         kind: 'event',
@@ -11680,8 +11753,115 @@ export function Canvas() {
         event: { type: 'card-created', to: toName, title }
       })
     },
-    [emptyNodePos, setNodes, markDirty, castNewNodeNow]
+    [emptyNodePos, setNodes, markDirty, castNewNodeNow, requestManualAgent]
   )
+
+  const startManualAgent = useCallback(async (value?: WorktreeCreateValue) => {
+    const target = agentWorkspaceDialogRef.current
+    if (!target || agentWorkspaceBusyRef.current) return
+    const isCurrent = (): boolean => agentWorkspaceDialogRef.current === target &&
+      canCreateOnCanvas(nodesProjectIdRef.current, target.projectId) &&
+      useProjects.getState().activeProjectId === target.projectId
+    if (!isCurrent()) return
+    const project = useProjects.getState().getProject(target.projectId)
+    const settings = useSettings.getState().settings
+    const accountGone = target.agentId === 'claude' && target.accountId &&
+      !settings.claudeAccounts.some((a) => a.id === target.accountId)
+    const refusal = accountGone ? 'The selected account is no longer available.'
+      : agentCreateRefusal(target.agentId, target.accountId)
+    if (refusal) { setAgentWorkspaceError(refusal); return }
+    if (value) {
+      const unavailable = issueWorktreeRefusal({
+        relay: sessionForProject(target.projectId).source === 'relay',
+        ssh: !!project?.ssh, cwd: project?.cwd, repoRoot: useWorktrees.getState().repoRoot
+      })
+      const locationRefusal = sharedWorktreeLocationRefusal({
+        path: value.path, repoRoot: value.repoPath, branch: value.branch,
+        sharedBasePath: sharedBasePathOf(projectLaunchInfoNow(target.projectId)?.resolved.worktree)
+      })
+      if (unavailable || locationRefusal || value.repoPath !== useWorktrees.getState().repoRoot) {
+        setAgentWorkspaceError(unavailable ?? locationRefusal ?? 'The repository changed. Open the dialog again.')
+        return
+      }
+    } else if ((target.groupId && !nodesRef.current.some((n) => n.id === target.groupId)) ||
+      (cwdForNewNodeIn(target.groupId) ?? project?.ssh?.remoteCwd ?? project?.cwd) !== target.currentCwd) {
+      setAgentWorkspaceError('The target directory changed. Open the dialog again.')
+      return
+    }
+    agentWorkspaceBusyRef.current = true
+    setAgentWorkspaceBusy(true)
+    setAgentWorkspaceError(null)
+    const finish = (created: NonNullable<ReturnType<typeof addAgentNode>>): void => {
+      if (target.columnId !== undefined) {
+        const board = useProjects.getState().getProject(created.projectId)?.kanban ?? defaultKanban(created.projectId)
+        const column = board.columns.find((c) => c.id === target.columnId)
+        if (column) {
+          castNewNodeNow(created.projectId, created.placed)
+          useProjects.getState().setProjectKanban(created.projectId, assignNode(board, created.node.id, column.id, null))
+        }
+        useBoardLog.getState().append(sessionForProject(created.projectId).api, created.projectId, {
+          kind: 'event', nodeId: created.node.id,
+          event: { type: 'card-created', to: column?.title ?? 'Ungrouped', title: target.label }
+        })
+      }
+      useSettings.getState().update({ agentWorkspacePreferences: rememberAgentWorkspaceMode(
+        useSettings.getState().settings.agentWorkspacePreferences, target.projectId,
+        value ? 'new-worktree' : 'current'
+      ) })
+      setAgentWorkspaceDialog(null)
+    }
+    try {
+      if (!value) {
+        const created = addAgentNode(target.agentId, target.at, target.groupId, target.accountId,
+          undefined, { awaitSetupGroup: setupHoldGroup(target.groupId) })
+        if (created) finish(created)
+        return
+      }
+      const size = terminalNodeSize()
+      const { frame: needed } = frameAgentPlacement({ x: 0, y: 0 }, 0, size)
+      const frame = {
+        width: Math.max(WORKTREE_GROUP_SIZE.width, needed.width),
+        height: Math.max(WORKTREE_GROUP_SIZE.height, needed.height)
+      }
+      let created: ReturnType<typeof addAgentNode>
+      const result = await createAgentWorktree({
+        ...worktreeCreateDeps(), isCurrent,
+        openAgent: (groupId) => {
+          if (target.agentId === 'claude' && target.accountId &&
+            !useSettings.getState().settings.claudeAccounts.some((a) => a.id === target.accountId)) return false
+          const group = nodesRef.current.find((n) => n.id === groupId)
+          if (!group) return false
+          const origin = absolutePosition(group as FocusableNode, nodesRef.current as FocusableNode[])
+          const { center } = frameAgentPlacement(origin, 0, size)
+          created = addAgentNode(target.agentId, center, groupId, target.accountId,
+            undefined, { awaitSetupGroup: setupHoldGroup(groupId) })
+          return !!created
+        }
+      }, { ...value, mode: 'new' }, {
+        projectId: target.projectId,
+        target: () => ({ groupId: null, at: target.at ?? emptyNodePos({ w: frame.width, h: frame.height }), size: frame })
+      })
+      if (!result.ok) {
+        if (result.reason === 'git') {
+          if (isCurrent()) setAgentWorkspaceError(result.message)
+        } else {
+          setNotice({ kind: 'info', text: `Created worktree ${value.branch} at ${value.path}. The project changed, so no group or agent was started.` })
+        }
+        return
+      }
+      if (result.agentCreated && created) finish(created)
+      else {
+        setAgentWorkspaceDialog(null)
+        setNotice({ kind: 'error', text: `Worktree ${value.branch} is ready at ${value.path}, but the agent could not be created. Add an agent from its group to reuse it.` })
+      }
+    } catch (error) {
+      if (isCurrent()) setAgentWorkspaceError(error instanceof Error ? error.message : String(error))
+    } finally {
+      agentWorkspaceBusyRef.current = false
+      setAgentWorkspaceBusy(false)
+    }
+  }, [agentCreateRefusal, addAgentNode, cwdForNewNodeIn, worktreeCreateDeps, emptyNodePos,
+    castNewNodeNow, setupHoldGroup, setAgentWorkspaceDialog])
 
   // ---- GitHub issue → agent session ("Start with agent ▸") ----
   /**
@@ -18270,7 +18450,7 @@ export function Canvas() {
           id: `new-${aid}`,
           label: `New ${AGENT_CONFIG[aid].label}`,
           icon: <AgentIcon agentId={aid} />,
-          run: () => addAgentNode(aid)
+          run: () => requestManualAgent(aid)
         })
       ),
       ...useSettings
@@ -18281,7 +18461,7 @@ export function Canvas() {
             id: `new-${c.id}`,
             label: `New ${c.label}`,
             icon: <AgentIcon agentId={c.id} />,
-            run: () => addAgentNode(c.id)
+            run: () => requestManualAgent(c.id)
           })
         ),
       // One "New Claude — <label>" per account usable in the active project (local accounts for a
@@ -18296,7 +18476,7 @@ export function Canvas() {
             id: `new-claude-${a.id}`,
             label: `New Claude — ${a.label}`,
             icon: <AgentIcon agentId="claude" />,
-            run: () => addAgentNode('claude', undefined, undefined, a.id)
+            run: () => requestManualAgent('claude', undefined, undefined, a.id)
           })
         ),
       { id: 'new-sticky', label: 'New sticky note', icon: <IconNote />, run: () => addSticky() },
@@ -18619,7 +18799,7 @@ export function Canvas() {
     return cmds
   }, [
     addTerminal,
-    addAgentNode,
+    requestManualAgent,
     addSticky,
     addRun,
     addDino,
@@ -19791,6 +19971,37 @@ export function Canvas() {
         />
       )}
 
+      {agentWorkspaceDialog && agentWorkspaceDialog.projectId === activeProjectId && (
+        <WorktreeDialog
+          key={`agent-${agentWorkspaceDialog.projectId}-${agentWorkspaceDialog.agentId}`}
+          intent="create"
+          repoPath={worktreeRepoRoot ?? ''}
+          existing={[]}
+          defaultBaseRef={effectiveWorktreeBaseRef(activeWorktreeDefaults, worktreeEntries)}
+          branches={agentWorkspaceBranches}
+          defaultPath={(repoPath, branch) => computeWorktreePath(repoPath, branch,
+            effectiveWorktreeTemplate(activeWorktreeDefaults, settings.worktreePathTemplate))}
+          busy={agentWorkspaceBusy}
+          error={agentWorkspaceError}
+          agent={{
+            label: agentWorkspaceDialog.label,
+            accountLabel: agentWorkspaceDialog.accountLabel,
+            currentCwd: agentWorkspaceDialog.currentCwd ?? 'Default shell directory',
+            initialMode: agentWorkspaceDialog.initialMode,
+            worktreeUnavailable: issueWorktreeRefusal({
+              relay: sessionForProject(agentWorkspaceDialog.projectId).source === 'relay',
+              ssh: !!useProjects.getState().getProject(agentWorkspaceDialog.projectId)?.ssh,
+              cwd: useProjects.getState().getProject(agentWorkspaceDialog.projectId)?.cwd,
+              repoRoot: worktreeRepoRoot
+            }),
+            onCurrent: () => { void startManualAgent() }
+          }}
+          onCreate={(value) => { void startManualAgent(value) }}
+          onBindExisting={() => {}}
+          onCancel={() => { if (!agentWorkspaceBusyRef.current) setAgentWorkspaceDialog(null) }}
+        />
+      )}
+
       {worktreeDialog && (
         <WorktreeDialog
           // Opened from a group's "Bind to worktree…" (groupId set) vs. the pane/palette's
@@ -19950,7 +20161,7 @@ export function Canvas() {
         onAddTrigger={addTrigger}
         onAddFiles={() => addFiles()}
         onAddRun={() => void addRun()}
-        onAddAgent={(aid, accountId) => addAgentNode(aid, undefined, undefined, accountId)}
+        onAddAgent={(aid, accountId) => requestManualAgent(aid, undefined, undefined, accountId)}
         onOpenFile={() => void openFileDialog()}
         onAddRemote={() => openRemotePicker({ x: window.innerWidth / 2, y: window.innerHeight / 2 })}
         onConnectRemote={() => void connectRemote()}

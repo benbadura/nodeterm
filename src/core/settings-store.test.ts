@@ -39,6 +39,20 @@ describe('SettingsStore nested-default merge', () => {
     expect(s.fontSize).toBe(15)
   })
 
+  it('persists manual agent workspace choices per project and sanitizes an invalid saved choice', async () => {
+    const store = new SettingsStore()
+    store.init()
+    await store.save({ ...store.get(), agentWorkspacePreferences: { a: 'new-worktree', b: 'current' } })
+    const restored = new SettingsStore()
+    restored.init()
+    expect(restored.get().agentWorkspacePreferences).toEqual({ a: 'new-worktree', b: 'current' })
+    writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({
+      agentWorkspacePreferences: { a: 'new-worktree', b: 'unknown' }
+    }))
+    restored.init()
+    expect(restored.get().agentWorkspacePreferences).toEqual({ a: 'new-worktree' })
+  })
+
   it.each([
     ['true over auto becomes Liquid Glass', { glassTerminals: true }, 'liquid-glass'],
     ['true over an explicit dark keeps dark', { glassTerminals: true, appTheme: 'dark' }, 'dark'],

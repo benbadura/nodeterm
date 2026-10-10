@@ -27,6 +27,7 @@ import type { WhisperModelInfo } from './speech'
 import type { ProjectKanbanGitHub } from './github-issues'
 import type { KanbanPullAutoMove, KanbanPullLinks } from './kanban-pull-links'
 import type { BoardDispatch } from './board-dispatch'
+import type { AgentWorkspacePreferences } from './agent-workspace'
 import type { CodexAccount } from './codex-account'
 import type { NotchAlign } from './notch-hud'
 import type { ProjectIcon, ProjectIconPickResult } from './project-icon'
@@ -2300,6 +2301,8 @@ export interface Settings {
    *  and absent from DEFAULT_SETTINGS — means off everywhere. Read through
    *  `sanitizeBoardDispatch`: settings.json is hand-editable. */
   boardDispatch?: BoardDispatch
+  /** Machine-local last successful workspace choice for manual agent creation, by project id. */
+  agentWorkspacePreferences?: AgentWorkspacePreferences
 }
 
 export const DEFAULT_SETTINGS: Settings = {
