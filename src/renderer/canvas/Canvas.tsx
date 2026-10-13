@@ -1,3 +1,5 @@
+import { useNodeActivity } from './useNodeActivity'
+import { flushNodeActivities } from '../lib/nodeActivity'
 import { PrepareUpdateDialog } from '../components/PrepareUpdateDialog'
 import type { PrepNode } from '../lib/updatePrep'
 import { reportTextDelivery } from '../lib/textDelivery'
@@ -277,6 +279,7 @@ import {
   type AgentWorkspaceMode
 } from '@shared/agent-workspace'
 import { createAgentWorktree } from '../lib/agentWorkspace'
+import { assignKanbanTaskSession, kanbanSessionWorkflowLaunch } from '../lib/kanbanWorkflow'
 import { ACCOUNT_CAPABLE_AGENT_IDS } from '@shared/agents/account-binding'
 import { SpawnTeamDialog } from '../components/SpawnTeamDialog'
 import { conductorPrompt } from '../lib/spawnTeamPrompt'
@@ -3449,6 +3452,11 @@ export function Canvas() {
   const markDirty = useCallback(() => {
     if (!loadingRef.current) bumpDirty()
   }, [bumpDirty])
+  useNodeActivity({
+    nodes, nodesRef, projectRef: nodesProjectIdRef, renderedProjectId, loadingRef, setNodes, markDirty,
+    canTrackProject: (projectId) => !isHostedReadOnly(sessionForProject(projectId).id)
+  })
+
   // Expose markDirty to surfaces outside Canvas (a canvas node editing its kanban labels), so they
   // ride the same debounced whole-file save.
   useEffect(() => registerWorkspaceDirty(markDirty), [markDirty])
@@ -3581,6 +3589,7 @@ export function Canvas() {
 
   // ---- persistence helpers ----
   const commitActiveToStore = useCallback(() => {
+    flushNodeActivities()
     const id = useProjects.getState().activeProjectId
     // Epoch pairing: only commit while the nodes React Flow holds belong to the ACTIVE project.
     // The normal switch flow still commits — every caller commits BEFORE `setActive`, while the two
@@ -11877,6 +11886,12 @@ export function Canvas() {
     const refusal = accountGone ? 'The selected account is no longer available.'
       : agentCreateRefusal(target.agentId, target.accountId)
     if (refusal) { setAgentWorkspaceError(refusal); return }
+    const workflow = kanbanSessionWorkflowLaunch({
+      settings, projectId: target.projectId, board: project?.kanban ?? defaultKanban(target.projectId),
+      columnId: target.columnId, agentId: target.agentId,
+      supportedHost: !project?.ssh && !isBrowserRuntime() && sessionForProject(target.projectId).source === 'local'
+    })
+    if (workflow.error) { setAgentWorkspaceError(workflow.error); return }
     if (value) {
       const unavailable = issueWorktreeRefusal({
         relay: sessionForProject(target.projectId).source === 'relay',
@@ -11902,9 +11917,10 @@ export function Canvas() {
       if (target.columnId !== undefined) {
         const board = useProjects.getState().getProject(created.projectId)?.kanban ?? defaultKanban(created.projectId)
         const column = board.columns.find((c) => c.id === target.columnId)
-        if (column) {
+        if (column || workflow.prompt) {
           castNewNodeNow(created.projectId, created.placed)
-          useProjects.getState().setProjectKanban(created.projectId, assignNode(board, created.node.id, column.id, null))
+          useProjects.getState().setProjectKanban(created.projectId,
+            assignKanbanTaskSession(board, created.node.id, column?.id ?? null, !!workflow.prompt))
         }
         useBoardLog.getState().append(sessionForProject(created.projectId).api, created.projectId, {
           kind: 'event', nodeId: created.node.id,
@@ -11920,7 +11936,7 @@ export function Canvas() {
     try {
       if (!value) {
         const created = addAgentNode(target.agentId, target.at, target.groupId, target.accountId,
-          undefined, { awaitSetupGroup: setupHoldGroup(target.groupId) })
+          workflow.prompt, { awaitSetupGroup: setupHoldGroup(target.groupId) })
         if (created) finish(created)
         return
       }
@@ -11941,7 +11957,7 @@ export function Canvas() {
           const origin = absolutePosition(group as FocusableNode, nodesRef.current as FocusableNode[])
           const { center } = frameAgentPlacement(origin, 0, size)
           created = addAgentNode(target.agentId, center, groupId, target.accountId,
-            undefined, { awaitSetupGroup: setupHoldGroup(groupId) })
+            workflow.prompt, { awaitSetupGroup: setupHoldGroup(groupId) })
           return !!created
         }
       }, { ...value, mode: 'new' }, {

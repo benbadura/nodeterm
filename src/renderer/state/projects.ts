@@ -1,3 +1,4 @@
+import { newNodeTimestamps } from '@shared/node-timestamps'
 import { create } from 'zustand'
 import type { AgentPermissionMode } from '@shared/agents/config'
 import type {
@@ -836,6 +837,7 @@ export const useProjects = create<ProjectsState>((set, get) => ({
           if (!src) return nodes
           const copy: CanvasNodeState = {
             ...src,
+            ...newNodeTimestamps(),
             id: `${src.kind}-${Math.random().toString(36).slice(2, 10)}`,
             title: `${src.title} copy`,
             position: { x: src.position.x + 24, y: src.position.y + 24 }

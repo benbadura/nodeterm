@@ -1,3 +1,4 @@
+import { newNodeTimestamps } from '../shared/node-timestamps'
 // Pure append of a PHONE-REGISTERED terminal node into a project.json's raw text — the host side
 // of the relay `projects.registerNode` verb (the phone's twin of this logic lives in
 // nodeterm-ios ProjectNodeRegistrar and writes over direct SSH; both converge on one node shape).
@@ -127,6 +128,7 @@ export function appendProjectNode(
   const agent = agentId !== undefined ? agentConfig(agentId) : undefined
   const node: Record<string, unknown> = {
     id: input.id,
+    ...newNodeTimestamps(now.getTime()),
     kind: 'terminal',
     position: { x, y },
     size: { width: 900, height: 560 },

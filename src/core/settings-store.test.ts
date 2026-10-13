@@ -53,6 +53,21 @@ describe('SettingsStore nested-default merge', () => {
     expect(restored.get().agentWorkspacePreferences).toEqual({ a: 'new-worktree' })
   })
 
+  it('restores Kanban workflow mappings after restart and removes an invalid mapping', async () => {
+    const columns = { todo: 'todo', planning: 'plan', implementation: 'work', testing: 'test', done: 'done' }
+    const store = new SettingsStore()
+    store.init()
+    await store.save({ ...store.get(), kanbanSessionWorkflows: { projects: { project: columns } } })
+    const restored = new SettingsStore()
+    restored.init()
+    expect(restored.get().kanbanSessionWorkflows).toEqual({ projects: { project: columns } })
+    writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({
+      kanbanSessionWorkflows: { projects: { project: columns, broken: { todo: 'todo' } } }
+    }))
+    restored.init()
+    expect(restored.get().kanbanSessionWorkflows).toEqual({ projects: { project: columns } })
+  })
+
   it.each([
     ['true over auto becomes Liquid Glass', { glassTerminals: true }, 'liquid-glass'],
     ['true over an explicit dark keeps dark', { glassTerminals: true, appTheme: 'dark' }, 'dark'],

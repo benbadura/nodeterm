@@ -30,6 +30,7 @@ import { matchesQuery, type SettingsSearchEntry } from '../search'
 import { useProjectSettings } from '../useProjectSettings'
 import { PROJECT_NAME_MAX, clampProjectName } from '@shared/project-name'
 import { ProjectWorkflowsEditor } from '../ProjectWorkflowsEditor'
+import { KanbanWorkflowSettings } from '../KanbanWorkflowSettings'
 
 /**
  * Persists an identity/defaults edit. The store setters (`renameProject`, `setProjectColor`,
@@ -67,6 +68,10 @@ const ROWS = {
   account: {
     title: 'Default Claude account',
     keywords: ['account', 'login', 'claude', 'system']
+  },
+  kanbanWorkflow: {
+    title: 'Kanban task workflow',
+    keywords: ['kanban', 'planning', 'plan', 'approval', 'testing', 'todo', 'automation', 'workflow']
   }
 } satisfies Record<string, SettingsSearchEntry>
 
@@ -376,6 +381,9 @@ function EditableProjectSection({
       />
       <SearchableRow title="Workflows" keywords={['templates', 'stages', 'agents', 'workflow', 'issue']}>
         <ProjectWorkflowsEditor project={project} />
+      </SearchableRow>
+      <SearchableRow {...ROWS.kanbanWorkflow}>
+        <KanbanWorkflowSettings project={project} />
       </SearchableRow>
     </SettingsSection>
   )

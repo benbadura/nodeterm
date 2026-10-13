@@ -40,6 +40,8 @@ describe('appendProjectNode', () => {
     const n = f.nodes[1]
     expect(n).toMatchObject({
       id: 'term-bbb-2',
+      createdAt: NOW.getTime(),
+      lastActivityAt: NOW.getTime(),
       kind: 'terminal',
       title: 'Mobile · 10:00',
       titleAuto: true,

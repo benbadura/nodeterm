@@ -17,6 +17,15 @@ const project = (over: Partial<Project> = {}): Project => ({
   nodes: [node()], ...over
 })
 
+it('preserves node creation and activity dates through shared project-file serialization', () => {
+  const createdAt = Date.parse('2026-10-09T08:15:00Z')
+  const lastActivityAt = Date.parse('2026-10-10T14:30:00Z')
+  const p = project({ nodes: [node({ createdAt, lastActivityAt })] })
+  const file = projectToFile(p, 1, '2026-10-10T14:30:00Z')
+  const loaded = fileToProject(file, { id: p.id })
+  expect(loaded.nodes[0]).toMatchObject({ createdAt, lastActivityAt })
+})
+
 describe('portable node cwds', () => {
   it('relativizes cwds under the root with a ./ prefix and resolves them back', () => {
     const nodes = [node({ cwd: '/Users/enes/projects/foo/sub' })]

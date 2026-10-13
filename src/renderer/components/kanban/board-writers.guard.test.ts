@@ -23,6 +23,7 @@ const BOARD_WRITERS: Record<string, string[]> = {
   'canvas/Canvas.tsx': [
     'onKanbanChange — the per-project board committing a person\'s drag/edit',
     'createNodeInColumn — a person\'s "+ New" in a column',
+    'startManualAgent — a person confirming the workspace for a new agent created from a board column',
     'fileIssueSession — a person\'s "Start with agent" or "Start with agent in a new worktree" filing ' +
       'the new session under the issue card\'s column; also board dispatch, whose only trigger is a ' +
       'person moving the issue card into the dispatch column they switched on for this machine ' +
@@ -35,6 +36,7 @@ const BOARD_WRITERS: Record<string, string[]> = {
   'components/kanban/GlobalKanbanView.tsx': ['onChangeBoard — the Omni board committing a person\'s drag/edit'],
   'components/kanban/NodeLabels.tsx': ['a person editing a node\'s labels'],
   'components/settings/sections/GitHubIssuesSection.tsx': ['a person editing the board\'s GitHub config'],
+  'components/settings/KanbanWorkflowSettings.tsx': ['a person enabling the Kanban task workflow and adding its missing columns'],
   'components/kanban/KanbanView.tsx': [
     'moveIssueByUser — called only by requestGitHubMove (a person moving an issue card: drag, Move ' +
       'select, summary modal) and the close/reopen ConfirmDialog (a person confirming that move)'

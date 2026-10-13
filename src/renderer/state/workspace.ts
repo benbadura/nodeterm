@@ -1,4 +1,5 @@
 import type { Node } from '@xyflow/react'
+import { newNodeTimestamps, nodeTimestamps, type NodeTimestamps } from '@shared/node-timestamps'
 import type {
   CanvasMutation,
   CanvasNodeState,
@@ -118,7 +119,7 @@ export function toggleCollapsed(nodes: CanvasNode[], ids: Iterable<string>): Can
 const COLLAPSED_FALLBACK_HEIGHT: Partial<Record<string, number>> = { terminal: 300, sticky: 200, files: 460 }
 
 /** User data carried in the React Flow node's data field. */
-export interface NodeData {
+export interface NodeData extends NodeTimestamps {
   workflowManaged?: boolean
   title: string
   /**
@@ -377,6 +378,7 @@ export function createTerminalNode(
     type: 'terminal',
     ...placeNode('terminal', center, index, size.width, size.height),
     data: {
+      ...newNodeTimestamps(),
       title: `Terminal ${index + 1}`,
       color: SYSTEM_NODE_COLORS[index % SYSTEM_NODE_COLORS.length],
       group: null,
@@ -408,6 +410,7 @@ export function createRunNode(
     type: 'terminal',
     ...placeNode('terminal', center, index, size.width, size.height),
     data: {
+      ...newNodeTimestamps(),
       title: runNodeTitle(config.projectDir, config.launchConfig),
       color: RUN_NODE_COLOR,
       group: null,
@@ -434,6 +437,7 @@ export function createSshTerminalNode(
     type: 'terminal',
     ...placeNode('terminal', center, index, size.width, size.height),
     data: {
+      ...newNodeTimestamps(),
       title: server.label,
       color: SYSTEM_NODE_COLORS[index % SYSTEM_NODE_COLORS.length],
       group: null,
@@ -863,6 +867,7 @@ export function createAgentNode(
     type: 'terminal',
     ...placeNode('terminal', center, index, size.width, size.height),
     data: {
+      ...newNodeTimestamps(),
       title: label,
       // Adopt the agent's own session name into the title until the user renames it by hand.
       titleAuto: true,
@@ -1064,6 +1069,7 @@ export function createEditorNode(
     type: 'editor',
     ...placeNode('editor', center, index, EDITOR_SIZE.width, EDITOR_SIZE.height),
     data: {
+      ...newNodeTimestamps(),
       title: filePath.split('/').pop() || 'untitled',
       color: '#6ac4dc',
       group: null,
@@ -1128,6 +1134,7 @@ export function createVideoNode(
     type: 'video',
     ...placeNode('video', center, index, VIDEO_SIZE.width, VIDEO_SIZE.height),
     data: {
+      ...newNodeTimestamps(),
       title: filePath.split('/').pop() || 'video',
       color: '#bf5af2',
       group: null,
@@ -1151,6 +1158,7 @@ export function createWebNode(
     type: 'web',
     ...placeNode('web', center, index, WEB_SIZE.width, WEB_SIZE.height),
     data: {
+      ...newNodeTimestamps(),
       title,
       color: '#6ac4dc',
       group: null,
@@ -1181,6 +1189,7 @@ export function createBrowserNode(
     type: 'browser',
     ...placeNode('browser', center, index, BROWSER_SIZE.width, BROWSER_SIZE.height),
     data: {
+      ...newNodeTimestamps(),
       title,
       color: '#0a84ff',
       group: null,
@@ -1214,6 +1223,7 @@ export function createFilesNode(
     // dragged onto the grid afterwards.
     ...placeNode('files', center, index, FILES_SIZE.width, FILES_SIZE.height),
     data: {
+      ...newNodeTimestamps(),
       title: folderTitle(cwd),
       color: '#ffd60a',
       group: null,
@@ -1237,6 +1247,7 @@ export function createDiffNode(
     type: 'diff',
     ...placeNode('diff', center, index, DIFF_SIZE.width, DIFF_SIZE.height),
     data: {
+      ...newNodeTimestamps(),
       title: `${relPath.split('/').pop() || relPath} (${commitOid ? commitOid.slice(0, 7) : 'diff'})`,
       color: '#e0af68',
       group: null,
@@ -1255,6 +1266,7 @@ export function createStickyNode(index: number, center?: { x: number; y: number 
     type: 'sticky',
     ...placeNode('sticky', center, index, STICKY_SIZE.width, STICKY_SIZE.height),
     data: {
+      ...newNodeTimestamps(),
       title: 'Note',
       color: '#ffd60a',
       group: null,
@@ -1277,6 +1289,7 @@ export function createTriggerNode(index: number, center?: { x: number; y: number
     height: TRIGGER_SIZE.height,
     style: { width: TRIGGER_SIZE.width, height: TRIGGER_SIZE.height },
     data: {
+      ...newNodeTimestamps(),
       title: 'Trigger',
       color: '#e6a23c',
       group: null
@@ -1295,6 +1308,7 @@ export function createDinoNode(
     type: 'dino',
     ...placeNode('dino', center, index, DINO_SIZE.width, DINO_SIZE.height),
     data: {
+      ...newNodeTimestamps(),
       title: 'Dino',
       color: '#a2a2a2',
       group: null,
@@ -1321,6 +1335,7 @@ export function createGroupNode(
     height: size.height,
     style: { width: size.width, height: size.height },
     data: {
+      ...newNodeTimestamps(),
       title: `Group ${index + 1}`,
       color: SYSTEM_NODE_COLORS[index % SYSTEM_NODE_COLORS.length],
       group: null
@@ -2224,7 +2239,7 @@ export function duplicateNode(node: CanvasNode, offset = 28): CanvasNode {
     // the binding would put a phantom run on the issue card (a chip and `#N` with no run-started,
     // then a run-ended when it closes). `openedBy` likewise: nobody's open verb made the copy, and
     // an orchestrator told about it would be told about a station it never opened.
-    data: { ...node.data, initialCommand: undefined, issueRef: undefined, openedBy: undefined }
+    data: { ...node.data, ...newNodeTimestamps(), initialCommand: undefined, issueRef: undefined, openedBy: undefined }
   }
 }
 
@@ -2480,6 +2495,7 @@ export function nodeStatesToFlow(states: CanvasNodeState[]): CanvasNode[] {
       style: { width: n.size.width, height },
       ...(n.parentId ? { parentId: n.parentId, extent: 'parent' as const } : {}),
       data: {
+        ...nodeTimestamps(n),
         title: n.title,
         // Default true for older agent nodes saved before titleAuto existed, so they start
         // tracking the session name; non-agent nodes ignore it.
@@ -2566,6 +2582,7 @@ export function flowToNodeStates(nodes: CanvasNode[], retainInitialCommand = tru
       const collapsed = !!n.data.collapsed
       return {
         id: n.id,
+        ...nodeTimestamps({ ...n.data, id: n.id }),
         kind,
         position: n.position,
         size: {

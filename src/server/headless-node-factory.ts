@@ -1,3 +1,4 @@
+import { newNodeTimestamps } from '../shared/node-timestamps'
 import type { TextDeliveryResult } from '../shared/text-delivery'
 import { isLaunchShell } from '../shared/agents/pane'
 import { randomBytes, randomUUID } from 'node:crypto'
@@ -550,6 +551,7 @@ function groupPersistedNodes(
   const parentId = members[0].parentId
   const group: CanvasNodeState = {
     id: nextId('group'),
+    ...newNodeTimestamps(),
     kind: 'group',
     position: { x, y },
     size: {
@@ -1631,6 +1633,7 @@ export class HeadlessNodeFactory {
           : undefined
         const node: CanvasNodeState = {
           id,
+          ...newNodeTimestamps(),
           kind: 'terminal',
           position: placeRight(target, source.node, nodeSize, created),
           size: { ...nodeSize },
@@ -1804,6 +1807,7 @@ export class HeadlessNodeFactory {
         created = true
         node = {
           id: nextId('sticky'),
+          ...newNodeTimestamps(),
           kind: 'sticky',
           position: placeRight(source.project, source.node, STICKY_SIZE),
           size: { ...STICKY_SIZE },

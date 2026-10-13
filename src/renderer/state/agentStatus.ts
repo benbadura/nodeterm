@@ -1,3 +1,4 @@
+import { recordNodeActivity } from '../lib/nodeActivity'
 import { create, type StoreApi, type UseBoundStore } from 'zustand'
 import { WORKING_STALE_MS } from '@shared/agents/stale'
 import type { AgentId } from '@shared/agents/config'
@@ -764,6 +765,7 @@ export function createAgentStatusSession(
       set((s) => {
         const prev = s.byId[id] ?? EMPTY
         const now = Date.now()
+        recordNodeActivity(id, now)
         // Does this event change the last-turn verdict (issue #521)? Read up front because the
         // same-state fast path below mutates IN PLACE to avoid a re-render — which is exactly what
         // a badge appearing or disappearing needs, so an event that moves this must not take it.

@@ -17813,3 +17813,23 @@ body.focus-mode .dock:hover {
   border-radius: 3px;
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent);
 }
+
+/* Node dates sit outside the body so terminal/editor space and resize handles stay intact. */
+.node-timestamps {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 2px;
+  max-width: calc(100% - 4px);
+  display: flex;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 14px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.node-timestamps__date {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

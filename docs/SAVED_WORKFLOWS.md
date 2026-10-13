@@ -1,5 +1,28 @@
 # Saved workflows
 
+## One session moving through Kanban
+
+For **To Do → Planning → In Progress → Ready for test → Done** with one agent session,
+enable **Settings → your project → Kanban task workflow** once. This adds missing columns
+and lets you map each stage to a column. The switch and mappings are saved per project on
+this machine. Existing sessions keep their instructions.
+
+Create an agent with **+ New** in a board column, choose its workspace, and describe the task
+in its conversation. The session automatically receives standing instructions to plan first,
+wait for your explicit approval in the conversation, implement, and hand the result over for
+testing. Move the card to Done yourself after testing. Corrections return to In Progress;
+a substantial scope change needs a revised plan and approval. These session cards are excluded
+from automatic moves after a PR merge, so final testing remains yours.
+
+The instructions use the agent's canvas-control integration to move its own card. This is an
+agent instruction workflow, so it depends on the agent following those instructions; it does
+not enforce a read-only planning sandbox. It requires a local desktop project and an agent
+with **Settings → Agents → Hooks & skills** enabled. New agents created from the canvas do
+not receive these instructions. If a mapped column is deleted, choose its replacement in
+the project settings before creating another task session. Renaming a column preserves its role.
+
+## Workflows with a session per stage
+
 In **Settings → your project → Workflows**, select **Add starter templates**, edit the stages,
 choose a default workflow, and save. The three starters are **Fix a bug**, **Add an endpoint**,
 and **Update a dependency**. Each contains analysis, implementation, tests, review, corrections,

@@ -1,3 +1,4 @@
+import { recordNodeActivity } from '../lib/nodeActivity'
 import { elementOnScreen } from '../terminal/on-screen'
 import { useContextEnsure } from '../terminal/useContextEnsure'
 import { canPlainApprove, sendHeaderAnswer } from '../lib/approveGate'
@@ -3820,7 +3821,9 @@ export function TerminalNode({
         // queues those chunks until the seed is written, then drains them in order. Queued bytes
         // still count towards `pending`, so a flood during the gap pauses the source.
         const gate = createDataGate(writeChunk)
+        let liveActivityReady = false
         offData = transport.onData(sid, (chunk) => {
+          if (liveActivityReady && chunk.length) recordNodeActivity(id)
           pending += chunk.length
           if (!paused && pending > HIGH_WATER) {
             paused = true
@@ -3954,10 +3957,14 @@ export function TerminalNode({
           console.error('[terminal] history seed failed', err)
         } finally {
           // Seed written — release the PTY output that arrived while it was in flight.
-          if (!toreDown) gate.open()
+          if (!toreDown) {
+            gate.open()
+            liveActivityReady = true
+          }
         }
         cleanups.push(
           transport.onExit(sid, (code) => {
+            recordNodeActivity(id)
             term.write(`\r\n\x1b[90m[process exited with code ${code}]\x1b[0m\r\n`)
             // ssh exiting 255 on an SSH-project terminal is a CONNECTION drop (sleep/wake,
             // network change, NAT idle) — the remote tmux session survives. Report it so the
@@ -3967,6 +3974,7 @@ export function TerminalNode({
         )
         cleanups.push(
           term.onData((input) => {
+            if (input.length) recordNodeActivity(id)
             // Lone Esc / Ctrl-C while the agent works: Claude Code fires NO hook on a user
             // interrupt, so probe the cancelled turn (still-silent working → done). Exact
             // match — arrow keys etc. arrive as multi-byte \x1b[… sequences.

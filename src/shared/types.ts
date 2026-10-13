@@ -1,3 +1,4 @@
+import type { NodeTimestamps } from './node-timestamps'
 import type { TerminalProfile } from './terminal-profile'
 import type { ChatPromptResult, TextDeliveryResult } from './text-delivery'
 import type { PushWebhookMinted, PushWebhookResult, PushWebhookTokenInfo } from './push-webhook'
@@ -26,6 +27,7 @@ import type { ClientId, DinoSnapshot, PeerDiff, PeerIdentity, PeerState } from '
 import type { WhisperModelInfo } from './speech'
 import type { ProjectKanbanGitHub } from './github-issues'
 import type { KanbanPullAutoMove, KanbanPullLinks } from './kanban-pull-links'
+import type { KanbanSessionWorkflows } from './kanban-workflow'
 import type { BoardDispatch } from './board-dispatch'
 import type { AgentWorkspacePreferences } from './agent-workspace'
 import type { CodexAccount } from './codex-account'
@@ -476,7 +478,7 @@ export interface PendingLaunch {
   promptFile?: string
 }
 
-export interface CanvasNodeState {
+export interface CanvasNodeState extends NodeTimestamps {
   /** Workflow sessions attach on restore; only their host may launch a stage. */
   workflowManaged?: boolean
   id: string
@@ -2305,6 +2307,8 @@ export interface Settings {
   boardDispatch?: BoardDispatch
   /** Machine-local last successful workspace choice for manual agent creation, by project id. */
   agentWorkspacePreferences?: AgentWorkspacePreferences
+  /** Per-project, machine-local standing instructions for new sessions created from Kanban. */
+  kanbanSessionWorkflows?: KanbanSessionWorkflows
 }
 
 export const DEFAULT_SETTINGS: Settings = {
