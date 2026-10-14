@@ -1,4 +1,4 @@
-import { NodeTimestamps } from './NodeTimestamps'
+import { NodeMetadata } from './NodeMetadata'
 import { Component, type ComponentType, type ReactNode } from 'react'
 import type { NodeProps } from '@xyflow/react'
 
@@ -40,7 +40,7 @@ export function withNodeBoundary<T extends NodeProps>(Inner: ComponentType<T>): 
     return (
       <Boundary>
         <Inner {...props} />
-        {props.type !== 'subagent' && props.type !== 'loop' && <NodeTimestamps id={props.id} data={props.data} />}
+        <NodeMetadata {...props} />
       </Boundary>
     )
   }

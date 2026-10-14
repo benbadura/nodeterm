@@ -17814,19 +17814,28 @@ body.focus-mode .dock:hover {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent);
 }
 
-/* Node dates sit outside the body so terminal/editor space and resize handles stay intact. */
-.node-timestamps {
+/* Node metadata sits outside the body so terminal/editor space and resize handles stay intact. */
+.node-metadata {
   position: absolute;
   top: calc(100% + 4px);
   left: 2px;
   max-width: calc(100% - 4px);
   display: flex;
-  gap: 12px;
+  flex-direction: column;
+  gap: 2px;
   color: var(--muted);
   font-size: 10px;
   line-height: 14px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+.node-timestamps {
+  display: flex;
+  gap: 12px;
+}
+.node-worktree {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .node-timestamps__date {
   min-width: 0;
