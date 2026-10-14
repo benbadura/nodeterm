@@ -76,7 +76,7 @@ jobs:
         run: |
           npm run make-icon
           npm run build
-          npx electron-builder --mac --$(node -p process.arch) --dir --publish never -c.mac.identity=null -c.mac.notarize=false -c.extraMetadata.nodeTermUpdates=disabled
+          npx electron-builder --mac --$(node -p process.arch) --dir --publish never -c.mac.identity=- -c.mac.notarize=false -c.extraMetadata.nodeTermUpdates=disabled
       - name: Exercise packaged runtime
         run: |
           app=$(find dist -maxdepth 2 -name nodeterm.app -type d | head -1)

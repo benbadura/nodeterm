@@ -75,7 +75,9 @@ jobs:
         run: npm ci
 
       # dist:* explicitly disable the updater and electron-builder publishing.
-      # dist:mac also disables Developer ID signing/notarization and builds universal tmux.
+      # dist:mac signs ad-hoc (no Developer ID, no notarization) and builds universal tmux.
+      # Ad-hoc, not unsigned: an app with only Electron's linker signature has no sealed
+      # resources, and a downloaded (quarantined) copy is reported "damaged" by Gatekeeper.
       # No Apple certificates, notarization credentials or Windows signing service needed.
       - name: Build unsigned installers
         env:
@@ -88,6 +90,9 @@ jobs:
         run: |
           app_dir=dist/mac
           if [ "$(node -p process.arch)" = arm64 ]; then app_dir=dist/mac-arm64; fi
+          for app in dist/mac/nodeterm.app dist/mac-arm64/nodeterm.app; do
+            codesign --verify --deep --strict "$app"
+          done
           ELECTRON_RUN_AS_NODE=1 "$app_dir/nodeterm.app/Contents/MacOS/nodeterm" scripts/package-smoke.cjs
 
       - name: Exercise Linux AppImage runtime

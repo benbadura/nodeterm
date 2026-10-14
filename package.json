@@ -1,6 +1,6 @@
 {
   "name": "node-terminal",
-  "version": "0.4.7",
+  "version": "0.4.8",
   "engines": {
     "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   },
@@ -31,7 +31,7 @@
     "make-icon": "node scripts/make-icon.mjs",
     "make-social": "node scripts/make-social.mjs",
     "dist": "node scripts/package-desktop.mjs",
-    "dist:mac": "node scripts/build-tmux.mjs && npm run make-icon && npm run build && electron-builder --mac --publish never -c.mac.identity=null -c.mac.notarize=false -c.extraMetadata.nodeTermUpdates=disabled && npm run rebuild",
+    "dist:mac": "node scripts/build-tmux.mjs && npm run make-icon && npm run build && electron-builder --mac --publish never -c.mac.identity=- -c.mac.notarize=false -c.extraMetadata.nodeTermUpdates=disabled && npm run rebuild",
     "dist:linux": "npm run make-icon && npm run build && electron-builder --linux --publish never -c.extraMetadata.nodeTermUpdates=disabled",
     "dist:win": "npm run make-icon && npm run build && electron-builder --win --x64 --publish never -c.extraMetadata.nodeTermUpdates=disabled",
     "release": "node scripts/build-tmux.mjs && npm run make-icon && npm run build && sh -c 'electron-builder --mac --arm64 --x64 --publish never; s=$?; npm run rebuild; exit $s'",
