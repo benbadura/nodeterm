@@ -178,6 +178,7 @@ import {
   KanbanView
 } from '../components/lazyPanels'
 import { WelcomeScreen } from '../components/WelcomeScreen'
+import { TaskBoardGate } from '../components/kanban/TaskBoard'
 import { CloneRepoDialog } from '../components/CloneRepoDialog'
 import { markMobileLaunchSeen, shouldShowMobileLaunch } from '../lib/mobileLaunch'
 import type { DictationTarget } from '../components/DictationOverlay'
@@ -19252,12 +19253,15 @@ export function Canvas() {
           })()}
       </div>
       {globalKanbanOpen ? (
+        <TaskBoardGate projectId={activeProjectId} global onOpenNode={(nodeId, id) => { showCanvas(id); travelToNode(nodeId) }}>
         <GlobalKanbanView
           live={globalKanbanLive}
           onModalNodeChange={setKanbanModalNode}
           liveLinkMenuItems={liveLinkMenuItems}
         />
+        </TaskBoardGate>
       ) : perProjectKanbanOpen && (
+        <TaskBoardGate projectId={activeProjectId} sessions={kanbanSessions} onOpenNode={nodeId => openNodeFromKanban(nodeId)}>
         <KanbanView
           board={projectKanban ?? seedBoard}
           sessions={kanbanSessions}
@@ -19278,6 +19282,7 @@ export function Canvas() {
           teams={teamStations}
           onIssueMoved={dispatchOnUserMove}
         />
+        </TaskBoardGate>
       )}
       <UpdateCard />
 

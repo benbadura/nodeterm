@@ -31,6 +31,7 @@ import { useProjectSettings } from '../useProjectSettings'
 import { PROJECT_NAME_MAX, clampProjectName } from '@shared/project-name'
 import { ProjectWorkflowsEditor } from '../ProjectWorkflowsEditor'
 import { KanbanWorkflowSettings } from '../KanbanWorkflowSettings'
+import { TaskBoardSettings } from '../TaskBoardSettings'
 
 /**
  * Persists an identity/defaults edit. The store setters (`renameProject`, `setProjectColor`,
@@ -384,6 +385,9 @@ function EditableProjectSection({
       </SearchableRow>
       <SearchableRow {...ROWS.kanbanWorkflow}>
         <KanbanWorkflowSettings project={project} />
+      </SearchableRow>
+      <SearchableRow title="Task board" keywords={['kanban', 'tasks', 'acceptance', 'queue', 'concurrent', 'evidence']}>
+        <TaskBoardSettings project={project} />
       </SearchableRow>
     </SettingsSection>
   )

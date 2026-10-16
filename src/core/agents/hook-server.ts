@@ -286,6 +286,7 @@ export interface HookEventMeta {
 export const requiresVerified: ReadonlySet<string> = new Set([
   'memory',
   'readiness',
+  'task',
   'send',
   'reply',
   'notify',
@@ -365,6 +366,7 @@ export function verifiedRefusalFor(verb: string): string {
   if (verb === 'report-outcome') return REPORT_OUTCOME_CONTROL_REFUSAL
   if (verb === 'memory') return 'Project memory refused.'
   if (verb === 'readiness') return 'Readiness report refused.'
+  if (verb === 'task') return 'Task report refused.'
   if (verb === 'issues' || verb === 'prs') return GITHUB_READ_CONTROL_REFUSAL
   return MESSAGING_CONTROL_REFUSAL
 }

@@ -96,7 +96,11 @@ const STORE_ANSWERED_VERBS: ReadonlySet<string> = new Set([
   // (core/github/control-read.ts). A read needs no canvas at either end, and a background
   // orchestrator polling `prs` must never travel the user's view.
   'issues',
-  'prs'
+  'prs',
+  // Project sidecars, answered by the verified host in main even while the board is hidden.
+  'memory',
+  'readiness',
+  'task'
 ])
 
 /**

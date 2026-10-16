@@ -177,7 +177,7 @@ describe('where the verbs sit in the routing tables', () => {
     }
   })
 
-  it('the verified-only set is exactly the messaging verbs plus sticky, open-project, settings, report-issue and run', () => {
+  it('the verified-only set includes only the explicitly reviewed identity-bound verbs', () => {
     // Pins that nothing ELSE ever drifts in: adding a SHIPPED verb here would strand its legacy
     // population with no hatch, which is the one thing this set must never be casually grown by.
     // `notify` (folded in from #98, Task 5.2) is a messaging verb like the other two — it writes
@@ -201,16 +201,20 @@ describe('where the verbs sit in the routing tables', () => {
     // could read any project's GitHub lane (bound sessions, dispatch state); new verbs.
     expect([...requiresVerified].sort()).toEqual([
       'issues',
+      // These sidecars resolve the caller's own project and task, never an arbitrary node.
+      'memory',
       'notify',
       'open-project',
       'prs',
+      'readiness',
       'reply',
       'report-issue',
       'report-outcome',
       'run',
       'send',
       'settings',
-      'sticky'
+      'sticky',
+      'task'
     ])
   })
 

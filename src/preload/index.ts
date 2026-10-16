@@ -831,6 +831,21 @@ const api: NodeTerminalApi = {
       return () => ipcRenderer.removeListener(IPC.projectMemoryChanged, handler)
     }
   },
+  tasks: {
+    list: id => ipcRenderer.invoke(IPC.tasksList, id),
+    read: (id, task) => ipcRenderer.invoke(IPC.tasksRead, id, task),
+    create: (id, input) => ipcRenderer.invoke(IPC.tasksCreate, id, input),
+    act: (id, task, rev, action) => ipcRenderer.invoke(IPC.tasksAct, id, task, rev, action),
+    capture: (id, task, run) => ipcRenderer.invoke(IPC.tasksCapture, id, task, run),
+    report: (id, task, run, summary, evidence) => ipcRenderer.invoke(IPC.tasksReport, id, task, run, summary, evidence),
+    resumeQueue: id => ipcRenderer.invoke(IPC.tasksResume, id),
+    diff: (id, task) => ipcRenderer.invoke(IPC.tasksDiff, id, task),
+    onChanged: listener => {
+      const handler = (_event: Electron.IpcRendererEvent, id: string) => listener(id)
+      ipcRenderer.on(IPC.tasksChanged, handler)
+      return () => ipcRenderer.removeListener(IPC.tasksChanged, handler)
+    }
+  },
   readiness: {
     read: (projectId, nodeId, offset) => ipcRenderer.invoke(IPC.readinessRead, projectId, nodeId, offset),
     criteria: (projectId, nodeId, criteria, expectedRevision, baseCommit) => ipcRenderer.invoke(IPC.readinessCriteria, projectId, nodeId, criteria, expectedRevision, baseCommit),

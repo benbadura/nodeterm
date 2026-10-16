@@ -25,7 +25,7 @@ function SectionInput<T>({ title, section, set, make, children }: {
   </fieldset>
 }
 
-function ReportView({ report, openUrl }: { report: ReadinessReport; openUrl: (url: string) => void }) {
+export function ReportView({ report, openUrl }: { report: ReadinessReport; openUrl: (url: string) => void }) {
   const state = reportCompleteness(report)
   return <article className="readiness-report">
     <div className="readiness-report__stamp"><strong>{report.source === 'agent' ? 'Agent report' : 'User entry'}</strong> · {report.author} · {new Date(report.at).toLocaleString()} <span>{state === 'complete' ? 'Complete evidence' : state === 'problems' ? 'Reported issues' : 'Missing evidence'}</span></div>
@@ -61,7 +61,7 @@ function CriteriaEditor({ view, save, busy }: { view: ReadinessView; save: (crit
   </details>
 }
 
-function ReportEditor({ snapshot, criteria, submit, cancel, busy }: { snapshot: CodeSnapshot; criteria: AcceptanceCriterion[]; submit: (r: ReadinessReportInput) => Promise<void>; cancel: () => void; busy: boolean }) {
+export function ReportEditor({ snapshot, criteria, submit, cancel, busy }: { snapshot: CodeSnapshot; criteria: AcceptanceCriterion[]; submit: (r: ReadinessReportInput) => Promise<void>; cancel: () => void; busy: boolean }) {
   const [draft, setDraft] = useState<ReadinessReportInput>(() => ({ snapshotId: snapshot.id, criteria: criteria.map((c) => ({ id: c.id, status: 'unknown', note: '' })), tests: missing(), review: missing(), preview: missing() }))
   const change = <K extends keyof ReadinessReportInput,>(key: K, value: ReadinessReportInput[K]): void => setDraft((d) => ({ ...d, [key]: value }))
   return <form className="readiness-report-editor" onSubmit={(e) => { e.preventDefault(); void submit(draft) }}>

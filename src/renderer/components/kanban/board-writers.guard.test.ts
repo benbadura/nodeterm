@@ -34,6 +34,7 @@ const BOARD_WRITERS: Record<string, string[]> = {
       'agent status), after winning the host\'s one-time claim; session cards only'
   ],
   'components/kanban/GlobalKanbanView.tsx': ['onChangeBoard — the Omni board committing a person\'s drag/edit'],
+  'components/kanban/TaskBoard.tsx': ['a person explicitly choosing Close GitHub issue after accepting a task; acceptance and agent hooks never call this action'],
   'components/kanban/NodeLabels.tsx': ['a person editing a node\'s labels'],
   'components/settings/sections/GitHubIssuesSection.tsx': ['a person editing the board\'s GitHub config'],
   'components/settings/KanbanWorkflowSettings.tsx': ['a person enabling the Kanban task workflow and adding its missing columns'],

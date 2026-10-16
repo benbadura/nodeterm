@@ -479,7 +479,7 @@ export interface PendingLaunch {
 }
 
 export interface CanvasNodeState extends NodeTimestamps {
-  /** Workflow sessions attach on restore; only their host may launch a stage. */
+  /** Background workflow/task sessions attach on restore; only their host may launch a run. */
   workflowManaged?: boolean
   id: string
   kind: NodeKind
@@ -2309,6 +2309,8 @@ export interface Settings {
   agentWorkspacePreferences?: AgentWorkspacePreferences
   /** Per-project, machine-local standing instructions for new sessions created from Kanban. */
   kanbanSessionWorkflows?: KanbanSessionWorkflows
+  /** Opt-in task boards, local to this Desktop installation. */
+  taskBoards?: Record<string, import('./tasks').TaskBoardPreference>
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -4232,6 +4234,7 @@ export interface NodeTerminalApi {
   workflows: import('./workflows').WorkflowsApi
   projectMemory: import('./project-memory').ProjectMemoryApi
   readiness: import('./task-readiness').ReadinessApi
+  tasks: import('./tasks').TaskApi
   pty: PtyApi
   workspace: WorkspaceApi
   projectSettings: ProjectSettingsApi

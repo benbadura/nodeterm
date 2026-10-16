@@ -10,6 +10,7 @@ import { applyWindowChrome } from './lib/windowChrome'
 import { installMarkdownLinkGuard, LOCAL_LINK_MESSAGE, openExternalQuietly } from './lib/markdownLinks'
 import './styles.css'
 import './readiness.css'
+import './tasks.css'
 import './tailwind.css'
 
 // Does this window draw the macOS traffic lights inside our own tab bar? Stamped on <html> before

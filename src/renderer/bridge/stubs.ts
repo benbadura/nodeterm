@@ -29,6 +29,7 @@ import { E_UNSUPPORTED } from '../../shared/rpc'
 import { unavailablePreviewApi } from '../../shared/integration-preview'
 import { unavailableProjectMemory } from '../../shared/project-memory'
 import { unavailableReadiness } from '../../shared/task-readiness'
+import { unavailableTasks } from '../../shared/tasks'
 import { isMacPlatform } from '../../shared/platform-utils'
 import { effectiveBindings, terminalShortcutPolicy } from '../lib/keybindingOverrides'
 import type { ContextElement } from '../lib/keyContext'
@@ -153,6 +154,7 @@ export function buildStubApi(): Omit<
     integrationPreview: unavailablePreviewApi(),
     projectMemory: unavailableProjectMemory,
     readiness: unavailableReadiness,
+    tasks: unavailableTasks,
     ssh: {
       list: U('ssh.list'),
       save: U('ssh.save'),

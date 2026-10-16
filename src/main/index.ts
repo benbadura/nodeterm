@@ -364,6 +364,7 @@ import { initClaudeAccounts } from './claude-accounts'
 import { initCodexAccounts } from './codex-accounts'
 import { claudeCliCaps, registerClaudeCliIpc, type ClaudeCliCaps } from '../core/claude-cli'
 import { createWorkflowRuntime } from '../core/workflow-runtime'
+import { createTaskRuntime } from '../core/task-runtime'
 import type { WorkflowService } from '../core/workflow-service'
 import type { CodexCliCaps } from '../shared/types'
 import { registerGrokCliIpc } from '../core/grok-cli'
@@ -2321,9 +2322,13 @@ app.whenReady().then(async () => {
     ownsDurableState: hookStartupWarning === null,
     issueRepository: id => github.controller.status(id).then(view => view.project?.repository ?? null),
     outcome: id => stationOutcomes.get(id), held: id => stationHandovers.isHandedOver(id) })
+  const tasks = createTaskRuntime({ platform: corePlatform, workspaceStore, gitService, ptyManager,
+    memoryPacket: id => projectMemory.packet(id, {}, true), projectSetupService,
+    settings: () => settingsStore.get(), available: () => hookStartupWarning === null, ownsDurableState: hookStartupWarning === null,
+    outcome: id => stationOutcomes.get(id), held: id => stationHandovers.isHandedOver(id) })
   // The main quit gate runs first: a declined confirmation leaves orchestration active,
   // while an accepted quit stops new delivery during the asynchronous teardown window.
-  app.on('before-quit', () => { if (quitting) workflows?.stop() })
+  app.on('before-quit', () => { if (quitting) { workflows?.stop(); tasks.stop() } })
   // The queue waits for the workspace INDEX: an entry that lapsed while the app was down is expired
   // here, and its sender leg (board-log line in the sender's project) resolves projects through the
   // index, which nothing else has loaded yet at this point of boot (the renderer's own
@@ -3283,6 +3288,7 @@ app.whenReady().then(async () => {
       // renderer hears the event, so no `--after-success` can fire on it in between.
       stationOutcomes.onAgentEvent(enriched)
       workflows?.onAgentEvent(enriched)
+      tasks.onAgentEvent(enriched)
       sendToMain(IPC.agentStatus, enriched)
       // Feed the macOS Notch HUD its prompt (ev.task on newTurn) + subagent grouping (no-op off/non-darwin).
       notchHudOnAgentEvent(enriched)
@@ -4416,6 +4422,11 @@ app.whenReady().then(async () => {
       const ids = workspaceStore.projectIdsForNode(nodeId)
       if (ids.length !== 1) return { ok: false, error: 'Readiness requires one saved owning project.', message: 'Readiness requires one saved owning project.' }
       return readiness.control(ids[0], nodeId, args, verified)
+    }
+    if (verb === 'task') {
+      const ids = workspaceStore.projectIdsForNode(nodeId)
+      if (ids.length !== 1) return { ok: false, error: 'Tasks require one saved owning project.', message: 'Tasks require one saved owning project.' }
+      return tasks.control(ids[0], nodeId, args, verified)
     }
     // `browser` is answered in MAIN and never forwarded to the renderer's agent-control dispatch:
     // the debugger handle and the CDP allowlist are main-side, and the renderer is the more

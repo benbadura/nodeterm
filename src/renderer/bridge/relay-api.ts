@@ -204,6 +204,7 @@ export function buildRelayApi(
     boardDispatch: stub.boardDispatch,
     projectMemory: stub.projectMemory,
     readiness: stub.readiness,
+    tasks: stub.tasks,
     stationOutcome: stub.stationOutcome,
     stationHandover: stub.stationHandover,
     // Live links publish THIS machine's terminals; a relay tab shows another machine's, so it takes
